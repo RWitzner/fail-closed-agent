@@ -1,0 +1,11 @@
+{
+  "enabled": false,
+  "paper_trading": {
+    "enabled": false
+  },
+  "universe": {
+    "symbols": [],
+    "max_candidates": 50
+  },
+  "latency_budget_ms": 250
+}

@@ -1,0 +1,14 @@
+{
+  "_note": "An authoritative overlay that TRIES to arm. tighten-only merge must refuse to loosen the committed config. Real arming is a working-tree edit of the committed config, never an overlay merge.",
+  "agent_rules": {
+    "enabled": true,
+    "paper_trading": {
+      "enabled": true
+    }
+  },
+  "risk_rules": {
+    "live_trading": {
+      "enabled": true
+    }
+  }
+}

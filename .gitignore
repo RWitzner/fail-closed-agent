@@ -1,5 +1,6 @@
-# Secrets — never commit
-.secrets/
+# Secrets — never commit (except the layout README)
+.secrets/*
+!.secrets/README.md
 *.key
 .env
 

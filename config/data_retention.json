@@ -1,0 +1,9 @@
+{
+  "paths": {
+    "journal": "journal",
+    "data": "data",
+    "bars": "data/bars"
+  },
+  "retention_days": 30,
+  "rotate": "daily"
+}

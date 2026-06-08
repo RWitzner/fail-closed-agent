@@ -1,0 +1,11 @@
+{
+  "live_trading": {
+    "enabled": false,
+    "max_live_position_usd": 0
+  },
+  "caps": {
+    "max_position_usd": 0,
+    "max_gross_exposure_usd": 0,
+    "max_daily_loss_usd": 0
+  }
+}

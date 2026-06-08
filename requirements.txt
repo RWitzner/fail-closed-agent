@@ -1,0 +1,5 @@
+# M0 is stdlib-only — no third-party runtime dependencies.
+# Third-party deps are pinned to exact versions in the milestone that first
+# imports them (see docs/superpowers/specs/2026-06-08-stocks-agent-design.md):
+#   M1: databento==<pin>, exchange_calendars==<pin>
+#   M5: alpaca-py==<pin>
