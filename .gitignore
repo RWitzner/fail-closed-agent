@@ -1,0 +1,30 @@
+# Secrets — never commit
+.secrets/
+*.key
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime artifacts (regenerated; not source of truth)
+data/
+var/locks/*.pid
+reports/
+
+# High-volume journal captures (low-volume decision logs are committed)
+journal/*.jsonl.gz
+journal/*_book_changes.jsonl*
+journal/recorder_status.json
+journal/data_quality_alerts.jsonl
+
+# OMC / tooling state
+.omc/
+.omx/
+
+# OS
+.DS_Store
+*.log
