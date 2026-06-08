@@ -7,13 +7,14 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 
 ## Current status (2026-06-08)
 
-- Design spec written, externally reviewed (twice) + internally reviewed (5-lens adversarial workflow), and
-  reconciled to **build-ready for M0**. All external facts verified against primary sources.
-- M0 + M1 implementation plans written and reconciled under `docs/superpowers/plans/`.
-- Charter files (AGENTS.md, CLAUDE.md, PLAN.md, MEMORY.md) seeded.
-- No agent code yet. Git history on `main`: `6ee1019` (spec) → `7f280a9` (external review) → `84ace6b` (5-lens
-  reconcile) → `fa4bd3a` (review round 2) → charter files.
-- **Next step:** implement **M0** (skeleton + abstractions + safety tests), all gates OFF.
+- Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
+  workflow), reconciled. All external facts verified against primary sources.
+- **M0 built, hardened, and green (113 tests, deterministic).** TDD throughout; an adversarial review of the
+  M0 code found 4 bugs (journal crash-recovery, kill-switch freeze, reduce-only validation, token single-use)
+  — all fixed test-first and re-probed closed. Stdlib-only; no network; committed gates OFF.
+- Git history on `main`: spec/review/reconcile docs → charter files → `4230c8f` (M0 feat) → `5e45bf4` (M0 harden).
+- **Next step:** implement **M1** (data tier) — but first pin the Databento dataset/schema matrix + provision
+  credentials (see the M1 plan's two acceptance tiers).
 
 ## Locked decisions
 
@@ -28,9 +29,9 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 
 ## Roadmap (each milestone: its own spec → plan → review → verify; see spec §10)
 
-- **M0** Skeleton + abstractions + safety spine (stdlib-only; canary, journal, gates, preflight stubs, kill
-  switch, charter, dashboard sandbox). ← next
-- **M1** Data tier (Databento recorder + replay/reconcile + bar cache; dataset matrix pinned + entitlement-verified).
+- **M0** Skeleton + abstractions + safety spine (stdlib-only; canary, journal, gates, preflight tokens, kill
+  switch, charter, dashboard sandbox). ✓ **done** — 113 tests, adversarially hardened.
+- **M1** Data tier (Databento recorder + replay/reconcile + bar cache; dataset matrix pinned + entitlement-verified). ← next
 - **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate).
 - **M3** Signal + observe-only calibration probe.
 - **M4** Risk core (`IntradayMarginModel` + locate/SSR + exposure caps + drawdown kill switch).
