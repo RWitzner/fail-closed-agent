@@ -1,7 +1,7 @@
 # M0 — Skeleton + Abstractions Implementation Plan
 
 - **Date:** 2026-06-08
-- **Status:** **DONE** — implemented & hardened 2026-06-08 (`4230c8f` feat, `5e45bf4` harden; 113 tests; marked done in `c1307ae`)
+- **Status:** **DONE** — implemented & hardened 2026-06-08 (`4230c8f` feat, `5e45bf4` harden; 129 tests; marked done in `c1307ae`)
 - **Parent spec:** `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`
 - **Milestone goal:** create the repo skeleton + safety spine with committed fail-closed defaults. **No real broker order may be submitted.** Every acceptance command must actually run on a bare checkout.
 
@@ -107,7 +107,7 @@ python3 -m unittest \
   tests.agent.test_marketdata_transport
 ```
 
-(Or simply `python3 -m unittest discover -s tests -p 'test_*.py' -t .` — 113 tests.)
+(Or simply `python3 -m unittest discover -s tests -p 'test_*.py' -t .` — 129 tests.)
 
 ## Stop condition
 

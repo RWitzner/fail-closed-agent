@@ -9,7 +9,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dashboard.app import HOST, MAX_FILE_BYTES, PathOutsideWorkspace, safe_workspace_path
+from dashboard.app import (
+    HOST,
+    MAX_FILE_BYTES,
+    PathOutsideWorkspace,
+    make_server,
+    safe_workspace_path,
+)
 
 
 class TestSandbox(unittest.TestCase):
@@ -55,6 +61,17 @@ class TestBindHostConstant(unittest.TestCase):
     def test_max_file_bytes_is_a_positive_cap(self):
         self.assertIsInstance(MAX_FILE_BYTES, int)
         self.assertGreater(MAX_FILE_BYTES, 0)
+
+    def test_make_server_rejects_non_loopback_host(self):
+        with self.assertRaises(ValueError):
+            make_server("0.0.0.0", 0)
+
+    def test_make_server_loopback_binds(self):
+        srv = make_server("127.0.0.1", 0)
+        try:
+            self.assertEqual(srv.server_address[0], "127.0.0.1")
+        finally:
+            srv.server_close()
 
 
 if __name__ == "__main__":

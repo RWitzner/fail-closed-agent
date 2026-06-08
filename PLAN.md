@@ -9,9 +9,11 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 
 - Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
   workflow), reconciled. All external facts verified against primary sources.
-- **M0 built, hardened, and green (113 tests, deterministic).** TDD throughout; an adversarial review of the
-  M0 code found 4 bugs (journal crash-recovery, kill-switch freeze, reduce-only validation, token single-use)
-  — all fixed test-first and re-probed closed. Stdlib-only; no network; committed gates OFF.
+- **M0 built, hardened, and green (129 tests, deterministic).** TDD throughout; an adversarial review of the
+  M0 code found 4 bugs, and a second (code) review round found more (token forgery via the private mint key,
+  journal dropping a corrupt complete tail, per-stream seq being per-writer, float qty reaching submit) — all
+  fixed test-first and re-probed closed. Token authority now lives in an immutable registry, not the token
+  object. Stdlib-only; no network; committed gates OFF.
 - Git history on `main`: spec/review/reconcile docs → charter files → `4230c8f` (M0 feat) → `5e45bf4` (M0 harden).
 - **Next step:** implement **M1** (data tier) — but first pin the Databento dataset/schema matrix + provision
   credentials (see the M1 plan's two acceptance tiers).
@@ -30,7 +32,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 ## Roadmap (each milestone: its own spec → plan → review → verify; see spec §10)
 
 - **M0** Skeleton + abstractions + safety spine (stdlib-only; canary, journal, gates, preflight tokens, kill
-  switch, charter, dashboard sandbox). ✓ **done** — 113 tests, adversarially hardened.
+  switch, charter, dashboard sandbox). ✓ **done** — 129 tests, adversarially hardened.
 - **M1** Data tier (Databento recorder + replay/reconcile + bar cache; dataset matrix pinned + entitlement-verified). ← next
 - **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate).
 - **M3** Signal + observe-only calibration probe.

@@ -1,44 +1,49 @@
-"""Pre-submit execution preflight: non-forgeable, single-use tokens (spec §5 Tier 6).
+"""Pre-submit execution preflight: registry-authorized, single-use tokens (spec §5 Tier 6).
 
-`Broker.submit_order()` is reachable only with a token minted here. Tokens are
-split by intent:
+A token is an opaque capability handle. Its authority does NOT live on the token
+object (which carries only an opaque nonce and cannot be constructed, copied, or
+mutated into authority) — it lives in a module-private registry of **immutable**
+authorizations, keyed by the token's nonce and created ONLY by the mint functions.
 
-- `OpenPreflightToken` — opening / position-increasing orders. **Reject-all in M0**
-  (the full preflight — epoch/session/halt/freshness/tick/can_open + run gates —
-  lands in M5). Disabled means reject-all, never `ok=True`.
-- `ReduceOnlyPreflightToken` — minted only for an **existing held position + a
-  genuinely position-decreasing order** (validated against the position's sign,
-  size, and symbol — never the caller's self-asserted flag), so flatten can always
-  reduce exposure but can never flip a position or open a new one.
-
-Single-use is enforced by a mint-side nonce registry (so a shallow copy or a
-hand-forged token is not authentic), and tokens refuse to be copied/pickled.
+- `mint_open_token` — reject-all in M0 (full open preflight lands in M5). It never
+  issues an authorization, so even a directly-constructed `OpenPreflightToken`
+  (built by importing the private mint key) has no authorization and cannot open.
+- `mint_reduce_only_token` — issues an authorization only for a genuinely
+  position-decreasing order, validated against the held position's sign, size, and
+  symbol (never the caller's self-asserted flag). The stored side+qty are
+  re-checked at `require_token`, so mutating the token cannot rebind it.
 """
+from dataclasses import dataclass
 from decimal import Decimal
+from typing import Optional
 
-_MINT = object()  # module-private; callers cannot obtain it, so tokens cannot be constructed directly
-_live_nonces = set()  # nonces of issued, un-consumed tokens — the single-use registry
+_MINT = object()  # module-private mint key
+_authorizations = {}  # nonce(object) -> _Authorization (immutable); only mint_* writes here
+
+
+@dataclass(frozen=True)
+class _Authorization:
+    kind: str  # "open" | "reduce_only"
+    symbol: str
+    side: Optional[str] = None
+    qty: Optional[Decimal] = None
 
 
 class PreflightRejected(Exception):
-    """A token was requested but the preflight gates refuse to mint it."""
+    """A token was requested but the preflight gates refuse to issue an authorization."""
 
 
 class PreflightForgery(Exception):
-    """A token was constructed/copied directly, reused, tampered with, or is the wrong kind."""
+    """A token was constructed/copied directly, reused, or has no/wrong authorization."""
 
 
 class PreflightToken:
-    __slots__ = ("symbol", "intent_id", "_nonce")
+    __slots__ = ("_nonce",)
 
-    def __init__(self, *, key, symbol, intent_id):
-        if key is not _MINT:
+    def __init__(self, *, mint):
+        if mint is not _MINT:
             raise PreflightForgery("preflight tokens cannot be constructed directly")
-        self.symbol = symbol
-        self.intent_id = intent_id
-        nonce = object()
-        self._nonce = nonce
-        _live_nonces.add(nonce)
+        self._nonce = object()
 
     def __copy__(self):
         raise PreflightForgery("preflight tokens are single-use; copying is forbidden")
@@ -51,34 +56,46 @@ class PreflightToken:
 
 
 class OpenPreflightToken(PreflightToken):
-    """Authorizes a single opening / position-increasing order."""
+    """Handle for a single opening / position-increasing order."""
 
 
 class ReduceOnlyPreflightToken(PreflightToken):
-    """Authorizes a single position-decreasing order, bound to a specific side + qty."""
+    """Handle for a single position-decreasing order."""
 
-    __slots__ = ("side", "qty")
+
+def _issue(token_cls, authorization: _Authorization):
+    token = token_cls(mint=_MINT)
+    _authorizations[token._nonce] = authorization
+    return token
+
+
+def authorization_of(token) -> Optional[_Authorization]:
+    if not isinstance(token, PreflightToken):
+        return None
+    return _authorizations.get(getattr(token, "_nonce", None))
 
 
 def is_authentic(token) -> bool:
-    return isinstance(token, PreflightToken) and getattr(token, "_nonce", None) in _live_nonces
+    return authorization_of(token) is not None
 
 
-def consume(token) -> None:
-    if not is_authentic(token):
+def consume(token) -> _Authorization:
+    auth = authorization_of(token)
+    if auth is None:
         raise PreflightForgery("token is forged, reused, or invalid")
-    _live_nonces.discard(token._nonce)
+    del _authorizations[token._nonce]
+    return auth
 
 
 def mint_open_token(config, intent) -> OpenPreflightToken:
-    """M0: reject-all. The real open preflight (gates + market checks) lands in M5."""
+    """M0: reject-all. Never issues an authorization."""
     raise PreflightRejected(
         "open preflight is not implemented until M5; the committed config opens nothing"
     )
 
 
 def mint_reduce_only_token(position, intent) -> ReduceOnlyPreflightToken:
-    """Mint only for a genuinely position-decreasing order against the held position."""
+    """Issue an authorization only for a genuinely position-decreasing order."""
     raw_qty = getattr(position, "qty", None) if position is not None else None
     if raw_qty is None:
         raise PreflightRejected("reduce-only requires an existing held position")
@@ -95,7 +112,7 @@ def mint_reduce_only_token(position, intent) -> ReduceOnlyPreflightToken:
     order_qty = Decimal(intent.qty)
     if order_qty <= 0 or order_qty > abs(held):
         raise PreflightRejected("reduce-only qty must be >0 and <= held size (may flatten, never flip)")
-    token = ReduceOnlyPreflightToken(key=_MINT, symbol=position.symbol, intent_id=intent.intent_id)
-    token.side = required_side
-    token.qty = order_qty
-    return token
+    return _issue(
+        ReduceOnlyPreflightToken,
+        _Authorization(kind="reduce_only", symbol=position.symbol, side=required_side, qty=order_qty),
+    )

@@ -15,8 +15,14 @@ Stable profile + project facts. Ephemeral status lives in `PLAN.md`; the design 
   and fixed 4 bugs test-first: journal crash-recovery (truncate dangling tail on reopen), kill-switch freeze on
   short/zero positions (per-position isolation + finally-halt), reduce-only validation (validate against the
   position's sign/size/symbol, not the caller's flag), and token single-use (mint-side nonce registry, copy/pickle
-  hostile). 113 deterministic, stdlib-only tests. Lesson: the reduce-only path is the one path that can submit —
-  it must never trust caller-asserted intent.
+  hostile). A second code-review round hardened further: token **authority now lives in an immutable module
+  registry keyed by nonce** (not on the token object), so a token built directly with the private mint key has no
+  authorization and cannot open; journal `replay` drops only a truly truncated tail (no final newline) and treats
+  a newline-terminated bad row as fatal; per-stream `seq`/lock is path-keyed (shared across writer instances);
+  `OrderIntent` rejects non-finite/non-Decimal qty; `make_server` binds 127.0.0.1 only; `BrokerBase` makes the
+  preflight chokepoint non-bypassable. 129 deterministic, stdlib-only tests. Lesson: put authority in a
+  server-side registry, not in client-held objects — and the reduce-only path (the one path that can submit) must
+  never trust caller-asserted intent.
 
 ## Hard rules (never cross without explicit, separately-approved instruction)
 

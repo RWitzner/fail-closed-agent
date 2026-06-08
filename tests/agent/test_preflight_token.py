@@ -41,13 +41,38 @@ def _held(symbol="AAPL", qty="10"):
 
 
 class TestNonForgeable(unittest.TestCase):
-    def test_token_cannot_be_constructed_directly(self):
+    def test_token_cannot_be_constructed_with_wrong_mint(self):
         with self.assertRaises(PreflightForgery):
-            PreflightToken(key=object(), symbol="AAPL", intent_id="x")
+            PreflightToken(mint=object())
 
-    def test_subclass_cannot_be_constructed_directly(self):
+    def test_subclass_cannot_be_constructed_with_wrong_mint(self):
         with self.assertRaises(PreflightForgery):
-            OpenPreflightToken(key=object(), symbol="AAPL", intent_id="x")
+            OpenPreflightToken(mint=object())
+
+    def test_open_token_built_with_real_mint_is_unauthorized(self):
+        # Even importing the module-private mint key, a directly-constructed open
+        # token has no stored authorization, so it can never open an order (C1).
+        from agent.execution_preflight import _MINT
+
+        forged = OpenPreflightToken(mint=_MINT)
+        self.assertFalse(is_authentic(forged))
+        intent = OrderIntent(symbol="AAPL", side="buy", qty=Decimal("1"), intent_id="x")
+        with self.assertRaises(PreflightForgery):
+            require_token(intent, forged)
+
+    def test_reduce_token_attributes_cannot_be_mutated_to_rebind(self):
+        # Mutating a reduce token must not rebind it to another order (C2): the
+        # authorization lives in an immutable registry, not on the token object.
+        token = mint_reduce_only_token(_held("AAPL", "10"), _reduce_intent("AAPL"))  # AAPL sell 1
+        try:
+            token.symbol = "MSFT"
+            token.side = "sell"
+            token.qty = Decimal("5")
+        except AttributeError:
+            pass  # token is immutable (no such slots) — also acceptable
+        rebind = OrderIntent(symbol="MSFT", side="sell", qty=Decimal("5"), is_reducing=True, intent_id="x")
+        with self.assertRaises(PreflightForgery):
+            require_token(rebind, token)
 
 
 class TestOpenIsRejectAllInM0(unittest.TestCase):

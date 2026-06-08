@@ -1,22 +1,21 @@
 """M0 Alpaca paper broker — a spy/no-op stub (spec §5 Tier 6, invariant S1).
 
-This is intentionally a no-op: it imports **no** `alpaca-py`, makes **no** network
-calls, and records accepted submissions. The real REST/WS adapter (and the live
-broker) land in M5. `submit_order` is reachable only with a valid preflight token
-(`require_token`), so on the committed config nothing can be opened.
+Extends `BrokerBase`, so `submit_order` is the non-bypassable preflight gateway and
+this class only implements `_place`. It imports **no** `alpaca-py`, makes **no**
+network calls, and records accepted submissions. The real REST/WS adapter and the
+live broker land in M5/M8.
 """
 from decimal import Decimal
 
-from agent.broker.base import require_token
+from agent.broker.base import BrokerBase
 
 
-class AlpacaPaperBroker:
+class AlpacaPaperBroker(BrokerBase):
     def __init__(self):
         self.submitted = []
         self._positions = {}
 
-    def submit_order(self, intent, token):
-        require_token(intent, token)
+    def _place(self, intent):
         self.submitted.append(intent)
         return {"order_id": intent.intent_id, "status": "accepted_paper_stub"}
 

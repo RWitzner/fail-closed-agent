@@ -38,6 +38,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def make_server(host: str = HOST, port: int = PORT) -> ThreadingHTTPServer:
+    if host != HOST:
+        raise ValueError(f"dashboard binds {HOST} only; refused host {host!r}")
     return ThreadingHTTPServer((host, port), _Handler)
 
 

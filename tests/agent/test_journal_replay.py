@@ -153,5 +153,48 @@ class TestCrashRecovery(_Tmp):
         self.assertEqual(row["run_id"], "run-2")
 
 
+class TestTailIntegrity(_Tmp):
+    def test_corrupt_complete_trailing_line_with_newline_raises(self):
+        # A trailing line that IS newline-terminated is a complete record; a bad
+        # hash on it is corruption, not a partial write — it must raise (H1).
+        w = JournalWriter(self.path, run_id="run-1")
+        w.append("decision", {"symbol": "AAPL"})
+        w.append("decision", {"symbol": "MSFT"})
+        lines = self.path.read_text().rstrip("\n").split("\n")
+        row = json.loads(lines[-1])
+        row["symbol"] = "TAMPERED"  # body changed -> stored hash is now stale
+        lines[-1] = json.dumps(row, sort_keys=True, separators=(",", ":"))
+        self.path.write_text("\n".join(lines) + "\n")  # newline-terminated => complete
+        with self.assertRaises(JournalCorruption):
+            replay(self.path)
+
+
+class TestSharedStreamSeq(_Tmp):
+    def test_two_writers_same_path_share_monotonic_seq(self):
+        # Both writers opened before either appends — they must still produce a
+        # single monotonic per-stream seq, not [1, 1] (H2).
+        w1 = JournalWriter(self.path, run_id="run-a")
+        w2 = JournalWriter(self.path, run_id="run-b")
+        s1 = w1.append("decision", {"x": 1})["seq"]
+        s2 = w2.append("decision", {"x": 2})["seq"]
+        self.assertEqual(sorted([s1, s2]), [1, 2])
+        rows = replay(self.path)
+        self.assertEqual(sorted(r["seq"] for r in rows), [1, 2])
+
+
+class TestTimestamp(_Tmp):
+    def test_rows_carry_ts_utc(self):
+        w = JournalWriter(self.path, run_id="run-1")
+        row = w.append("decision", {"symbol": "AAPL"})
+        self.assertIn("ts_utc", row)
+        self.assertIsInstance(row["ts_utc"], str)
+
+    def test_ts_utc_clock_is_injectable(self):
+        ticks = iter(["2026-06-08T00:00:00Z", "2026-06-08T00:00:01Z"])
+        w = JournalWriter(self.path, run_id="run-1", clock=lambda: next(ticks))
+        self.assertEqual(w.append("decision", {"i": 0})["ts_utc"], "2026-06-08T00:00:00Z")
+        self.assertEqual(w.append("decision", {"i": 1})["ts_utc"], "2026-06-08T00:00:01Z")
+
+
 if __name__ == "__main__":
     unittest.main()
