@@ -1,7 +1,7 @@
 # Stocks Trading Agent — Design Spec
 
 - **Date:** 2026-06-08
-- **Status:** **Draft — build-ready for M0** (external review + adversarial multi-lens review incorporated 2026-06-08; M0/M1 plans reconciled; later milestones require their own plans/reviews)
+- **Status:** **Active — M0 implemented & hardened** (113 tests; design reviewed twice externally + a 5-lens adversarial workflow; M1 next; later milestones require their own plans/reviews)
 - **Owner:** Robin
 - **Sibling project:** `<sibling-workspace>` (the engineering spine this design ports)
 

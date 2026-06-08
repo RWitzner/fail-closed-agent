@@ -10,7 +10,7 @@ live`, fail-closed, "nothing opens by default") but is otherwise live-like, so t
 interfaces and code path — *not* a rebuild, though live is still a separately-validated step. Authoritative
 design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`. Build is staged M0→M8; see `PLAN.md`.
 
-**State:** pre-M0. No agent code yet — only design + plans + this charter.
+**State:** M0 built + hardened + green (113 tests, stdlib-only, gates OFF; HEAD `c1307ae`). M1 next — see `PLAN.md`.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -31,7 +31,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 
 ## Commands
 
-The repo is pre-M0; no runnable agent code yet. Once M0 lands, its acceptance command (bare checkout) is:
+M0 has landed and is stdlib-only; the acceptance command (bare checkout, currently 113 tests, green) is:
 
 ```bash
 python3 -m pip install -r requirements.txt        # M0 is stdlib-only; deps pinned per milestone
@@ -59,8 +59,9 @@ preflight. 7. **Journal/reconcile** — deterministic event-sourced JSONL + rehy
   conflate.
 - **Time:** all market logic in **America/New_York (ET)**; timestamps persisted in **UTC** (`ts_utc`) + a
   monotonic clock for latency.
-- **Imports:** no installed package — `tests/conftest.py` bootstraps `sys.path` to repo root + `scripts/`
-  (mirrors Polymarket's `ROOT = parents[N]` convention).
+- **Imports:** no installed package — `tests/__init__.py` (for `python3 -m unittest`) and a repo-root
+  `conftest.py` (pytest shim) each prepend `<repo>/scripts` to `sys.path` so test modules can `import agent...`
+  (mirrors Polymarket's `ROOT/scripts` convention). Repo root itself is not added.
 - **Subprocess** only via fixed command arrays, never `shell=True`.
 - Keep authoring and review as separate passes; verify before claiming completion.
 

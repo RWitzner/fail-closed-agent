@@ -8,8 +8,9 @@ An autonomous **US-equities** trading agent built with the same `observe → pap
 Polymarket agent: it starts **paper-only with "nothing opens by default"** and is otherwise live-like (live data,
 live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-**Current state:** pre-implementation. Design + M0/M1 implementation plans are written and reviewed; no agent code
-exists yet. Next milestone is **M0** (skeleton + abstractions + safety tests).
+**Current state:** **M0 built, hardened, and green** (113 tests, gates OFF; HEAD `c1307ae`). The agent skeleton,
+safety spine, and dashboard sandbox exist under `scripts/agent/` and `dashboard/`. Next milestone is **M1**
+(data tier). See `PLAN.md` for live status.
 
 ## Scope
 
@@ -59,7 +60,7 @@ data/      bars/ · snapshots/ · live/          # git-ignored
 dashboard/ app.py                              # stdlib, 127.0.0.1
 tests/     agent/ · recorder/ · lib/
 .secrets/  (git-ignored)                       # Alpaca + Databento keys
-docs/superpowers/specs + plans · runbooks
+docs/superpowers/specs + plans · runbooks (added from M8)
 ```
 
 ## Safety invariants

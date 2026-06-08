@@ -9,6 +9,15 @@ Stable profile + project facts. Ephemeral status lives in `PLAN.md`; the design 
   (`<sibling-workspace>`). ~60–70 % of that spine transfers; the prediction-market alpha + the live
   data tier are rebuilt.
 
+## Milestone outcomes (durable)
+
+- **M0 (skeleton + safety spine) — done + adversarially hardened.** An adversarial review of the M0 code found
+  and fixed 4 bugs test-first: journal crash-recovery (truncate dangling tail on reopen), kill-switch freeze on
+  short/zero positions (per-position isolation + finally-halt), reduce-only validation (validate against the
+  position's sign/size/symbol, not the caller's flag), and token single-use (mint-side nonce registry, copy/pickle
+  hostile). 113 deterministic, stdlib-only tests. Lesson: the reduce-only path is the one path that can submit —
+  it must never trust caller-asserted intent.
+
 ## Hard rules (never cross without explicit, separately-approved instruction)
 
 - No real-money orders. `live_trading.enabled = false`; run gates (`enabled`, `paper_trading.enabled`) = `false`
