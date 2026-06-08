@@ -129,5 +129,29 @@ class TestWriterLock(_Tmp):
         self.assertEqual(seqs, list(range(1, n_threads * per + 1)))
 
 
+class TestCrashRecovery(_Tmp):
+    def test_reopen_repairs_truncated_tail_then_appends_replay_clean(self):
+        w = JournalWriter(self.path, run_id="run-1")
+        w.append("decision", {"symbol": "AAPL"})
+        # Crash mid-write: a partial, unterminated line is left behind.
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write('{"event_type":"decision","symbol":"PARTIA')
+        # Restart: a new writer must repair the dangling tail so future appends
+        # land on a record boundary instead of concatenating onto garbage.
+        w2 = JournalWriter(self.path, run_id="run-2")
+        w2.append("decision", {"symbol": "MSFT"})
+        rows = replay(self.path)
+        self.assertEqual([r["symbol"] for r in rows], ["AAPL", "MSFT"])
+
+    def test_seq_resumes_across_reopen(self):
+        w = JournalWriter(self.path, run_id="run-1")
+        w.append("decision", {"i": 0})
+        w.append("decision", {"i": 1})
+        w2 = JournalWriter(self.path, run_id="run-2")
+        row = w2.append("decision", {"i": 2})
+        self.assertEqual(row["seq"], 3)
+        self.assertEqual(row["run_id"], "run-2")
+
+
 if __name__ == "__main__":
     unittest.main()

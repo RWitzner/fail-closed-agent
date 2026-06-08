@@ -5,6 +5,7 @@ Tokens are split by intent: `OpenPreflightToken` (opening/increasing) is reject-
 in M0 (full preflight in M5), while `ReduceOnlyPreflightToken` is mintable only for
 an existing held position + a position-decreasing order, so flatten always works.
 """
+import copy
 import types
 import unittest
 from decimal import Decimal
@@ -16,6 +17,7 @@ from agent.execution_preflight import (
     PreflightRejected,
     PreflightToken,
     ReduceOnlyPreflightToken,
+    is_authentic,
     mint_open_token,
     mint_reduce_only_token,
 )
@@ -102,6 +104,64 @@ class TestRequireToken(unittest.TestCase):
         require_token(_reduce_intent(), token)  # first use ok
         with self.assertRaises(PreflightForgery):
             require_token(_reduce_intent(), token)  # consumed
+
+    def test_failed_require_does_not_consume(self):
+        token = mint_reduce_only_token(_held("AAPL"), _reduce_intent("AAPL"))
+        wrong = OrderIntent(symbol="MSFT", side="sell", qty=Decimal("1"), is_reducing=True, intent_id="x")
+        with self.assertRaises(PreflightForgery):
+            require_token(wrong, token)  # symbol mismatch must not consume
+        require_token(_reduce_intent("AAPL"), token)  # still usable for the right intent
+
+
+class TestReduceOnlyValidation(unittest.TestCase):
+    """A reduce-only token must reflect the position, not the caller's self-assertion."""
+
+    def test_buy_tagged_reducing_is_rejected(self):
+        bad = OrderIntent(symbol="AAPL", side="buy", qty=Decimal("1"), is_reducing=True, intent_id="x")
+        with self.assertRaises(PreflightRejected):
+            mint_reduce_only_token(_held("AAPL", "10"), bad)
+
+    def test_oversized_reduce_is_rejected(self):
+        big = OrderIntent(symbol="AAPL", side="sell", qty=Decimal("1000"), is_reducing=True, intent_id="x")
+        with self.assertRaises(PreflightRejected):
+            mint_reduce_only_token(_held("AAPL", "10"), big)
+
+    def test_cross_symbol_reduce_is_rejected(self):
+        sell_aapl = OrderIntent(symbol="AAPL", side="sell", qty=Decimal("1"), is_reducing=True, intent_id="x")
+        with self.assertRaises(PreflightRejected):
+            mint_reduce_only_token(_held("MSFT", "10"), sell_aapl)
+
+    def test_short_position_reduces_by_buying(self):
+        cover = OrderIntent(symbol="AAPL", side="buy", qty=Decimal("5"), is_reducing=True, intent_id="x")
+        token = mint_reduce_only_token(_held("AAPL", "-10"), cover)
+        self.assertIsInstance(token, ReduceOnlyPreflightToken)
+
+    def test_short_position_cannot_be_reduced_by_selling(self):
+        sell = OrderIntent(symbol="AAPL", side="sell", qty=Decimal("5"), is_reducing=True, intent_id="x")
+        with self.assertRaises(PreflightRejected):
+            mint_reduce_only_token(_held("AAPL", "-10"), sell)
+
+    def test_token_qty_is_rechecked_by_require(self):
+        token = mint_reduce_only_token(_held("AAPL", "10"), _reduce_intent("AAPL"))  # sell 1
+        other = OrderIntent(symbol="AAPL", side="sell", qty=Decimal("2"), is_reducing=True, intent_id="x")
+        with self.assertRaises(PreflightForgery):
+            require_token(other, token)
+
+
+class TestSingleUseHardening(unittest.TestCase):
+    def test_copy_is_forbidden(self):
+        token = mint_reduce_only_token(_held(), _reduce_intent())
+        with self.assertRaises(PreflightForgery):
+            copy.copy(token)
+
+    def test_deepcopy_is_forbidden(self):
+        token = mint_reduce_only_token(_held(), _reduce_intent())
+        with self.assertRaises(PreflightForgery):
+            copy.deepcopy(token)
+
+    def test_object_new_forgery_is_not_authentic(self):
+        forged = object.__new__(OpenPreflightToken)
+        self.assertFalse(is_authentic(forged))
 
 
 if __name__ == "__main__":

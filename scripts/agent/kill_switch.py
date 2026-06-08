@@ -13,21 +13,38 @@ class KillSwitch:
     def __init__(self):
         self.state = "active"  # active -> flattening -> halted
         self.flattened = []
+        self.failed = []  # (symbol, reason) for positions that could not be reduced
 
     def trigger(self, broker, positions) -> None:
+        """Flatten every held position with a reduce-only order, then ALWAYS halt.
+
+        Each position is isolated: one that cannot be reduced is recorded as an
+        alarm and the loop continues, and `finally` guarantees we reach `halted`
+        rather than freezing in `flattening` with open exposure.
+        """
         self.state = "flattening"
-        for position in positions:
-            intent = OrderIntent(
-                symbol=position.symbol,
-                side="sell",  # long positions reduce by selling (short path: M4+)
-                qty=position.qty,
-                is_reducing=True,
-                intent_id=f"flatten-{position.symbol}",
-            )
-            token = mint_reduce_only_token(position, intent)  # reduce-only; never an open
-            broker.submit_order(intent, token)
-            self.flattened.append(position.symbol)
-        self.state = "halted"
+        self.failed = []
+        try:
+            for position in positions:
+                try:
+                    qty = position.qty
+                    if qty == 0:
+                        continue  # nothing to reduce
+                    side = "sell" if qty > 0 else "buy"  # long -> sell, short -> buy to cover
+                    intent = OrderIntent(
+                        symbol=position.symbol,
+                        side=side,
+                        qty=abs(qty),
+                        is_reducing=True,
+                        intent_id=f"flatten-{position.symbol}",
+                    )
+                    token = mint_reduce_only_token(position, intent)  # reduce-only; never an open
+                    broker.submit_order(intent, token)
+                    self.flattened.append(position.symbol)
+                except Exception as exc:  # noqa: BLE001 — isolate one position's failure
+                    self.failed.append((getattr(position, "symbol", "?"), str(exc)))
+        finally:
+            self.state = "halted"
 
     def is_halted(self) -> bool:
         return self.state == "halted"

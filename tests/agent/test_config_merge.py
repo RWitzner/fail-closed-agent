@@ -24,6 +24,10 @@ class TestRulesHash(unittest.TestCase):
         self.assertEqual(len(h), 64)
         int(h, 16)
 
+    def test_non_finite_config_value_raises(self):
+        with self.assertRaises(ValueError):
+            rules_hash({"x": float("nan")})
+
 
 class TestTightenOnlyMerge(unittest.TestCase):
     def test_overlay_cannot_enable_a_disabled_gate(self):

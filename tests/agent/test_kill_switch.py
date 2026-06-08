@@ -52,5 +52,36 @@ class TestFlattenThenHalt(unittest.TestCase):
         self.assertTrue(ks.is_halted())
 
 
+class TestDegeneratePositions(unittest.TestCase):
+    def test_short_position_is_covered_by_buying(self):
+        broker = AlpacaPaperBroker()
+        ks = KillSwitch()
+        ks.trigger(broker, [_pos("AAPL", "-5")])
+        self.assertTrue(ks.is_halted())
+        self.assertEqual(len(broker.submitted), 1)
+        self.assertEqual(broker.submitted[0].side, "buy")
+
+    def test_zero_qty_is_skipped_but_still_halts(self):
+        broker = AlpacaPaperBroker()
+        ks = KillSwitch()
+        ks.trigger(broker, [_pos("AAPL", "0")])
+        self.assertTrue(ks.is_halted())
+        self.assertEqual(broker.submitted, [])
+
+    def test_one_bad_position_does_not_freeze_or_skip_the_rest(self):
+        class Boom:
+            symbol = "BAD"
+
+            @property
+            def qty(self):
+                raise RuntimeError("cannot read position")
+
+        broker = AlpacaPaperBroker()
+        ks = KillSwitch()
+        ks.trigger(broker, [Boom(), _pos("NVDA", "20")])
+        self.assertTrue(ks.is_halted())  # never frozen in 'flattening'
+        self.assertIn("NVDA", [o.symbol for o in broker.submitted])  # later position still flattened
+
+
 if __name__ == "__main__":
     unittest.main()

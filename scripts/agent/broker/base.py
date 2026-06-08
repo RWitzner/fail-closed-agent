@@ -31,16 +31,28 @@ class OrderIntent:
 
 
 def require_token(intent: OrderIntent, token) -> None:
-    """Validate + consume the preflight token for this intent, or raise PreflightForgery."""
+    """Validate + consume the preflight token for this intent, or raise PreflightForgery.
+
+    Validation happens BEFORE consumption, so a failed check leaves the token usable
+    for its correct intent. A reduce-only token additionally binds the authorized
+    side + qty, which are re-checked here.
+    """
     if not is_authentic(token):
         raise PreflightForgery("submit_order requires a valid, unconsumed preflight token")
-    expected = ReduceOnlyPreflightToken if intent.is_reducing else OpenPreflightToken
-    if not isinstance(token, expected):
-        raise PreflightForgery(
-            f"intent requires a {expected.__name__}, got {type(token).__name__}"
-        )
-    if token.symbol != intent.symbol:
-        raise PreflightForgery("token/intent symbol mismatch")
+    if intent.is_reducing:
+        if not isinstance(token, ReduceOnlyPreflightToken):
+            raise PreflightForgery("reduce-only intent requires a ReduceOnlyPreflightToken")
+        if (
+            token.symbol != intent.symbol
+            or token.side != intent.side
+            or token.qty != intent.qty
+        ):
+            raise PreflightForgery("intent does not match the reduce-only authorization")
+    else:
+        if not isinstance(token, OpenPreflightToken):
+            raise PreflightForgery("opening intent requires an OpenPreflightToken")
+        if token.symbol != intent.symbol:
+            raise PreflightForgery("token/intent symbol mismatch")
     consume(token)
 
 

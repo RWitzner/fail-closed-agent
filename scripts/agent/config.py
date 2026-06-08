@@ -15,7 +15,9 @@ def load(path) -> dict:
 
 
 def rules_hash(config) -> str:
-    canon = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    # allow_nan=False so an accidental non-finite config value raises loudly rather
+    # than hashing to an invalid-JSON NaN/Infinity literal.
+    canon = json.dumps(config, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 

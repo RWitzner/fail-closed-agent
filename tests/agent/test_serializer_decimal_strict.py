@@ -82,6 +82,12 @@ class TestBrokerVsModeledNewtypes(unittest.TestCase):
         with self.assertRaises(TypeError):
             as_broker_usd(1.25)
 
+    def test_non_finite_broker_usd_rejected(self):
+        with self.assertRaises(ValueError):
+            as_broker_usd(BrokerUSD("NaN"))
+        with self.assertRaises(ValueError):
+            as_broker_usd(BrokerUSD("Infinity"))
+
 
 if __name__ == "__main__":
     unittest.main()

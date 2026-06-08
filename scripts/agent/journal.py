@@ -56,8 +56,20 @@ class JournalWriter:
         self._path = Path(path)
         self._run_id = run_id
         self._lock = threading.Lock()
+        self._repair_truncated_tail()
         existing = replay(self._path)
         self._seq = existing[-1]["seq"] if existing else 0
+
+    def _repair_truncated_tail(self) -> None:
+        """Drop a dangling partial line left by a crash, so appends land on a record
+        boundary instead of concatenating onto garbage (which would later corrupt the
+        whole stream)."""
+        if not self._path.exists():
+            return
+        data = self._path.read_bytes()
+        if data and not data.endswith(b"\n"):
+            nl = data.rfind(b"\n")
+            self._path.write_bytes(data[: nl + 1] if nl != -1 else b"")
 
     def append(self, event_type: str, fields: dict = None, *, decision_id=None, order_id=None) -> dict:
         fields = dict(fields or {})
