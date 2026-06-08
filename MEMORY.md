@@ -1,0 +1,46 @@
+# MEMORY.md — Stocks trading agent (stable facts)
+
+Stable profile + project facts. Ephemeral status lives in `PLAN.md`; the design is in
+`docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
+
+## Project
+
+- Autonomous **US-equities** trading agent, **paper-first but live-like**, reusing the Polymarket spine
+  (`<sibling-workspace>`). ~60–70 % of that spine transfers; the prediction-market alpha + the live
+  data tier are rebuilt.
+
+## Hard rules (never cross without explicit, separately-approved instruction)
+
+- No real-money orders. `live_trading.enabled = false`; run gates (`enabled`, `paper_trading.enabled`) = `false`
+  on the committed config.
+- Live capital requires **two-key arming** (committed flag + uncommitted runtime secret) + the M8 go-live
+  checklist.
+- Broker = position-of-record; modeled fill never overrides the broker ledger.
+- Committed-config canary (S1): no opening/position-increasing order is ever submitted.
+- Secrets in `.secrets/`, never committed; tests do no network I/O.
+
+## Locked decisions
+
+- Broker **Alpaca**; market data **Databento** (`MarketDataTransport`, Polygon = alternate candidate); **hybrid
+  broker-authoritative** fill model; curated **single-name US large-cap** universe; **observe-only calibration
+  probe** first, then a **backtest gate** before any paper-eligible strategy.
+
+## Verified external facts (2026-06-08)
+
+- **FINRA Notice 26-10:** intraday margin (amended Rule 4210) **replaces** the PDT day-trade-count + $25k
+  minimum; effective 2026-06-04, phase-in to 2027-10-20. Use `IntradayMarginModel` as canonical; legacy PDT is
+  compat-only and must mirror Alpaca's actual enforcement during phase-in.
+- **Databento EQUS.MINI** is L1 top-of-book (no MBP-10, no `status` schema); L2 `mbp-10` and L3 `mbo` need other
+  datasets — pinned per milestone.
+- **Alpaca** paper and live share one API; paper does **not** simulate dividends/CA → corporate actions are
+  fail-closed (cross-validated, ex-date blackout).
+
+## Conventions
+
+- Determinism: `json.dumps(sort_keys, separators)`, Decimal-as-string, correlation IDs + monotonic `seq`.
+- Money: `BrokerUSD` (ledger) vs `ModeledUSD` (strategy eval) — never conflate.
+- Time: market logic in ET; persist UTC.
+
+## Communication
+
+Robin prefers short, direct **Danish**; evidence over vibes; facts / assumptions / opinions kept distinct.

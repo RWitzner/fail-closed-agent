@@ -38,8 +38,8 @@ The dotted-path unittest commands require import resolution on a bare repo. Adop
 
 ## Files to create
 
-**Charter / governance**
-- `AGENTS.md`, `CLAUDE.md`, `PLAN.md`, `MEMORY.md` (seeded from Polymarket, rewritten for the stocks posture; CLAUDE.md must restate §12 hard boundaries, live-gate OFF, two-key arming, kill-switch drill).
+**Charter / governance** — **seeded 2026-06-08** (ahead of M0 code), maintained through M0
+- `AGENTS.md`, `CLAUDE.md`, `PLAN.md`, `MEMORY.md` (rewritten from Polymarket for the stocks posture; CLAUDE.md restates the §12 hard boundaries, live-gate OFF, two-key arming, kill-switch). Keep in sync as M0 lands real config/code.
 
 **Config**
 - `config/agent_rules.json`, `config/risk_rules.json`, `config/data_retention.json`
