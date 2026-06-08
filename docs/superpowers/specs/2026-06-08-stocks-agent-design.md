@@ -1,7 +1,7 @@
 # Stocks Trading Agent — Design Spec
 
 - **Date:** 2026-06-08
-- **Status:** **Draft — review required** (incorporating external review 2026-06-08; outstanding items pinned to the M0/M1 implementation plans)
+- **Status:** **Draft — build-ready for M0** (external review + adversarial multi-lens review incorporated 2026-06-08; M0/M1 plans reconciled; later milestones require their own plans/reviews)
 - **Owner:** Robin
 - **Sibling project:** `<sibling-workspace>` (the engineering spine this design ports)
 
@@ -64,7 +64,7 @@ execution-realism discipline to mean anything.
 | # | Decision | Choice | Why |
 |---|----------|--------|-----|
 | 1 | Broker / execution seam | **Alpaca** | Paper and live share one API surface (base-URL + key differ) → live reuses the same code path. Simple REST/WS, fractional shares. Going live still requires separate validation (below). |
-| 2 | Market-data vendor | **Databento** (primary) | Live and historical share one normalized schema → recorder/replay/backtest/live run identical code. Depth (L2 MBP-10 / L3 MBO) makes depth-aware fills honest. `MarketData` abstraction keeps **Polygon** a drop-in swap. Exact datasets pinned in §5.1 / M1. |
+| 2 | Market-data vendor | **Databento** (primary) | Live and historical share one normalized schema → recorder/replay/backtest/live run identical code. Depth (L2 MBP-10 / L3 MBO) makes depth-aware fills honest. `MarketDataTransport` abstraction keeps **Polygon** as an alternate provider candidate, not a guaranteed drop-in replacement, because depth/status/replay semantics can differ. Exact datasets pinned in §5.1 / M1. |
 | 3 | Fill model | **Hybrid (broker-authoritative)** | Alpaca (paper, later live) is the **position-of-record**; Databento depth produces an independent **execution-realism label/score**, journaled separately — it never overrides the broker ledger. |
 | 4 | Asset universe | **Curated single-name US large-cap (~20–50)** | Keeps the data tier tractable; JSONL persistence holds; depth is affordable + high-fidelity on a focused set. Going broad later is a throughput change, not an architecture change. |
 | 5 | First strategy | **Observe-only calibration probe** → backtest gate → directional | Validates the model-vs-market edge, the data/execution pipeline, and a historical anti-lookahead backtest before risking even paper capital. |
@@ -97,7 +97,9 @@ Asset-agnostic, adopted verbatim:
 
 ### Paper-realism principles (the crux of "live-like")
 1. **Never fill on the quote you decided on.** Re-quote a **second** fresh NBBO after a real awaited latency
-   budget whose timestamp strictly post-dates the decision stamp; reject with an explicit reason otherwise.
+   budget (the await + run-loop integration lives in `orchestrator.py`, not `execution_realism.py`) whose
+   timestamp strictly post-dates the decision stamp by a configured minimum; a **missing decision timestamp is a
+   hard reject** (`missing_decision_stamp`), never a skipped check.
 2. **Model fillability against depth, not top-of-NBBO.** Walk available size and compute a depth-integrated VWAP
    with explicit `worst_price = slippage`. (Depth granularity is dataset-dependent — see §5.1; L2 MBP-10 gives
    **conservative/probabilistic** fillability, **not** true queue position, which requires L3 MBO.)
@@ -113,8 +115,7 @@ Asset-agnostic, adopted verbatim:
 8. **The broker fill is authoritative; the modeled fill is a label.** Validate the broker's reported fill
    against an independent fresh Databento NBBO and **flag** divergence (e.g. fill beats NBBO → optimistic); never
    overwrite the broker ledger with the modeled price.
-9. **Reconnect/epoch + session-stability gates.** Reject a modeled fill if `reconnect_epoch` changed or the
-   symbol entered halt/auction/LULD in the latency window.
+9. **Reconnect/epoch + session-stability gates.** A pre-submit `execution_preflight` must pass after the latency wait and second quote: if `reconnect_epoch` changed or the symbol entered halt/auction/LULD before submit, **do not submit the broker order**. If an already-accepted broker order later reports fills, those `broker_fill` rows remain authoritative, while the modeled assessment can be rejected/flagged.
 10. **Calibrate latency/freshness budgets to the actual feed/broker**, not Polymarket's 500 ms.
 11. **Paper realism is not live-money proof.** A separate real-feed live-validation + an approved real-money
     canary precede any live capital.
@@ -129,13 +130,17 @@ Asset-agnostic, adopted verbatim:
 with resampling.
 
 - **reuse:** `clob_recorder/recorder.py` single-writer loop + reconnect/backoff; `persistence.py` EventWriter
-  (append-only, daily rotation, gzip, retention from config); `replay.py` + `reconcile.py` dual-hash harness;
-  `lock.py` PID lock; `status.py` heartbeat; `FakeTransport`/`FlakyTransport` tests.
+  (append-only, daily rotation, gzip, retention from config); `replay.py` + `reconcile.py` dual-hash harness +
+  `book_hash.py` (the derived-state hash `replay.py` imports — **rewrite for L2 MBP-10 depth ladders**, not a
+  verbatim port); `lock.py` PID lock; `status.py` heartbeat; `FakeTransport`/`FlakyTransport` tests.
 - **adapt:** `event.py` → parse Databento schemas; `token_ids.py` → `instrument_id` ↔ `symbol`+MIC identity;
   reconcile ground-truth → Databento historical + Alpaca positions.
 - **new:** **sequence-gap detection keyed to the dataset's actual sequencing semantics** (some composite feeds do
-  not provide meaningful per-venue sequence numbers — verified per dataset in M1); the **bar cache** + resampler;
-  entitlement/auth + heartbeat handling.
+  not provide meaningful per-venue sequence numbers — verified per dataset in M1); the **bar cache** + resampler
+  (**ET session-boundary bucketing**, see §11 — tested across a DST transition); **always-on reconnect** — the
+  ported recorder caps reconnect at 5 attempts (fine for a batch recorder, unsafe for a 24/5 feed), so make it
+  unbounded-with-backoff-cap and raise a `data_quality_alert` on prolonged disconnect rather than terminating
+  silently; entitlement/auth + heartbeat handling.
 - **Key types:** `MarketDataTransport` (Protocol: `async stream(symbols) -> AsyncIterator[bytes]`),
   `EquityBookState`, `TradeTape`, `BarCache`, `Quote` (typed; provenance + `book_hash` + monotonic & wall ts +
   `reconnect_epoch`).
@@ -146,7 +151,7 @@ verification requirement. (Verified 2026-06-08: EQUS.MINI is a **top-of-book L1 
 
 | Need | Level | Dataset class (exact code pinned in M1) | Schemas | Notes |
 |------|-------|------------------------------------------|---------|-------|
-| Signals + top-of-book NBBO | L1 | composite (EQUS.MINI-class) | `bbo-1s` / `bbo-1m` / `tbbo` / `trades` / `ohlcv-1s` / `ohlcv-1m` | Cheap; **no MBP-10**; sequence semantics verified in M1. |
+| Signals + top-of-book NBBO | L1 | composite (EQUS.MINI-class) | `tbbo` (primary NBBO) / `bbo-1s` / `bbo-1m` / `trades` / `ohlcv-1s` / `ohlcv-1m` / `definitions` | Cheap; **no MBP-10**; **no `status` schema** → halt/LULD from broker + `exchange_calendars`; `definitions` supplies `instrument_id`↔`symbol`/MIC; pick one of `tbbo`/`bbo-1s`/`mbp-1` as NBBO source (redundant cost otherwise); sequence semantics verified in M1. |
 | Depth-aware fills (depth-VWAP) | L2 | depth-capable US-equities dataset | `mbp-10` | Conservative/probabilistic fillability; **not** queue position. |
 | True queue position (optional upgrade) | L3 | venue-native (e.g. `XNAS.ITCH`-class) | `mbo` | Only if/when resting-order queue modeling is required; higher cost/volume. |
 
@@ -167,9 +172,13 @@ and a verification command that asserts the chosen dataset actually serves the r
   **cross-validate**; treat ex-date/event windows as a **trading blackout** for the affected symbol; reconcile
   against broker account activity (Alpaca paper does **not** simulate dividends and CA data may be delayed with
   no creation-time guarantee, so the agent must not assume an adjustment happened); emit `corporate_action`
-  rows with **explicit adjustment provenance**; durable CUSIP/FIGI identity under unstable tickers.
+  rows with **explicit provenance** modeled as a **tri-state** (`confirmed_by_N_sources` /
+  `single_source_blackout` / `conflicting_blackout`) — **≥2 independent sources required to clear blackout**, a
+  lone source stays blacked-out; a **broker-adjusted-while-blacked-out detector** freezes the symbol and forces
+  an immediate (not EOD) reconcile if broker position qty changes during a CA blackout; durable CUSIP/FIGI
+  identity under unstable tickers.
 - **Key types:** `SessionState`, `TradabilityDecider` (pure), `MarketStateCache`, `CorporateActionFeed`,
-  `AdjustmentEvent` (with `provenance`, `cross_validated: bool`).
+  `AdjustmentEvent` (with `provenance_set`, tri-state `validation_status`).
 
 ### Tier 3 — Snapshot / signal
 - **reuse:** `pm_snapshot.summarize_book()` depth/spread math + warnings-as-data → quote-quality filters
@@ -191,8 +200,10 @@ and a verification command that asserts the chosen dataset actually serves the r
 ### Tier 5 — Risk / gates
 **Responsibility:** fail-closed run gates + a single pre-trade `can_open()` chokepoint enforcing exposure caps.
 
-- **reuse:** `gates.py` identity-strict run-gate ladder; `config.py` tighten-only merge + `rules_hash`;
-  `portfolio.can_open()` chokepoint (renamed `market_id→symbol`, `theme→sector/factor`).
+- **reuse (gates) / adapt (can_open):** `gates.py` identity-strict run-gate ladder + `config.py` tighten-only
+  merge + `rules_hash` port directly. `portfolio.can_open()` **adapts**: the cap-ladder structure transfers
+  (renamed `market_id→symbol`, `theme→sector/factor`) but the **signature is rebuilt** to
+  `can_open(candidate, portfolio, account) -> Verdict` reconciling broker buying power (no account param today).
 - **new sub-gates:**
   - **`IntradayMarginModel` (canonical).** Per FINRA Regulatory Notice **26-10** (verified 2026-06-08:
     published Apr 20 2026, effective **Jun 4 2026**, phase-in to Oct 20 2027), the amended Rule 4210 intraday
@@ -207,7 +218,9 @@ and a verification command that asserts the chosen dataset actually serves the r
     per-factor / beta exposure caps; a **max-drawdown / daily-loss kill switch** as a first-class halt condition;
     SEC/TAF/FINRA regulatory fees (in FeeModel).
 - **Behavior:** on a kill-switch / live-gate flip, **flatten-then-halt** (a frozen halt leaves live exposure
-  unmanaged).
+  unmanaged). **Flatten submits closing / reduce-only (position-decreasing) orders only** — S1 "nothing opens"
+  constrains *opens*, not risk-reducing closes; a kill switch can **never** emit an opening/position-increasing
+  order (asserted by test).
 - **Key types:** `RunGates`, `RiskRules` (hashed), `can_open(candidate, portfolio, account) -> Verdict`,
   `KillSwitch`, `IntradayMarginModel`, `LegacyPdtCompatMode`, `LocateCheck`.
 
@@ -227,17 +240,32 @@ from the broker ledger.
     authoritative.
   - **`broker_fill` vs `modeled_execution_fill` are journaled as separate records.** The broker fill drives the
     account ledger and PnL; the Databento-depth modeled fill is an **execution-realism label/score** (how
-    optimistic was the broker fill vs an independent depth-aware estimate?) and **never** overrides the ledger.
-    This removes the by-design drift between the local journal and broker reconciliation.
+    optimistic was the broker fill vs an independent depth-aware estimate?) and **never** overrides the broker ledger.
+    This removes the by-design drift between the local journal and broker reconciliation. PnL is split into
+    `broker_account_pnl` (reconciliation/accounting truth) and `execution_realistic_pnl` (strategy-evaluation
+    truth), held as **distinct newtypes** (`BrokerUSD` vs `ModeledUSD`) so a modeled price is type-incompatible
+    with a broker-ledger field and cannot be silently written into it.
+  - **Pre-submit execution preflight (structural chokepoint, fail-closed by type).** After the awaited latency
+    budget and second quote, re-check feed epoch, quote freshness, session state, halt/LULD/auction/SSR state,
+    tick/lot validity, and `can_open()`. `Broker.submit_order()` accepts a **non-forgeable `PreflightToken`** that
+    only a *passing* preflight can mint, so the broker seam is structurally unreachable without a passing preflight
+    — **regardless of any enable flag** (disabled ≠ `ok=True`; disabled means reject-all). **Every** submit path
+    (open *and* close/flatten/reconcile-adjust) routes through it. Failure writes a `reject` row and submits nothing.
+  - **Post-submit state-change control.** If feed epoch changes or the symbol halts/LULD/auctions *after* submit
+    but before terminal, issue a best-effort **cancel** and journal a `post_submit_cancel_attempt`; the order is a
+    **marketable-limit with a worst-price cap** derived from the preflight quote (never a bare market order, which
+    Alpaca rejects outside RTH), so any late fill stays price-bounded. DAY TIF is unsafe until this exists.
   - **Narrow supported-order matrix first:** start with **marketable-limit + DAY**; explicitly test and journal
     broker **rejection paths**; expand order types / TIFs only as Alpaca support is verified.
   - Partial-fill modeling from the broker's actual fills; conservative depth-based fillability estimate from L2
     (true queue position deferred to an optional L3/MBO upgrade); Reg-NMS price-dependent sub-penny ticks.
-- **Hybrid wiring:** decision → await latency budget → re-quote fresh Databento depth → (a) submit the order to
-  Alpaca (paper/live) and record the **authoritative** `broker_fill`(s); (b) independently compute a
-  `modeled_execution_fill` from the re-quoted depth + the execution-realism gate; (c) journal both, label the
-  realism class, and alert on divergence. Our own `can_open()` sub-gates (margin/locate/exposure) are
-  authoritative for *whether to open*; the broker is authoritative for *what actually filled*.
+- **Hybrid wiring:** decision → await latency budget → re-quote fresh Databento depth → run `execution_preflight`
+  (epoch/session/halt/LULD/freshness/tick/lot/`can_open()`); only if it passes: (a) submit the order to Alpaca
+  (paper/live) and record the **authoritative** `broker_fill`(s); (b) independently compute a
+  `modeled_execution_fill` from the re-quoted depth + execution-realism gate; (c) journal both, label the realism
+  class, alert on divergence, and update both `broker_account_pnl` and `execution_realistic_pnl`. Our own
+  `can_open()` sub-gates (margin/locate/exposure) are authoritative for *whether to open*; the broker is
+  authoritative for *what actually filled*.
 - **Key types:** `Broker` (Protocol), `PaperBook`, `OrderIntent`, `BrokerFill`, `ModeledFill`, `SettlementEngine`.
 
 ### Tier 7 — Journal / reconcile
@@ -265,20 +293,24 @@ from the broker ledger.
 ```
 decision (t0, Databento quote A, signal+forecast)  ──► await latency_budget_ms  ──► RE-QUOTE (t1>t0, fresh NBBO+depth)
         │                                                                                   │
-        │                                          ┌────────────────────────────────────────┴──────────────┐
-        ▼ submit order                             ▼ modeled (independent)                    ▼ stability gate
-[Alpaca paper/live order]                 [execution-realism gate]                 reject MODELED fill if reconnect_epoch
- authoritative broker_fill(s):             depth-VWAP at quote B size               changed or symbol entered halt/auction/LULD;
- fills / avg_price / qty / venue           Reg-NMS tick · enumerated reject         (does NOT void the broker_fill)
- → drives ACCOUNT LEDGER + PnL             reasons → modeled_execution_fill
+        ▼                                                                                   ▼
+[execution_preflight]  epoch/session/halt/LULD/freshness/tick/lot/can_open checks; FAIL ⇒ reject row, NO BROKER SUBMIT
+        │ pass
+        ├──────────────────────────────────────────┬──────────────────────────────────────┐
+        ▼ submit order                             ▼ modeled (independent)                ▼ already-accepted order handling
+[Alpaca paper/live order]                 [execution-realism gate]              if broker later reports fills after acceptance,
+ authoritative broker_fill(s):             depth-VWAP at quote B size            keep broker_fill authoritative; modeled side
+ fills / avg_price / qty / venue           Reg-NMS tick · enumerated reject      may be rejected/flagged, never back-voided
+ → broker ledger + broker_account_pnl      reasons → modeled_execution_fill
         └──────────────────────────────────────────┬──────────────────────────────────────┘
                                                     │
         journal broker_fill (authoritative) AND modeled_execution_fill (label) as SEPARATE rows;
-        realism_class ∈ {optimistic, execution_realistic}; alert if broker_fill diverges from modeled (beats NBBO)
+        maintain broker_account_pnl AND execution_realistic_pnl; evaluate strategy on execution_realistic_pnl
 ```
 
 Account ledger = broker. Realism evidence = modeled. They are never collapsed, so reconciliation against the
-broker cannot drift. Going live: `AlpacaPaperBroker` → `AlpacaLiveBroker` (same interface, same gate) — plus the
+broker cannot drift. Strategy quality and paper-readiness gates use `execution_realistic_pnl`; broker/account
+operations use `broker_account_pnl`. Going live: `AlpacaPaperBroker` → `AlpacaLiveBroker` (same interface, same gate) — plus the
 separate go-live validation (§12).
 
 ## 7. Data model — event-sourced JSONL
@@ -293,19 +325,27 @@ Event types (illustrative fields):
 - `paper_open` — `position_id`, `order_id`, `symbol`, `side ∈ {long, short}`, `qty`,
   `order_intent {order_type, tif, limit_price}`, `realism_class`.
 - `broker_fill` — `order_id`, `position_id`, `filled_qty`, `avg_price`, `liquidity_flag`, `venue`,
-  `cost_usd` (authoritative), `fee` — **drives the ledger**.
+  `cost_usd` (authoritative), `fee` — **drives the broker ledger and broker_account_pnl**.
 - `modeled_execution_fill` — `order_id`, `modeled_price`, `modeled_vwap`, `slippage`, `quote {provenance,
-  book_hash, seen_at_ms, reconnect_epoch}`, `divergence_vs_broker`, `realism_class` — **label only**.
+  book_hash, seen_at_ms, reconnect_epoch}`, `divergence_vs_broker`, `realism_class` — **label/scoring only**.
+- `pnl_snapshot` — `position_id`, `broker_account_pnl`, `execution_realistic_pnl`, `basis {broker, modeled}`,
+  `used_for_strategy_evaluation: execution_realistic_pnl`.
 - `mark` — `position_id`, `mark_price`, `mark_source ∈ {best_bid, best_ask}`, `unrealized_pnl`.
 - `corporate_action` — `symbol`, `type`, `factor`, `adjusted_qty`, `adjusted_cost_basis`, `provenance`,
   `cross_validated`.
 - `close` — `position_id`, `exit_price`, `realized_pnl`, `fees`, `reason`.
-- `reject` — `symbol`, `reason` (enumerated), `stage`.
+- `reject` — `symbol`, `reason` (enumerated: `missing_decision_stamp` / `stale_quote` / `epoch_changed` /
+  `halt_luld_ssr` / `invalid_tick_lot` / `can_open_denied` / `latency_lost_edge` / ...), `stage`.
+- `post_submit_cancel_attempt` — `order_id`, `cause`, `outcome`.
 - `status` — `symbol`, `from_state`, `to_state`, `cause` (session/halt/LULD/SSR/auction).
 - `reconcile` — `symbol`, `local`, `broker`, `diff`, `action`.
 
+(Type↔row mapping: the `BrokerFill` / `ModeledFill` types in §5 Tier 6 serialize to the `broker_fill` /
+`modeled_execution_fill` rows here.)
+
 Rehydrate: OPEN row = immutable facts; LATEST row per `position_id` = evolving state; `close`/terminal = skip.
-The **broker ledger** (not the modeled fill) is the source of position economics.
+The **broker ledger** is the source of account economics; `execution_realistic_pnl` is the source for strategy
+evaluation and paper-readiness claims.
 
 ## 8. Stock-specific subsystems (the must-builds)
 
@@ -313,18 +353,21 @@ The **broker ledger** (not the modeled fill) is the source of position economics
    positions/account queries; hard live kill switch; config-canary tests target this seam.
 2. **Real-time market-data feed** (Databento) — streaming NBBO + trades + depth + bars; sequence/heartbeat;
    reconnect; entitlement/auth; behind the recorder transport seam; **dataset matrix pinned (§5.1)**.
-3. **Market calendar + session/halt/LULD/SSR/auction gate** with session-aware gap detection + a `status.jsonl`
+3. **Execution preflight** — pre-submit gate after second quote; blocks broker submission on epoch/session/halt/LULD/
+   freshness/tick/lot/can-open failure and writes a machine-readable reject.
+4. **Market calendar + session/halt/LULD/SSR/auction gate** with session-aware gap detection + a `status.jsonl`
    halt ledger.
-4. **Corporate-action handling, fail-closed** — cross-validated multi-source CA; ex-date/event blackout; broker-
+5. **Corporate-action handling, fail-closed** — cross-validated multi-source CA; ex-date/event blackout; broker-
    activity reconciliation; explicit adjustment provenance; CUSIP/FIGI identity.
-5. **Order types + TIF + partial fills + slippage** — **narrow first** (marketable-limit + DAY), broker
+6. **Order types + TIF + partial fills + slippage** — **narrow first** (marketable-limit + DAY), broker
    rejection paths tested; expand only as verified.
-6. **Settlement / margin / short-locate / regulatory-fee layer** — T+1 settlement; **`IntradayMarginModel`
+7. **Settlement / margin / short-locate / regulatory-fee layer** — T+1 settlement; **`IntradayMarginModel`
    canonical** + `LegacyPdtCompatMode` (transition); Reg-T margin + buying power **reconciled from the broker**;
    short locate/borrow + SSR; SEC/TAF/FINRA fees; max-drawdown/daily-loss kill.
-7. **Position reconciliation vs broker** (SOD/EOD) — broker is ground truth.
-8. **Continuous edge/sizing/risk model** — expected-return / z-score / forecast-gap edge; vol-target / Kelly;
-   VaR/CVaR/Sharpe/beta; continuous calibration loop; **historical anti-lookahead backtest gate**.
+8. **Position reconciliation vs broker** (SOD/EOD) — broker is ground truth.
+9. **Continuous edge/sizing/risk model** — expected-return / z-score / forecast-gap edge; vol-target / Kelly;
+   VaR/CVaR/Sharpe/beta; continuous calibration loop; **historical anti-lookahead backtest gate** that evaluates
+   `execution_realistic_pnl`, not raw Alpaca paper PnL.
 
 ## 9. Safety invariants → verification
 
@@ -333,28 +376,29 @@ commands are specified in the per-milestone implementation plans (M0/M1 first); 
 
 | # | Invariant | Verified by (test class) |
 |---|-----------|--------------------------|
-| S1 | On the committed config, **nothing opens** (no order submitted, no position row, open-count 0, no would_open). | config-canary, targeting the real broker submit seam (spy/no-op broker asserts zero submits). |
-| S2 | Float/NaN/Inf never reaches a price/size field; money/qty persisted as Decimal-as-string. | serializer + fill-path rejection tests. |
+| S1 | On the committed config, **nothing opens**: `Broker.submit_order` is never invoked with ANY args across **open/close/cancel/flatten** paths (single shared spy at the Protocol boundary), no position row, open-count 0, no would_open. When `AlpacaLiveBroker` exists (M8), the live submit is unreachable unless two-key arming + `live_trading.enabled` are both present. | config-canary at the Broker Protocol boundary. |
+| S2 | Float/NaN/Inf never reaches a price/size field; money/qty persisted as Decimal-as-string. **Re-verified where floats are born:** M1 resampler (empty-window VWAP) and M3 feature engine (zero-variance z-score), not only the M0 serializer. | serializer + resampler + feature-engine NaN/Inf-injection tests. |
 | S3 | Replay re-derives identical state hashes; a truncated trailing line is dropped, not fatal. | replay idempotency + partial-write tests. |
-| S4 | A stale/un-timestamped/epoch-changed quote is unfillable (modeled fill rejected). | execution-realism freshness/epoch tests. |
-| S5 | The broker ledger is never overwritten by a modeled fill; reconciliation flags any drift and exits non-zero. | reconcile drift-injection test. |
+| S4 | A stale/un-timestamped/epoch-changed quote, changed epoch, halt/LULD/auction transition, invalid tick/lot, or failed `can_open()` blocks broker submission at `execution_preflight`. | execution-preflight + execution-realism freshness/epoch tests. |
+| S5 | The broker ledger is never overwritten by a modeled fill; `broker_account_pnl` and `execution_realistic_pnl` remain separate; reconciliation flags broker drift and exits non-zero. | reconcile drift-injection + PnL split tests. |
 | S6 | Cross-stream rows correlate by `run_id`/`decision_id`/`order_id` with monotonic `seq`. | journal correlation tests. |
 | S7 | A corporate action with missing/uncross-validated provenance triggers blackout, not a silent adjustment. | CA fail-closed tests. |
 | S8 | Kill-switch / live-gate flip flattens-then-halts (no frozen open exposure). | kill-switch drill test. |
-| S9 | No paper-eligible strategy can open until the backtest gate (anti-lookahead) has passed for it. | strategy-gate test. |
+| S9 | No paper-eligible strategy can open until a **signed/committed backtest artifact** keyed by `(strategy_name, rules_hash, data_pin)` exists (no artifact → no open, fail-closed), scored on `execution_realistic_pnl`. The M5 synthetic strategy can open **only** against a `FakeBroker` (a `SyntheticStrategy` base that can never bind `AlpacaPaperBroker`/Live), so synthetic ≠ paper-eligible structurally. | strategy-gate + synthetic-isolation + backtest metric tests. |
+| S10 | Intraday margin model covers IML-reducing transactions, intraday margin deficit calculation, 15-business-day outstanding window, 5-business-day/90-calendar-day freeze trigger, and minor-deficit exceptions; legacy PDT is compat-only. | intraday-margin fixture tests. |
 
 ## 10. Phased roadmap (each milestone: its own spec → plan → review → verify)
 
 | Milestone | Deliverable | Acceptance (invariants + checks) |
 |-----------|-------------|----------------------------------|
-| **M0 — Skeleton + abstractions** | Repo layout; `Broker` iface (Alpaca paper); `MarketData` iface (Databento adapter stub); deterministic journal w/ correlation IDs + writer lock; config/gates + `rules_hash`; dashboard stub; canary tests. | S1, S2, S3 (partial-write), S6, S8; live gate OFF in committed config. |
-| **M1 — Data tier** | Databento recorder behind transport seam; **pinned dataset/schema/entitlement matrix (§5.1) + verification command**; replay/reconcile; bar cache; market calendar + session gate. | S3 (replay hashes), S4; reconcile vs Databento historical passes; sequence-gap detection fires on injected gaps; Fake/Flaky tests green. |
-| **M2 — Market-state** | Session/halt/LULD/SSR/auction state machine; `status.jsonl` ledger; **fail-closed** corporate-actions w/ cross-validation + blackout. | S7; decider unit-tested across sessions/halts; synthetic split adjusts a held position only with cross-validated provenance, else blackout. |
+| **M0 — Skeleton + abstractions** | Repo layout + **charter files** (AGENTS/CLAUDE/PLAN restating §12); **`requirements.txt` with exact pins** + **import wiring** (`conftest.py`/`__init__.py` so dotted-path unittest resolves); `Broker` iface + spy/no-op `AlpacaPaperBroker` (no `alpaca-py` import at module load); `MarketDataTransport` iface + fake transport; deterministic journal w/ correlation IDs + writer lock; config/gates + `rules_hash`; **typed `PreflightToken` contract** (reject-all stub; full S4 in M5); `kill_switch.py` (reduce-only state machine); dashboard stub + sandbox test; `.secrets/` layout + no-network test; two-key arming stub. Plan: `docs/superpowers/plans/2026-06-08-M0-skeleton-abstractions-implementation-plan.md`. | S1 (Broker-boundary, all paths), S2, S3 (partial-write), S6, S8 (reduce-only); live gate OFF in committed config. |
+| **M1 — Data tier** | Databento recorder behind transport seam; **dataset-scoped** pinned dataset/schema/entitlement matrix (§5.1) + offline-tested verification command (per-`(dataset,schema)` pair); equity `book_hash` (L2 rewrite); replay/reconcile; bar cache + **ET-boundary resampler (DST-tested)**. Plan: `docs/superpowers/plans/2026-06-08-M1-data-tier-implementation-plan.md`. | S3 (replay hashes), **S4 (inputs only; full S4 in M5)**; reconcile vs Databento historical passes; sequence-gap detection fires on injected gaps; Fake/Flaky tests green. *(market calendar + session gate moved to M2.)* |
+| **M2 — Market-state** | **Market calendar + session gate** (moved from M1) + session/halt/LULD/SSR/auction state machine; `status.jsonl` ledger; **fail-closed** corporate-actions w/ **tri-state** cross-validation + blackout + broker-adjusted-while-blacked-out detector. | S7; decider unit-tested across sessions/halts; split adjusts a held position only with ≥2-source provenance, else blackout; broker-silent-adjust freezes + forces reconcile. |
 | **M3 — Signal + calibration probe** | Feature engine; observe-only calibration probe (`paper_eligible=False`). | S1 (probe opens nothing); probe logs forecasts + realized-move scoring; calibration report renders. |
-| **M4 — Risk core** | `IntradayMarginModel` + `LegacyPdtCompatMode`; locate/SSR; exposure caps; max-drawdown/daily-loss kill switch reconciled from broker buying power. | S8; `can_open()` rejects per sub-gate in tests; buying power reconciled from broker, not re-derived. |
-| **M5 — Paper-exec hybrid** | Alpaca paper + Databento second-quote gate; broker-fill vs modeled-fill separation; **narrow order matrix** + rejection paths; first open/mark/close via a **synthetic/test strategy** (not a real paper-eligible strategy — that awaits the M7 gate per S9). | S5, S9 (no real paper-eligible open pre-gate); optimistic vs realistic journaled separately; rejects logged with enumerated reasons; ledger from broker. |
+| **M4 — Risk core** | `IntradayMarginModel` + `LegacyPdtCompatMode`; locate/SSR; exposure caps; max-drawdown/daily-loss kill switch reconciled from broker buying power. | S8, S10; `can_open()` rejects per sub-gate in tests; buying power reconciled from broker, not re-derived. |
+| **M5 — Paper-exec hybrid** | Alpaca paper + Databento second-quote gate + `execution_preflight` (PreflightToken chokepoint, all submit paths) + the `orchestrator.py` latency-wait seam (fake clock); **post-submit cancel-on-state-change**; broker-fill vs modeled-fill/PnL separation (`BrokerUSD`/`ModeledUSD` newtypes); **narrow order matrix** + rejection paths; first open/mark/close via a **synthetic strategy** (FakeBroker-only; real paper-eligible awaits the M7 gate per S9). | S4, S5, S9 (synthetic-isolation); preflight blocks broker submit on unstable state; post-submit halt triggers cancel + price-bounded fill; optimistic vs realistic journaled separately; ledger from broker. |
 | **M6 — Reconcile hardening** | SOD/EOD broker reconciliation; drift injection. | S5 (drift flagged, non-zero exit); broker = truth on conflict. |
-| **M7 — Backtest gate** | Historical anti-lookahead backtest + raw-vs-adjusted policy + exposure-aware benchmark attribution; **first paper-eligible directional strategy** behind the gate. | S9; backtest reproducible from pinned data; no lookahead (point-in-time fixtures); paper-eligible only after pass. |
+| **M7 — Backtest gate** | Historical anti-lookahead backtest + raw-vs-adjusted policy + exposure-aware benchmark attribution; **first paper-eligible directional strategy** behind the gate. | S9; backtest reproducible from pinned data; no lookahead (point-in-time fixtures); strategy gate uses `execution_realistic_pnl`; paper-eligible only after pass. |
 | **M8 — Live canary** | (Only after realized edge.) Tightly-capped single-name live canary behind two-key arming + flatten-then-halt + **go-live checklist** (broker dry-run, kill-switch drill, caps, runbook). | Separately-approved live gate; caps enforced; live-validation runbook + real-money boundary documented. |
 
 ## 11. Conventions
@@ -370,7 +414,10 @@ commands are specified in the per-milestone implementation plans (M0/M1 first); 
 - `config/risk_rules.json → live_trading.enabled = false` **always** until an explicit, separately-approved go.
 - `config/agent_rules.json → enabled = false` and `paper_trading.enabled = false` are the run gates; they stay
   `false` on the committed config. Live capital additionally requires **two-key arming** + the §10/M8 go-live
-  checklist (broker dry-run, kill-switch drill, caps, runbook).
+  checklist (broker dry-run, kill-switch drill, caps, runbook). **Two-key = key A** (committed, git-visible,
+  code-reviewable config flag) **+ key B** (a runtime credential/token in `.secrets/` or operator env, **never
+  committed**); the live broker must require **both, independently** — no single commit or process can supply
+  both, and constructing a live-capable broker with only one key fails (tested).
 - Paper-only is the default; canary tests (S1) fail if anything opens on the committed config.
 - The broker is the position-of-record; the local journal is reconciled against it and never silently mutated;
   the modeled fill never overrides the broker ledger.
@@ -401,14 +448,15 @@ Stocks/
 
 - **Data quality is the load-bearing risk.** The data tier is a from-scratch rebuild; M1 is make-or-break.
 - **Databento dataset choice (cost vs depth).** L1 composite is cheap but no depth; L2 MBP-10 adds depth-aware
-  fills; L3 MBO adds true queue position at higher cost. Pin per milestone (§5.1); `MarketData` keeps Polygon a
-  flat-fee swap.
+  fills; L3 MBO adds true queue position at higher cost. Pin per milestone (§5.1). Polygon remains an alternate
+  provider candidate behind `MarketDataTransport`, not a guaranteed drop-in replacement.
 - **Regulatory regime in transition.** FINRA 26-10 intraday margin is canonical, but brokers phase in until
   Oct 2027 — so `LegacyPdtCompatMode` must mirror **Alpaca's actual** enforcement, detected from the broker,
   not assumed.
-- **Alpaca paper fidelity.** Fills are idealized and paper does not simulate dividends; the broker-vs-modeled
-  separation + fail-closed CA policy handle this, and our own gates (not paper enforcement) are authoritative
-  for opening.
+- **Alpaca paper fidelity.** Fills are idealized and paper does not simulate market impact, queue position,
+  latency slippage, regulatory fees, liquidity-size checks, or dividends; broker-vs-modeled separation plus
+  `broker_account_pnl`/`execution_realistic_pnl` split keeps reconciliation separate from strategy evidence. Our
+  own gates (not paper enforcement) are authoritative for opening.
 - **Calibration + backtest metric design.** The continuous-PnL calibration metric (e.g. information coefficient
   / forecast-vs-realized regression) and the anti-lookahead backtest fixtures are specified in M3/M7.
 - **Short-selling timing.** If the first directional strategy is long-only, locate/SSR work (M4) can be scoped
@@ -419,9 +467,9 @@ Stocks/
 - Engine/lifecycle: `scripts/auto_trader/{orchestrator,__main__,strategy,candidate,paper_book,portfolio,book_feed,fees,rehydrate}.py`
 - Gates/config: `scripts/auto_trader/{gates,config}.py`; `config/{risk_rules,auto_trader_rules}.json`
 - Status/cache pattern: `scripts/auto_trader/{market_status,market_status_cache,resolution_cache}.py`
-- Recorder/replay: `scripts/clob_recorder/{recorder,book_state,event,persistence,replay,reconcile,reconcile_runner,token_ids,lock,status}.py`; `config/data_retention.json`
+- Recorder/replay: `scripts/clob_recorder/{recorder,book_state,event,persistence,replay,reconcile,reconcile_runner,token_ids,book_hash,lock,status}.py`; `config/data_retention.json`
 - Snapshot/signal: `scripts/{pm_snapshot,equity_threshold_check}.py`
 - Journal: `scripts/auto_trader/paper_positions.py`; `journal/decisions.jsonl`
 - Dashboard: `dashboard/app.py`
 - Execution-realism design: `docs/superpowers/plans/2026-06-03-execution-realistic-paper-mode.md`; `docs/REALISTIC_PAPER_TRADING_HANDOFF.md`
-- External (verified 2026-06-08): FINRA Regulatory Notice 26-10 (intraday margin replaces PDT/$25k, eff. 2026-06-04); Databento EQUS.MINI = L1 top-of-book composite.
+- External (verified 2026-06-08): FINRA Regulatory Notice 26-10 — https://www.finra.org/rules-guidance/notices/26-10 (intraday margin replaces PDT/$25k, eff. 2026-06-04); Databento EQUS.MINI docs — https://databento.com/docs/venues-and-datasets/equs-mini (L1 top-of-book composite); Databento schema docs — https://databento.com/docs/schemas-and-data-formats (MBO vs MBP-10 vs BBO semantics); Alpaca paper trading docs — https://docs.alpaca.markets/us/docs/paper-trading; Alpaca corporate actions docs — https://docs.alpaca.markets/us/reference/corporateactions-1.
