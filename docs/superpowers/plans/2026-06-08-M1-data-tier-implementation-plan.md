@@ -22,7 +22,7 @@ Data-plane only:
 
 ## Dataset / schema matrix contract (dataset-scoped)
 
-M1 replaces placeholders with **exact dataset codes after per-`(dataset, schema)` entitlement verification**. EQUS.MINI is an L1 top-of-book composite (verified 2026-06-08): it has **no `mbp-10`** and **no `status`** schema. Each schema is bound to a specific dataset — no single mixed query.
+M1 starts from a `planned_matrix` (placeholder dataset codes, written offline) and produces a `verified_matrix` with **exact dataset codes after per-`(dataset, schema)` entitlement verification**. EQUS.MINI is an L1 top-of-book composite (verified 2026-06-08): it has **no `mbp-10`** and **no `status`** schema. Each schema is bound to a specific dataset — no single mixed query.
 
 | Use | Dataset (pin exact code) | Required schemas | Verification |
 |-----|--------------------------|------------------|--------------|
@@ -96,7 +96,7 @@ python3 scripts/recorder/verify_databento_entitlements.py \
 
 M1 has **two acceptance tiers**:
 
-1. **Offline-complete:** the offline command above exits 0; replay re-derives expected hashes from fixtures; matrix placeholders + any downgrade notes (e.g. status → broker/calendar) are written.
-2. **Entitlement-verified (requires credentials):** the dataset-scoped artifacts record exact dataset IDs, schemas, **per-`(dataset,schema)` availability**, sequence-number behavior, and timestamps; any unsupported schema is explicitly downgraded or moved to a later milestone in writing.
+1. **Offline-complete:** the offline command above exits 0; replay re-derives expected hashes from fixtures; the `planned_matrix` + any downgrade notes (e.g. status → broker/calendar) are written.
+2. **Entitlement-verified (requires credentials):** the dataset-scoped artifacts (the `verified_matrix`) record exact dataset IDs, schemas, **per-`(dataset,schema)` availability**, sequence-number behavior, and timestamps; any unsupported schema is explicitly downgraded or moved to a later milestone in writing.
 
 M1 is not fully done until tier 2 runs — Databento account provisioning is an explicit blocker, not an optional footnote.

@@ -14,7 +14,7 @@ Asset-agnostic foundations only:
 - `MarketDataTransport` interface + deterministic fake transport. (Canonical name: `MarketDataTransport`, used in all docs.)
 - Deterministic JSONL writer: row hashes, Decimal-as-string, per-stream writer lock, correlation IDs (`run_id`/`decision_id`/`order_id`) + monotonic `seq`, partial-line replay behavior.
 - Config/gates: identity-strict booleans, tighten-only merge, `rules_hash`, committed fail-closed defaults.
-- `PreflightToken` typed contract (reject-all stub; full preflight logic deferred to M5).
+- `OpenPreflightToken` / `ReduceOnlyPreflightToken` typed contracts (reject-all stubs; full preflight logic deferred to M5). S1 forbids *opening/increasing* submits; the reduce-only path stays reachable for held positions (kill-switch/halt/close).
 - `kill_switch.py`: reduce-only state machine (contract-level; live flatten proof in M8).
 - Dashboard stub on `127.0.0.1` only + path-traversal sandbox test.
 - Charter files restating the §12 hard boundaries so any future coding agent inherits fail-closed defaults.
@@ -25,7 +25,7 @@ Asset-agnostic foundations only:
 
 ## Dependencies / environment
 
-- `requirements.txt` with **exact pins** (not floors). M0 surface is stdlib-only for journal/config; pin `alpaca-py==<X.Y.Z>` for the broker adapter **but the M0 stub must not import it at module load** (import lazily inside the live path only, which M0 never exercises). Databento + `exchange_calendars` are introduced in M1, not pinned here.
+- `requirements.txt` is created at M0 but **M0 is stdlib-only** — journal/config/gates/dashboard + the spy/no-op broker need no third-party packages, and the spy broker imports **no** `alpaca-py`. Third-party deps are pinned to **exact versions in the milestone that first imports them**: `databento` + `exchange_calendars` in **M1**, `alpaca-py` in **M5** (the real Alpaca adapter). This keeps M0's bare-checkout acceptance commands dependency-free.
 - Install step mirrors Polymarket: `python3 -m pip install -r requirements.txt`.
 
 ## Import / path convention (build-blocker fix)
@@ -47,12 +47,12 @@ The dotted-path unittest commands require import resolution on a bare repo. Adop
 - `tests/conftest.py`, `__init__.py` set (above)
 
 **Agent skeleton**
-- `scripts/agent/broker/base.py` (`Broker` Protocol; `submit_order` requires a `PreflightToken`)
+- `scripts/agent/broker/base.py` (`Broker` Protocol; `submit_order` requires a `PreflightToken` — the base type, with concrete `OpenPreflightToken` / `ReduceOnlyPreflightToken` kinds)
 - `scripts/agent/broker/alpaca.py` (spy/no-op `AlpacaPaperBroker`; lazy `alpaca-py` import; live broker absent until M8)
 - `scripts/agent/marketdata/base.py` (`MarketDataTransport` Protocol)
 - `scripts/agent/config.py`, `scripts/agent/gates.py`
 - `scripts/agent/journal.py`, `scripts/agent/serializer.py` (Decimal-strict; `BrokerUSD`/`ModeledUSD` newtypes)
-- `scripts/agent/execution_preflight.py` (typed `PreflightToken` + reject-all stub; raises until M5)
+- `scripts/agent/execution_preflight.py` (typed `OpenPreflightToken` + `ReduceOnlyPreflightToken`; reject-all stubs; raise until M5)
 - `scripts/agent/kill_switch.py` (reduce-only state machine)
 - `dashboard/app.py` (stub; `_safe_workspace_path` sandbox; binds 127.0.0.1)
 - `.secrets/README.md` (layout: exact filenames for Alpaca key/secret, Databento key)
@@ -77,12 +77,12 @@ The dotted-path unittest commands require import resolution on a bare repo. Adop
 
 | Invariant | Test target |
 |-----------|-------------|
-| S1 nothing opens — `submit_order` never called (open/close/cancel/flatten) | `tests/agent/test_config_canary.py::TestCommittedConfigCanary::test_zero_submits_at_broker_boundary_all_paths` |
+| S1 nothing opens — no opening/increasing order minted; zero total submits on committed config (no positions → nothing to flatten) | `tests/agent/test_config_canary.py::TestCommittedConfigCanary::test_no_opening_submit_and_zero_total_on_committed_config` |
 | S2 Decimal / no float NaN/Inf (+ newtype separation) | `tests/agent/test_serializer_decimal_strict.py` (incl. `test_modeled_price_cannot_write_broker_field`) |
 | S3 replay + partial tail | `tests/agent/test_journal_replay.py` |
 | S6 correlation IDs + monotonic seq | `tests/agent/test_journal_replay.py::test_rows_require_correlation_and_monotonic_seq` |
-| S8 kill-switch reduce-only state machine | `tests/agent/test_kill_switch.py` (incl. `test_kill_switch_never_emits_opening_order`) |
-| Preflight chokepoint (contract) | `tests/agent/test_preflight_token.py::test_submit_requires_valid_token_and_disabled_rejects_all` |
+| S8 kill-switch reduce-only (mints only `ReduceOnlyPreflightToken`, never an open) | `tests/agent/test_kill_switch.py` (incl. `test_kill_switch_only_mints_reduce_only_token`) |
+| Preflight chokepoint (contract) | `tests/agent/test_preflight_token.py` (`submit_order` needs a valid token; `OpenPreflightToken` reject-all when disabled; `ReduceOnlyPreflightToken` only for a held position + decreasing order) |
 | Config integrity (§4.7 tighten-only + rules_hash) | `tests/agent/test_config_merge.py` |
 | Dashboard sandbox (security) | `tests/agent/test_dashboard_sandbox.py` (traversal, absolute, symlink, MAX_FILE_BYTES, 127.0.0.1 bind) |
 | No-network / no-creds | `tests/agent/test_no_network_no_creds.py` (suite green with `.secrets/` absent; stub does zero I/O) |

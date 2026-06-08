@@ -247,10 +247,14 @@ from the broker ledger.
     with a broker-ledger field and cannot be silently written into it.
   - **Pre-submit execution preflight (structural chokepoint, fail-closed by type).** After the awaited latency
     budget and second quote, re-check feed epoch, quote freshness, session state, halt/LULD/auction/SSR state,
-    tick/lot validity, and `can_open()`. `Broker.submit_order()` accepts a **non-forgeable `PreflightToken`** that
-    only a *passing* preflight can mint, so the broker seam is structurally unreachable without a passing preflight
-    — **regardless of any enable flag** (disabled ≠ `ok=True`; disabled means reject-all). **Every** submit path
-    (open *and* close/flatten/reconcile-adjust) routes through it. Failure writes a `reject` row and submits nothing.
+    tick/lot validity, and `can_open()`. `Broker.submit_order()` accepts a **non-forgeable preflight token** that
+    only a *passing* preflight can mint, so the broker seam is structurally unreachable without one — **regardless
+    of any enable flag** (disabled ≠ `ok=True`; disabled means reject-all). Tokens are **split by intent** so the
+    fail-closed posture never blocks risk reduction: an **`OpenPreflightToken`** (opening / position-increasing
+    orders) runs the full gates and is **reject-all when the open run-gates are off**; a
+    **`ReduceOnlyPreflightToken`** is mintable **only for an existing held position + a position-decreasing order
+    on the kill-switch / halt / close path**, and is *not* gated off by the open run-gates (so flatten can always
+    reduce exposure). Every submit path routes through one of the two; failure writes a `reject` row and submits nothing.
   - **Post-submit state-change control.** If feed epoch changes or the symbol halts/LULD/auctions *after* submit
     but before terminal, issue a best-effort **cancel** and journal a `post_submit_cancel_attempt`; the order is a
     **marketable-limit with a worst-price cap** derived from the preflight quote (never a bare market order, which
@@ -266,7 +270,8 @@ from the broker ledger.
   class, alert on divergence, and update both `broker_account_pnl` and `execution_realistic_pnl`. Our own
   `can_open()` sub-gates (margin/locate/exposure) are authoritative for *whether to open*; the broker is
   authoritative for *what actually filled*.
-- **Key types:** `Broker` (Protocol), `PaperBook`, `OrderIntent`, `BrokerFill`, `ModeledFill`, `SettlementEngine`.
+- **Key types:** `Broker` (Protocol; `submit_order` requires a preflight token), `PaperBook`, `OrderIntent`,
+  `OpenPreflightToken`, `ReduceOnlyPreflightToken`, `BrokerFill`, `ModeledFill`, `SettlementEngine`.
 
 ### Tier 7 — Journal / reconcile
 - **reuse:** `paper_positions.py` append-only deterministic JSONL writer + `rehydrate.py` (verbatim; Decimal-as-
@@ -322,14 +327,15 @@ Single writer lock per stream; partial-write replay rule drops a truncated trail
 Event types (illustrative fields):
 - `decision` — `symbol`, `strategy`, `action ∈ {do_nothing, would_open}`, `forecast`, `edge`,
   `signal_provenance`, `quote_provenance`.
-- `paper_open` — `position_id`, `order_id`, `symbol`, `side ∈ {long, short}`, `qty`,
-  `order_intent {order_type, tif, limit_price}`, `realism_class`.
+- `order_submitted` — `position_id`, `order_id`, `symbol`, `side ∈ {long, short}`, `qty`,
+  `order_intent {order_type, tif, limit_price}`, `token_kind ∈ {open, reduce_only}`. (Submission ≠ fill; fills
+  and `realism_class` are async and land on the rows below, not here.)
 - `broker_fill` — `order_id`, `position_id`, `filled_qty`, `avg_price`, `liquidity_flag`, `venue`,
   `cost_usd` (authoritative), `fee` — **drives the broker ledger and broker_account_pnl**.
 - `modeled_execution_fill` — `order_id`, `modeled_price`, `modeled_vwap`, `slippage`, `quote {provenance,
   book_hash, seen_at_ms, reconnect_epoch}`, `divergence_vs_broker`, `realism_class` — **label/scoring only**.
-- `pnl_snapshot` — `position_id`, `broker_account_pnl`, `execution_realistic_pnl`, `basis {broker, modeled}`,
-  `used_for_strategy_evaluation: execution_realistic_pnl`.
+- `pnl_snapshot` — `position_id`, `broker_account_pnl`, `execution_realistic_pnl`, `realism_class`,
+  `basis {broker, modeled}`, `used_for_strategy_evaluation: execution_realistic_pnl`.
 - `mark` — `position_id`, `mark_price`, `mark_source ∈ {best_bid, best_ask}`, `unrealized_pnl`.
 - `corporate_action` — `symbol`, `type`, `factor`, `adjusted_qty`, `adjusted_cost_basis`, `provenance`,
   `cross_validated`.
@@ -376,7 +382,7 @@ commands are specified in the per-milestone implementation plans (M0/M1 first); 
 
 | # | Invariant | Verified by (test class) |
 |---|-----------|--------------------------|
-| S1 | On the committed config, **nothing opens**: `Broker.submit_order` is never invoked with ANY args across **open/close/cancel/flatten** paths (single shared spy at the Protocol boundary), no position row, open-count 0, no would_open. When `AlpacaLiveBroker` exists (M8), the live submit is unreachable unless two-key arming + `live_trading.enabled` are both present. | config-canary at the Broker Protocol boundary. |
+| S1 | On the committed config, **nothing opens**: no **opening / position-increasing** order is ever submitted — only an `OpenPreflightToken` can mint one and it is reject-all when the open run-gates are off. On the committed config this means **zero positions ever exist**, so the canary observes **zero `submit_order` calls of any kind** at the Protocol boundary (no positions → nothing to flatten); a `ReduceOnlyPreflightToken` is structurally unreachable without a held position. When `AlpacaLiveBroker` exists (M8), the live submit is unreachable unless two-key arming + `live_trading.enabled` are both present. | config-canary at the Broker Protocol boundary (assert zero opening submits; zero total submits on committed config). |
 | S2 | Float/NaN/Inf never reaches a price/size field; money/qty persisted as Decimal-as-string. **Re-verified where floats are born:** M1 resampler (empty-window VWAP) and M3 feature engine (zero-variance z-score), not only the M0 serializer. | serializer + resampler + feature-engine NaN/Inf-injection tests. |
 | S3 | Replay re-derives identical state hashes; a truncated trailing line is dropped, not fatal. | replay idempotency + partial-write tests. |
 | S4 | A stale/un-timestamped/epoch-changed quote, changed epoch, halt/LULD/auction transition, invalid tick/lot, or failed `can_open()` blocks broker submission at `execution_preflight`. | execution-preflight + execution-realism freshness/epoch tests. |
@@ -391,7 +397,7 @@ commands are specified in the per-milestone implementation plans (M0/M1 first); 
 
 | Milestone | Deliverable | Acceptance (invariants + checks) |
 |-----------|-------------|----------------------------------|
-| **M0 — Skeleton + abstractions** | Repo layout + **charter files** (AGENTS/CLAUDE/PLAN restating §12); **`requirements.txt` with exact pins** + **import wiring** (`conftest.py`/`__init__.py` so dotted-path unittest resolves); `Broker` iface + spy/no-op `AlpacaPaperBroker` (no `alpaca-py` import at module load); `MarketDataTransport` iface + fake transport; deterministic journal w/ correlation IDs + writer lock; config/gates + `rules_hash`; **typed `PreflightToken` contract** (reject-all stub; full S4 in M5); `kill_switch.py` (reduce-only state machine); dashboard stub + sandbox test; `.secrets/` layout + no-network test; two-key arming stub. Plan: `docs/superpowers/plans/2026-06-08-M0-skeleton-abstractions-implementation-plan.md`. | S1 (Broker-boundary, all paths), S2, S3 (partial-write), S6, S8 (reduce-only); live gate OFF in committed config. |
+| **M0 — Skeleton + abstractions** | Repo layout + **charter files** (AGENTS/CLAUDE/PLAN restating §12); **`requirements.txt`** (M0 stdlib-only; third-party deps pinned per milestone — `databento`/`exchange_calendars` in M1, `alpaca-py` in M5) + **import wiring** (`conftest.py`/`__init__.py` so dotted-path unittest resolves); `Broker` iface + spy/no-op `AlpacaPaperBroker` (imports no `alpaca-py`); `MarketDataTransport` iface + fake transport; deterministic journal w/ correlation IDs + writer lock; config/gates + `rules_hash`; **typed preflight tokens** (`OpenPreflightToken`/`ReduceOnlyPreflightToken` reject-all stubs; full S4 in M5); `kill_switch.py` (reduce-only state machine); dashboard stub + sandbox test; `.secrets/` layout + no-network test; two-key arming stub. Plan: `docs/superpowers/plans/2026-06-08-M0-skeleton-abstractions-implementation-plan.md`. | S1 (Broker-boundary, all paths), S2, S3 (partial-write), S6, S8 (reduce-only); live gate OFF in committed config. |
 | **M1 — Data tier** | Databento recorder behind transport seam; **dataset-scoped** pinned dataset/schema/entitlement matrix (§5.1) + offline-tested verification command (per-`(dataset,schema)` pair); equity `book_hash` (L2 rewrite); replay/reconcile; bar cache + **ET-boundary resampler (DST-tested)**. Plan: `docs/superpowers/plans/2026-06-08-M1-data-tier-implementation-plan.md`. | S3 (replay hashes), **S4 (inputs only; full S4 in M5)**; reconcile vs Databento historical passes; sequence-gap detection fires on injected gaps; Fake/Flaky tests green. *(market calendar + session gate moved to M2.)* |
 | **M2 — Market-state** | **Market calendar + session gate** (moved from M1) + session/halt/LULD/SSR/auction state machine; `status.jsonl` ledger; **fail-closed** corporate-actions w/ **tri-state** cross-validation + blackout + broker-adjusted-while-blacked-out detector. | S7; decider unit-tested across sessions/halts; split adjusts a held position only with ≥2-source provenance, else blackout; broker-silent-adjust freezes + forces reconcile. |
 | **M3 — Signal + calibration probe** | Feature engine; observe-only calibration probe (`paper_eligible=False`). | S1 (probe opens nothing); probe logs forecasts + realized-move scoring; calibration report renders. |
