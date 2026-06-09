@@ -1,0 +1,9 @@
+{"mic":"XNYS","pin":"4.13.2","sessions":{
+  "2026-06-15":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
+  "2026-11-26":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
+  "2026-11-27":{"is_trading_day":true,"is_early_close":true,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"13:00","post_close_et":"17:00"},
+  "2026-12-25":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
+  "2026-03-08":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
+  "2026-03-09":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
+  "2026-11-01":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
+  "2026-11-02":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"}}}

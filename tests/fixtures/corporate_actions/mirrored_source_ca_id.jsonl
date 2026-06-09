@@ -1,0 +1,2 @@
+{"source":"alpaca","cusip":"TESTAAPL1","figi":"BBG000B9XRY4","ticker":"AAPL","ca_type":"split","ex_date_et":"2026-07-01","factor":"4.00000000","cash_amount":null,"source_ca_id":"SIP-XREF-77","announced_ts_utc":"2026-06-20T12:00:00.000000Z"}
+{"source":"data_vendor","cusip":"TESTAAPL1","figi":"BBG000B9XRY4","ticker":"AAPL","ca_type":"split","ex_date_et":"2026-07-01","factor":"4.00000000","cash_amount":null,"source_ca_id":"SIP-XREF-77","announced_ts_utc":"2026-06-20T12:00:00.000000Z"}

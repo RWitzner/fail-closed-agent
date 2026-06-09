@@ -1,0 +1,2 @@
+{"source":"alpaca","cusip":"TESTTSLA1","figi":"BBG000N9P426","ticker":"TSLA","ca_type":"split","ex_date_et":"2026-09-15","factor":"3.00000000","cash_amount":null,"source_ca_id":"ALP-5","announced_ts_utc":"2026-09-01T12:00:00.000000Z"}
+{"source":"data_vendor","cusip":"TESTTSLA1","figi":"BBG000N9P426","ticker":"TSLA","ca_type":"split","ex_date_et":"2026-09-15","factor":null,"cash_amount":null,"source_ca_id":"DV-5","announced_ts_utc":"2026-09-01T12:02:00.000000Z"}

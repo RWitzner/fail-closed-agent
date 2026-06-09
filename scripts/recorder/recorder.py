@@ -165,6 +165,7 @@ class Recorder:
         sequence_tracker,               # SequenceTracker
         heartbeat,                      # HeartbeatMonitor
         alert_writer=None,              # EventWriter for the `data_quality_alerts` stream
+        liveness=None,                  # M2 §F: optional SessionLiveness predicate; None == M1 behavior
     ) -> None:
         self._transport = transport
         self._writer = writer
@@ -185,6 +186,11 @@ class Recorder:
         # Alerts go to a SEPARATE stream/file (one EventWriter == one resolved path,
         # §E). Fall back to the events writer only if no alert writer was injected.
         self._alert_writer = alert_writer if alert_writer is not None else writer
+        # M2 §F (OP-1): optional session-aware liveness predicate. When None, the two
+        # heartbeat_timeout emit sites behave EXACTLY as M1 (byte-identical). When set,
+        # a symbol not EXPECTED to be quoting (legitimately closed/unknown session)
+        # suppresses the false heartbeat_timeout. The seq path is UNTOUCHED.
+        self._liveness = liveness
         self._reconnect_epoch = 0
         # D3 (R2#3): the disconnect instant is captured ONCE per outage (the first
         # except), so down_ms is measured against a STABLE origin across every
@@ -334,6 +340,11 @@ class Recorder:
         for symbol in self._heartbeat.stale_symbols(now_ms):
             if symbol in self._stale_alerted:
                 continue
+            if self._liveness is not None and not self._liveness.expected_live(symbol, now_ms):
+                # M2 §F: legitimately closed/unknown session -> suppress the false
+                # heartbeat_timeout. Do NOT mark _stale_alerted, so the symbol can
+                # still alert if it stays quiet once the session re-opens.
+                continue
             self._stale_alerted.add(symbol)
             self._emit_alert(cause="heartbeat_timeout", symbol=symbol)
 
@@ -365,6 +376,11 @@ class Recorder:
         # the connected-quiet path (D9) so one quiet-episode alerts once.
         for symbol in self._heartbeat.stale_symbols(now_ms):
             if symbol in self._stale_alerted:
+                continue
+            if self._liveness is not None and not self._liveness.expected_live(symbol, now_ms):
+                # M2 §F: legitimately closed/unknown session -> suppress the false
+                # heartbeat_timeout. Do NOT mark _stale_alerted, so the symbol can
+                # still alert if it stays quiet once the session re-opens.
                 continue
             self._stale_alerted.add(symbol)
             self._emit_alert(cause="heartbeat_timeout", symbol=symbol)

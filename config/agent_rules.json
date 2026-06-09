@@ -7,5 +7,9 @@
     "symbols": [],
     "max_candidates": 50
   },
-  "latency_budget_ms": 250
+  "latency_budget_ms": 250,
+  "market_state": {
+    "calendar_pin": "4.13.2",
+    "calendar_mic": "XNYS"
+  }
 }

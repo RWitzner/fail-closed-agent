@@ -1,0 +1,2 @@
+{"source":"alpaca","cusip":"TESTMETA1","figi":"BBG000MM2P62","ticker":"FB","ca_type":"symbol_change","ex_date_et":"2026-10-01","factor":null,"cash_amount":null,"source_ca_id":"ALP-4","announced_ts_utc":"2026-09-25T12:00:00.000000Z"}
+{"source":"data_vendor","cusip":"TESTMETA1","figi":"BBG000MM2P62","ticker":"META","ca_type":"symbol_change","ex_date_et":"2026-10-01","factor":null,"cash_amount":null,"source_ca_id":"DV-4","announced_ts_utc":"2026-09-25T12:02:00.000000Z"}

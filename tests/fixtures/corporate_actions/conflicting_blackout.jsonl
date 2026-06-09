@@ -1,0 +1,2 @@
+{"source":"alpaca","cusip":"TESTMSFT1","figi":"BBG000BPH459","ticker":"MSFT","ca_type":"split","ex_date_et":"2026-09-01","factor":"2.00000000","cash_amount":null,"source_ca_id":"ALP-3","announced_ts_utc":"2026-08-20T12:00:00.000000Z"}
+{"source":"data_vendor","cusip":"TESTMSFT1","figi":"BBG000BPH459","ticker":"MSFT","ca_type":"split","ex_date_et":"2026-09-01","factor":"3.00000000","cash_amount":null,"source_ca_id":"DV-7","announced_ts_utc":"2026-08-20T12:03:00.000000Z"}
