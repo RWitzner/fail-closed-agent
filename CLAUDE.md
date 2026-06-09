@@ -10,7 +10,7 @@ live`, fail-closed, "nothing opens by default") but is otherwise live-like, so t
 interfaces and code path — *not* a rebuild, though live is still a separately-validated step. Authoritative
 design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`. Build is staged M0→M8; see `PLAN.md`.
 
-**State:** M1 tier-1 (offline data tier) + tier-2 (2a historical-verified) built + hardened + green (395 tests, gates OFF; HEAD `b07870a`). M1 tier-2 (2b live-verified) deferred — blocked on unprovisioned paid live realtime subscription. M2 (market-state) next — see `PLAN.md`.
+**State:** M2 (market-state) built + hardened + green (532 tests, gates OFF; branch `m2-market-state`). M0/M1 are done; M1 tier-2 (2b live-verified) remains deferred — blocked on unprovisioned paid live realtime subscription. M3 (signal + observe-only calibration probe) is next — see `PLAN.md`.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -31,7 +31,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 
 ## Commands
 
-M1 tier-1 + tier-2 (2a) have landed. The **offline acceptance suite** (395 tests) is stdlib-only — no install needed to run it on a bare checkout:
+M2 has landed. The **offline acceptance suite** (532 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)
@@ -41,7 +41,7 @@ python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (
 > `tests.agent.*`; without it, `discover -s tests` would treat `tests/agent/` as a
 > top-level `agent` package and shadow the real `scripts/agent`, breaking imports.
 
-The credentialed tier-2 (2a) verifier path imports `databento` lazily; that import is **not** exercised by the offline suite. `databento==0.79.0` is pinned in `requirements.txt` and installed in `.venv` (system Python is PEP-668 externally-managed) for use only when running the credentialed historical-verification path. Third-party deps still to be pinned at the milestone that first imports them: `exchange_calendars` in M2, `alpaca-py` in M5.
+The credentialed tier-2 (2a) verifier path imports `databento` lazily; that import is **not** exercised by the offline suite. `databento==0.79.0` is pinned in `requirements.txt` and installed in `.venv` (system Python is PEP-668 externally-managed) for use only when running the credentialed historical-verification path. M2's live calendar provider pin is documented as `exchange_calendars==4.13.2`, but the requirement stays commented and the import stays lazy/deferred; `alpaca-py` is still deferred to M5.
 
 ## Architecture (seven tiers — see spec §5)
 

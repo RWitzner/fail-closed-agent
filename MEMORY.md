@@ -24,6 +24,14 @@ Stable profile + project facts. Ephemeral status lives in `PLAN.md`; the design 
   server-side registry, not in client-held objects — and the reduce-only path (the one path that can submit) must
   never trust caller-asserted intent.
 
+- **M2 (market-state) — done + hardened.** Built pure market calendar/session gate, halt/LULD/SSR tradability
+  decider, status ledger, session-aware liveness seam, market-state cache, config provenance strings, and
+  fail-closed corporate actions. M2 emits reads/ledger rows only: no order submits, no preflight-token minting,
+  no network/credential use in tests, no module-scope `exchange_calendars`, committed gates OFF. Final hardening
+  added symbol/status/NBBO identity checks and CA identifier/provenance canonicalization so blank durable IDs,
+  mismatched persisted provenance, mismatched fetcher/source boundaries, and whitespace-mirrored `source_ca_id`s fail
+  closed. 532 deterministic tests.
+
 ## Hard rules (never cross without explicit, separately-approved instruction)
 
 - No real-money orders. `live_trading.enabled = false`; run gates (`enabled`, `paper_trading.enabled`) = `false`

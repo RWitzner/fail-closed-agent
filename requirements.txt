@@ -3,6 +3,6 @@
 # milestone that first imports them; each is imported LAZILY (never at module scope) so
 # the offline no-network/no-creds suite stays green without them.
 #   M1 tier-2 (entitlement verify + live transport): the databento SDK.
-#   M2 (session/calendar gate): exchange_calendars==<pin>
+#   M2 (session/calendar gate, live provider deferred): exchange_calendars==4.13.2
 #   M5 (paper broker): alpaca-py==<pin>
 databento==0.79.0

@@ -473,6 +473,37 @@ class TestFailClosedEnum(unittest.TestCase):
         self.assertFalse(dec.luld_band_check(price=Decimal("NaN"), band=_band()))
         self.assertFalse(dec.luld_band_check(price=Decimal("100.00"), band=_band(lower="NaN")))
 
+    def test_symbol_identity_mismatch_raises_market_state_error(self):
+        # AAPL must never be declared tradable from another symbol's status/NBBO.
+        with self.assertRaises(MarketStateError):
+            TradabilityDecider().decide(
+                _inputs(
+                    luld_band=_band(),
+                    nbbo=_nbbo(symbol="MSFT", bid="200.00", bid_sz="1", ask="200.10", ask_sz="1"),
+                )
+            )
+
+        bad_status = _inputs(
+            luld_band=_band(),
+            nbbo=_nbbo(bid="200.00", bid_sz="1", ask="200.10", ask_sz="1"),
+        )
+        object.__setattr__(
+            bad_status,
+            "status",
+            StatusFlags(
+                symbol="MSFT",
+                halt=HaltState.NONE,
+                halt_reason=HaltReason.NONE,
+                luld=LuldState.NORMAL,
+                luld_band=_band(),
+                ssr=SsrState.INACTIVE,
+                prior_close=None,
+                source="alpaca",
+            ),
+        )
+        with self.assertRaises(MarketStateError):
+            TradabilityDecider().decide(bad_status)
+
 
 # --- §H.3 fixture-driven coverage of every transition -------------------------
 

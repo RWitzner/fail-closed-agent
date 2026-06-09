@@ -123,11 +123,19 @@ class DurableId:
     figi: Optional[str]
     ticker: str
 
+    def __post_init__(self) -> None:
+        # Surrounding whitespace is transport noise, not durable identity. Normalize once so grouping,
+        # sort keys, persisted rows, and row_hashes all see the same identifier bytes.
+        object.__setattr__(self, "cusip", _clean_identifier(self.cusip))
+        object.__setattr__(self, "figi", _clean_identifier(self.figi))
+
     def key(self) -> str:
-        if self.figi is not None:
-            return self.figi
-        if self.cusip is not None:
-            return self.cusip
+        figi = _clean_identifier(self.figi)
+        cusip = _clean_identifier(self.cusip)
+        if figi is not None:
+            return figi
+        if cusip is not None:
+            return cusip
         raise CorporateActionError(
             f"ticker-only identity is not durable (cusip/figi both None, ticker={self.ticker!r})"
         )
@@ -234,6 +242,45 @@ def _is_complete(obs: SourceObservation) -> bool:
     return True
 
 
+def _clean_identifier(value: Optional[str]) -> Optional[str]:
+    """Return a non-empty stripped identifier, or None if the field is absent/blank."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CorporateActionError(f"durable identifier must be a string or None (got {type(value).__name__})")
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _clean_source_ca_id(value: str) -> str:
+    """Return the canonical non-empty vendor CA id used for independence checks.
+
+    Vendor IDs are provenance, but surrounding whitespace is transport noise. Counting
+    ``"X"`` and ``" X "`` as distinct would manufacture false source independence and
+    could clear a CA blackout incorrectly.
+    """
+    if not isinstance(value, str):
+        raise CorporateActionError(f"source_ca_id is required non-blank provenance (got {value!r})")
+    cleaned = value.strip()
+    if not cleaned:
+        raise CorporateActionError(f"source_ca_id is required non-blank provenance (got {value!r})")
+    return cleaned
+
+
+def _validate_observation(obs: SourceObservation) -> None:
+    """Fail closed on corrupt/missing source provenance before independence is evaluated."""
+    if not isinstance(obs.source, CaSource):
+        raise CorporateActionError(f"observation source is out-of-vocabulary: {obs.source!r}")
+    if not isinstance(obs.provenance.source, CaSource):
+        raise CorporateActionError(f"provenance source is out-of-vocabulary: {obs.provenance.source!r}")
+    if obs.source != obs.provenance.source:
+        raise CorporateActionError(
+            "observation source does not match persisted provenance source "
+            f"({obs.source!r} != {obs.provenance.source!r})"
+        )
+    _clean_source_ca_id(obs.provenance.source_ca_id)
+
+
 def _obs_total_key(obs, norm_factor, norm_cash):
     """TOTAL order over a SourceObservation (CA-1): ties on (source, source_ca_id) are broken by the FULL
     normalized payload, so the EMITTED reference fields, the persisted provenance order, and the row_hash
@@ -243,7 +290,7 @@ def _obs_total_key(obs, norm_factor, norm_cash):
     p = obs.provenance
     d = obs.durable_id
     return (
-        p.source.value, p.source_ca_id, obs.ca_type.value, obs.ex_date_et,
+        p.source.value, _clean_source_ca_id(p.source_ca_id), obs.ca_type.value, obs.ex_date_et,
         "" if norm_factor is None else str(norm_factor),
         "" if norm_cash is None else str(norm_cash),
         d.cusip or "", d.figi or "", d.ticker,
@@ -286,6 +333,8 @@ def cross_validate(observations: Tuple[SourceObservation, ...], *,
         )
     if not observations:
         raise CorporateActionError("cross_validate requires >=1 observation (nothing to validate)")
+    for obs in observations:
+        _validate_observation(obs)
 
     # All observations must belong to one (durable_key, ex_date) group — the feed splits before calling.
     keys = {(o.durable_id.key(), o.ex_date_et) for o in observations}
@@ -319,7 +368,7 @@ def cross_validate(observations: Tuple[SourceObservation, ...], *,
 
     # Independence: distinct CaSource members AND distinct source_ca_id values (S7-3).
     distinct_sources = {o.source for o in observations}
-    distinct_ca_ids = {o.provenance.source_ca_id for o in observations}
+    distinct_ca_ids = {_clean_source_ca_id(o.provenance.source_ca_id) for o in observations}
     independent = (
         len(distinct_sources) >= MIN_INDEPENDENT_SOURCES
         and len(distinct_ca_ids) >= MIN_INDEPENDENT_SOURCES
@@ -341,7 +390,15 @@ def cross_validate(observations: Tuple[SourceObservation, ...], *,
     provenance_set: FrozenSet[CaSource] = frozenset(distinct_sources)
     # Provenance order derived from the SAME total ordering as the reference (CA-1): consistent and
     # order-independent for ANY input order. (norm is already sorted by _obs_total_key above.)
-    provenance = tuple(t[0].provenance for t in norm)
+    provenance = tuple(
+        CaProvenance(
+            source=t[0].provenance.source,
+            source_ca_id=_clean_source_ca_id(t[0].provenance.source_ca_id),
+            announced_ts_utc=t[0].provenance.announced_ts_utc,
+            ts_recv_utc=t[0].provenance.ts_recv_utc,
+        )
+        for t in norm
+    )
 
     return AdjustmentEvent(
         durable_id=ref_obs.durable_id,
@@ -374,7 +431,14 @@ class CorporateActionFeed:
         observations: List[SourceObservation] = []
         for source in sorted(self._fetchers, key=lambda s: s.value):
             fetcher = self._fetchers[source]
-            observations.extend(fetcher.fetch(durable_id))
+            for obs in fetcher.fetch(durable_id):
+                _validate_observation(obs)
+                if obs.source != source or obs.provenance.source != source:
+                    raise CorporateActionError(
+                        "fetcher source does not match observation provenance "
+                        f"({source!r} != {obs.source!r}/{obs.provenance.source!r})"
+                    )
+                observations.append(obs)
 
         groups: Dict[Tuple[str, str], List[SourceObservation]] = {}
         for obs in observations:

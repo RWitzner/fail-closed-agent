@@ -1,7 +1,7 @@
-# M2 (Market-state) — FROZEN, READY-TO-BUILD CONTRACT
+# M2 (Market-state) — BUILT, HARDENED, GREEN
 
-**Status:** FROZEN (READY-TO-BUILD) — internal architect-panel + 5-lens adversarial critique, then **external review round 1 (GPT) applied** (see "External review round 1" at the end).
-**Verified against HEAD:** `3e270eb` (M1 tier-1 + tier-2(2a) green, 395 tests, gates OFF)
+**Status:** BUILT + HARDENED — implementation commits `4f5b74e`, `208105d`, `3667b88`, plus the M2 closeout hardening patch; 532-test suite green; committed gates OFF.
+**Verified baseline for original contract:** `3e270eb` (M1 tier-1 + tier-2(2a) green, 395 tests, gates OFF)
 **Style/format anchor:** `docs/superpowers/specs/2026-06-09-M1-tier1-contract.md`
 **Scope decisions confirmed by Robin (2026-06-09):** `OPEN_CLOSE_BUFFER_S=0` (OFF); live CA CONFIRMED-clear DISABLED until upstream independence is human-verified (see §M).
 
@@ -993,6 +993,9 @@ The provider converts `*_et` via zoneinfo construct-in-ET-then-`astimezone(UTC)`
 - `test_window_override_cannot_shrink` → `cross_validate(..., lead_days=0)` or `trail_days=0` raises `CorporateActionError`; a wider window is accepted (HIGH-3 clamp). (never-loosen)
 - `test_incomplete_required_field_does_not_clear` → `incomplete_split.jsonl` (one factor None) → CONFLICTING_BLACKOUT (S7-6). (S7)
 - `test_mirrored_source_ca_id_not_two_independent` → `mirrored_source_ca_id.jsonl` → not 2 independent → blacked out (S7-3). (S7)
+- Closeout regressions: `test_whitespace_mirrored_source_ca_id_not_two_independent`,
+  `test_source_observation_must_match_persisted_provenance_source`, `test_blank_source_ca_id_is_rejected`, and
+  `test_fetcher_cannot_self_report_another_source`. (S7 provenance/adapter-boundary hardening)
 - `test_same_source_twice_not_two_independent`. (S7)
 - `test_validate_is_pure_function_of_provenance_set`. (determinism/S7)
 - `test_blackout_window_is_closed_inclusive` → `is_blacked_out` True on `blackout_from_et` AND `blackout_to_et`, False day-after only when CONFIRMED (S7-4). (S7)
@@ -1080,7 +1083,43 @@ Nothing requiring an unprovisioned live subscription blocks the offline build �
 
 ---
 
-## N. References (file:line evidence, verified at HEAD `3e270eb`)
+## N. Closeout addendum — built state
+
+M2 is implemented in `scripts/agent/market_calendar.py`, `scripts/agent/market_state.py`,
+`scripts/agent/market_state_cache.py`, `scripts/agent/status_ledger.py`, `scripts/agent/session_liveness.py`, and
+`scripts/agent/corporate_actions.py`, with tests under `tests/agent/test_market_calendar.py`,
+`tests/agent/test_market_state.py`, `tests/agent/test_market_state_cache.py`,
+`tests/agent/test_status_ledger.py`, `tests/agent/test_config_market_state.py`, and
+`tests/agent/test_corporate_actions.py`.
+
+Closeout hardening locks the design tradeoff that M2 treats corrupted identity/provenance as an error, not as a
+soft `NOT_TRADABLE` verdict:
+
+- `DurableId.key()` strips FIGI/CUSIP and treats blank strings as absent; ticker-only identity still raises.
+- `source_ca_id` is canonicalized by stripping whitespace, then required non-blank before source-independence is
+  evaluated or persisted into `AdjustmentEvent.provenance`.
+- `SourceObservation.source` must match `CaProvenance.source`; mismatched transient vs persisted provenance raises
+  `CorporateActionError` instead of manufacturing independence.
+- `CorporateActionFeed.adjustments_for()` additionally checks the adapter boundary: every observation returned by
+  `fetchers[source]` must have both `obs.source == source` and `obs.provenance.source == source`; one buggy/compromised
+  fetcher cannot self-report another vendor and manufacture `CONFIRMED`.
+- `TradabilityDecider.decide()` requires `inputs.symbol`, `StatusFlags.symbol`, and optional `NBBO.symbol` to match;
+  cross-symbol status/NBBO contamination raises `MarketStateError`.
+
+Documented tradeoffs for downstream milestones:
+
+- The decider's direct join is symbol-based because `StatusFlags`/`NBBO` do not carry `instrument_id`; the upstream
+  M3/M5 builder and the existing `MarketStateCache` `(symbol, instrument_id)` key own durable-instrument joins.
+- Status/CA rows may preserve raw vendor `cusip`/`figi` fields for auditability; `durable_key` is the canonical
+  identity truth. Future rehydrate/ledger consumers must treat mismatches as corruption, not as a new identity.
+
+This is intentionally stricter than returning a reusable safe-default verdict: M2 has no executor side effect, so
+failing loudly on upstream identity corruption prevents a bad status/CA row from looking like an ordinary market
+restriction while preserving the no-order/no-token boundary.
+
+---
+
+## O. References (file:line evidence, verified at HEAD `3e270eb`)
 
 - Serializer / hash / money: `scripts/agent/serializer.py:15-24,27-44,47-55,58-61`
 - Journal append / reserved / replay / per-stream seq: `scripts/agent/journal.py:21,28-59,70-81,99-108,110-129`

@@ -40,8 +40,15 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   licensed data). A **full decode through the project parser/`book_state`** (byte-level book reconstruction + hash)
   remains a **tracked tier-2b / live item**, not a tier-2a claim.
 - **M1 tier-2 (2b) live-verified: DEFERRED** — blocked on unprovisioned paid live realtime subscription.
-- **Next step: M2 (market-state)** — session/halt/LULD/SSR + fail-closed corporate actions + market calendar +
-  session gate; `exchange_calendars` pinned there.
+- **M2 market-state DONE on branch `m2-market-state` (532 tests green):** pure market calendar/session gate,
+  halt/LULD/SSR tradability decider, status ledger, session-aware liveness seam, market-state cache, config
+  provenance strings, and fail-closed corporate actions. M2 submits no orders, mints no preflight tokens, imports no
+  heavy SDK at module scope, and preserves committed run/live gates OFF. Hardening fixed identity/provenance risks:
+  symbol/status/NBBO mismatches now fail closed; blank FIGI/CUSIP/source CA IDs, mismatched fetcher/source
+  boundaries, and mirrored whitespace IDs cannot manufacture durable identity or fake source independence.
+- **Next step: M3 (signal + observe-only calibration probe)** — feature engine, quote-quality filters,
+  observe-only forecasts (`paper_eligible=false`), realized-move scoring, and calibration report. S1 remains the
+  load-bearing invariant: the probe opens nothing.
 
 ## Locked decisions
 
@@ -63,8 +70,10 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   ✓ **done** — tier-1 offline (`5f9ef97`, 366 tests, 23 bugs fixed across 6 review rounds) + tier-2 (2a)
   historical-verified (`3f9d7b2`, 378 tests; L1=`EQUS.MINI`, L2=`XNAS.ITCH` mbp-10 confirmed); tier-2 (2b)
   live-verified deferred (live subscription not provisioned).
-- **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate). ← next
-- **M3** Signal + observe-only calibration probe.
+- **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate).
+  ✓ **done on `m2-market-state`** — 532 tests; pure tradability READ only; no order submit/preflight-token mint;
+  fail-closed CA validation; no module-scope `exchange_calendars`; gates OFF.
+- **M3** Signal + observe-only calibration probe. ← next
 - **M4** Risk core (`IntradayMarginModel` + locate/SSR + exposure caps + drawdown kill switch).
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation).
@@ -73,7 +82,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 
 ## Open tracks / risks
 
-- Data quality is the load-bearing risk; M1 is make-or-break.
+- Data quality remains load-bearing; M1 data + M2 market-state are in place, but live realtime validation is still deferred.
 - Regulatory regime in transition (FINRA 26-10 intraday margin canonical; brokers phase in to Oct 2027 — mirror
   Alpaca's actual enforcement).
 - Calibration + backtest metric design specified in M3/M7.

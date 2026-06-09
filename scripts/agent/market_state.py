@@ -244,6 +244,14 @@ class TradabilityDecider:
             raise MarketStateError(f"out-of-vocabulary luld: {status.luld!r}")
         if not isinstance(status.ssr, SsrState):
             raise MarketStateError(f"out-of-vocabulary ssr: {status.ssr!r}")
+        if status.symbol != inputs.symbol:
+            raise MarketStateError(
+                f"status symbol mismatch: inputs.symbol={inputs.symbol!r}, status.symbol={status.symbol!r}"
+            )
+        if inputs.nbbo is not None and inputs.nbbo.symbol != inputs.symbol:
+            raise MarketStateError(
+                f"nbbo symbol mismatch: inputs.symbol={inputs.symbol!r}, nbbo.symbol={inputs.nbbo.symbol!r}"
+            )
 
         tradability = Tradability.TRADABLE
         reasons: list = []

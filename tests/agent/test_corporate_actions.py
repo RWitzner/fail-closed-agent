@@ -132,6 +132,14 @@ class TestCrossValidateTriState(unittest.TestCase):
         self.assertNotEqual(ev.validation_status, ValidationStatus.CONFIRMED)
         self.assertTrue(ev.blackout)
 
+    def test_whitespace_mirrored_source_ca_id_not_two_independent(self):
+        rows = _load_jsonl("mirrored_source_ca_id.jsonl")
+        rows[1]["source_ca_id"] = "  " + rows[1]["source_ca_id"] + "  "
+        ev = cross_validate(tuple(_obs_from_row(r) for r in rows))
+        self.assertFalse(ev.provenance_independent)
+        self.assertNotEqual(ev.validation_status, ValidationStatus.CONFIRMED)
+        self.assertTrue(ev.blackout)
+
     def test_same_source_twice_not_two_independent(self):
         rows = _load_jsonl("two_source_confirmed.jsonl")
         # force both observations onto the SAME source (alpaca twice), distinct source_ca_id.
@@ -246,10 +254,119 @@ class TestDurableIdentity(unittest.TestCase):
     def test_durable_key_prefers_figi_then_cusip(self):
         self.assertEqual(DurableId(cusip="C", figi="F", ticker="X").key(), "F")
         self.assertEqual(DurableId(cusip="C", figi=None, ticker="X").key(), "C")
+        # A blank FIGI is not "present"; fall back to a non-blank CUSIP instead of
+        # creating an empty durable_key that can collide across tickers.
+        self.assertEqual(DurableId(cusip="C", figi="", ticker="X").key(), "C")
+
+    def test_durable_identifier_whitespace_is_canonical_in_rows_and_hashes(self):
+        clean_did = DurableId(cusip="TESTAAPL1", figi="BBG000B9XRY4", ticker="AAPL")
+        dirty_did = DurableId(cusip=" TESTAAPL1 ", figi=" BBG000B9XRY4\t", ticker="AAPL")
+
+        def _obs(source, did):
+            return SourceObservation(
+                source=source,
+                durable_id=did,
+                ca_type=CaType.SPLIT,
+                ex_date_et="2026-07-01",
+                factor=Decimal("4.00000000"),
+                cash_amount=None,
+                provenance=CaProvenance(
+                    source=source,
+                    source_ca_id="ALP-1" if source == CaSource.ALPACA else "DV-1",
+                    announced_ts_utc="2026-06-20T12:00:00.000000Z",
+                    ts_recv_utc="2026-06-20T12:00:01.000000Z",
+                ),
+            )
+
+        clean_row = ca_to_row(cross_validate((_obs(CaSource.ALPACA, clean_did), _obs(CaSource.DATA_VENDOR, clean_did))))
+        dirty_row = ca_to_row(cross_validate((_obs(CaSource.ALPACA, dirty_did), _obs(CaSource.DATA_VENDOR, dirty_did))))
+
+        self.assertEqual(dirty_row["cusip"], "TESTAAPL1")
+        self.assertEqual(dirty_row["figi"], "BBG000B9XRY4")
+        self.assertEqual(dirty_row["durable_key"], "BBG000B9XRY4")
+        self.assertEqual(dirty_row, clean_row)
+        self.assertEqual(row_hash(dirty_row), row_hash(clean_row))
 
     def test_ticker_only_identity_rejected(self):
         with self.assertRaises(CorporateActionError):
             DurableId(cusip=None, figi=None, ticker="AAPL").key()
+        with self.assertRaises(CorporateActionError):
+            DurableId(cusip="", figi=None, ticker="AAPL").key()
+        with self.assertRaises(CorporateActionError):
+            DurableId(cusip=" ", figi="\t", ticker="AAPL").key()
+
+    def test_source_observation_must_match_persisted_provenance_source(self):
+        did = DurableId(cusip="TESTAAPL1", figi="BBG000B9XRY4", ticker="AAPL")
+        obs = (
+            SourceObservation(
+                source=CaSource.ALPACA,
+                durable_id=did,
+                ca_type=CaType.SPLIT,
+                ex_date_et="2026-07-01",
+                factor=Decimal("4.00000000"),
+                cash_amount=None,
+                provenance=CaProvenance(
+                    source=CaSource.ALPACA,
+                    source_ca_id="ALP-1",
+                    announced_ts_utc="2026-06-20T12:00:00.000000Z",
+                    ts_recv_utc="2026-06-20T12:00:01.000000Z",
+                ),
+            ),
+            SourceObservation(
+                # The transient field claims DATA_VENDOR, but the durable/persisted
+                # provenance says ALPACA. This is missing/corrupt provenance and must
+                # not manufacture two independent sources.
+                source=CaSource.DATA_VENDOR,
+                durable_id=did,
+                ca_type=CaType.SPLIT,
+                ex_date_et="2026-07-01",
+                factor=Decimal("4.00000000"),
+                cash_amount=None,
+                provenance=CaProvenance(
+                    source=CaSource.ALPACA,
+                    source_ca_id="DV-9",
+                    announced_ts_utc="2026-06-20T12:05:00.000000Z",
+                    ts_recv_utc="2026-06-20T12:05:01.000000Z",
+                ),
+            ),
+        )
+        with self.assertRaises(CorporateActionError):
+            cross_validate(obs)
+
+    def test_blank_source_ca_id_is_rejected(self):
+        did = DurableId(cusip="TESTAAPL1", figi="BBG000B9XRY4", ticker="AAPL")
+        obs = (
+            SourceObservation(
+                source=CaSource.ALPACA,
+                durable_id=did,
+                ca_type=CaType.SPLIT,
+                ex_date_et="2026-07-01",
+                factor=Decimal("4.00000000"),
+                cash_amount=None,
+                provenance=CaProvenance(
+                    source=CaSource.ALPACA,
+                    source_ca_id="",
+                    announced_ts_utc="2026-06-20T12:00:00.000000Z",
+                    ts_recv_utc="2026-06-20T12:00:01.000000Z",
+                ),
+            ),
+            SourceObservation(
+                source=CaSource.DATA_VENDOR,
+                durable_id=did,
+                ca_type=CaType.SPLIT,
+                ex_date_et="2026-07-01",
+                factor=Decimal("4.00000000"),
+                cash_amount=None,
+                provenance=CaProvenance(
+                    source=CaSource.DATA_VENDOR,
+                    source_ca_id="DV-9",
+                    announced_ts_utc="2026-06-20T12:05:00.000000Z",
+                    ts_recv_utc="2026-06-20T12:05:01.000000Z",
+                ),
+            ),
+        )
+        with self.assertRaises(CorporateActionError):
+            cross_validate(obs)
 
 
 class TestBrokerAdjustDetector(unittest.TestCase):
@@ -315,6 +432,16 @@ class _ScriptedFetcher:
         return tuple(o for o in self._obs if o.durable_id.key() == durable_id.key())
 
 
+class _BuggyFetcher:
+    """Returns all supplied observations regardless of the fetcher/source boundary."""
+
+    def __init__(self, observations):
+        self._obs = tuple(observations)
+
+    def fetch(self, durable_id):
+        return tuple(o for o in self._obs if o.durable_id.key() == durable_id.key())
+
+
 def _feed_for(fixture_name):
     obs = _obs_tuple(fixture_name)
     fetchers = {
@@ -348,6 +475,12 @@ class TestCorporateActionFeed(unittest.TestCase):
         b = feed.adjustments_for(durable, ts_recv_utc="2026-06-20T12:10:00.000000Z")
         self.assertEqual(a[0].validation_status, b[0].validation_status)
         self.assertEqual(a[0].provenance_independent, b[0].provenance_independent)
+
+    def test_fetcher_cannot_self_report_another_source(self):
+        obs = _obs_tuple("two_source_confirmed.jsonl")
+        feed = CorporateActionFeed({CaSource.ALPACA: _BuggyFetcher(obs)})
+        with self.assertRaises(CorporateActionError):
+            feed.adjustments_for(obs[0].durable_id, ts_recv_utc="2026-06-20T12:10:00.000000Z")
 
 
 class TestSerializerWall(unittest.TestCase):

@@ -8,14 +8,13 @@ An autonomous **US-equities** trading agent built with the same `observe → pap
 Polymarket agent: it starts **paper-only with "nothing opens by default"** and is otherwise live-like (live data,
 live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-**Current state:** **M1 tier-1 (offline data tier) + tier-2 (2a historical-verified) built, hardened, and green**
-(395 tests, gates OFF; HEAD `b07870a`). The agent skeleton, safety spine, and dashboard sandbox exist under
-`scripts/agent/` and `dashboard/`. The full data tier is live under `scripts/recorder/` and
-`scripts/agent/marketdata/databento.py`. Verified datasets: L1 = EQUS.MINI (tbbo/bbo-1s/bbo-1m/trades/ohlcv-1s/
-ohlcv-1m/definition; no mbp-10/status); L2 depth = XNAS.ITCH (mbp-10, REPLACE-per-record, full post-event
-top-10 book; single-venue Nasdaq scope noted). Tier-2 (2b live-verified) is
-deferred pending the unprovisioned live realtime subscription. Next milestone is **M2** (market-state:
-session/halt/LULD/SSR + corporate actions + market calendar). See `PLAN.md` for live status.
+**Current state:** **M2 (market-state) built, hardened, and green** (532 tests, gates OFF; branch
+`m2-market-state`). M0/M1 are done; M1 tier-2 (2b live-verified) remains deferred pending the unprovisioned live
+realtime subscription. M2 adds pure tradability reads under `scripts/agent/market_calendar.py`,
+`scripts/agent/market_state.py`, `scripts/agent/market_state_cache.py`, `scripts/agent/status_ledger.py`,
+`scripts/agent/session_liveness.py`, and fail-closed corporate actions in `scripts/agent/corporate_actions.py`.
+It submits no orders, mints no preflight tokens, imports no heavy SDK at module scope, and keeps live/run gates
+OFF. Next milestone is **M3**: signal + observe-only calibration probe. See `PLAN.md` for live status.
 
 ## Scope
 
