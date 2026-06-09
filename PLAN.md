@@ -5,7 +5,7 @@
 Build an autonomous US-equities trading agent, paper-first but live-like, reusing the Polymarket engineering
 spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-## Current status (2026-06-08)
+## Current status (2026-06-09)
 
 - Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
   workflow), reconciled. All external facts verified against primary sources.
@@ -23,21 +23,27 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   subscription (not provisioned). Since live ≡ historical schema, the whole stack builds + verifies on historical
   now; the live feed is deferred. M1 tier-2 therefore splits: **(2a) historical-verified** (runnable now) vs
   **(2b) live-verified** (deferred blocker on the subscription).
-- **M1 tier-1 (offline) BUILT + HARDENED (2026-06-09, uncommitted):** full data tier under `scripts/recorder/`
+- **M1 tier-1 (offline) BUILT + HARDENED + COMMITTED (`5f9ef97`):** full data tier under `scripts/recorder/`
   (event/event_row/book_state/book_hash/persistence/replay/reconcile/recorder/status/bar_cache/entitlement) +
-  `marketdata/databento.py`, TDD. **333 tests green**, no-network/no-creds clean, golden `book_hash`es stable.
-  Two adversarial review rounds (each repro-gated) found **18 confirmed defects — all fixed TDD** (contract items
-  C1–C9, D1–D9 appended to the frozen contract). HEAD is still `70115f8` (an agent's stray partial commit was
-  reverted; M1 work is intentionally uncommitted until Robin commits).
-- **Next step:** (optional) a 3rd convergence review round, then **commit** M1 tier-1, then **tier-2 (2a
-  historical-verified)** — runnable now with the historical key (exact dataset codes, schema availability,
-  one-symbol sample pull, sequence semantics, `mbp-10` snapshot-vs-delta). Tier-2 (2b) live stays deferred.
+  `marketdata/databento.py`, TDD. **366 tests green**, no-network/no-creds clean, golden `book_hash`es stable.
+  Six adversarial review rounds (each repro-gated) found **23 confirmed defects — all fixed TDD** (contract items
+  C1–C9, D1–D9, E1–E3, F1–F2, G1–G4 appended to the frozen contract; round 6 clean).
+- **M1 tier-2 (2a) historical-verified DONE + COMMITTED (`3f9d7b2`, **378 tests**):** credentialed verifier ran
+  vs the live Databento Historical API. Verified: L1 = `EQUS.MINI` (tbbo/bbo-1s/bbo-1m/trades/ohlcv-1s/ohlcv-1m/
+  definition; NO mbp-10, NO status); L2 depth = `XNAS.ITCH` (mbp-10 = REPLACE-per-record, full post-event top-10
+  book; `DBEQ.BASIC` rejected — sparse 1-level; `XNAS.ITCH` single-venue Nasdaq scope noted); status →
+  broker/calendar downgrade. `access=historical`, `live_subscription=pending`. Artifact (gitignored/reproducible):
+  `reports/databento_entitlements/verified_matrix.json`.
+- **M1 tier-2 (2b) live-verified: DEFERRED** — blocked on unprovisioned paid live realtime subscription.
+- **Next step: M2 (market-state)** — session/halt/LULD/SSR + fail-closed corporate actions + market calendar +
+  session gate; `exchange_calendars` pinned there.
 
 ## Locked decisions
 
 - **Broker:** Alpaca (paper and live share one API surface).
 - **Market data:** Databento (live≡historical schema). `MarketDataTransport` abstraction keeps Polygon an
-  alternate candidate. Datasets pinned per milestone (spec §5.1).
+  alternate candidate. Datasets verified (M1 tier-2 2a): L1 = `EQUS.MINI`, L2 depth = `XNAS.ITCH` (mbp-10,
+  REPLACE-per-record, full post-event top-10 book; single-venue Nasdaq scope noted).
 - **Fill model:** hybrid, broker-authoritative — Alpaca = position-of-record; Databento depth = execution-realism
   label (never overrides the ledger).
 - **Universe:** curated single-name US large-cap (~20–50), bounded.
@@ -48,8 +54,11 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 
 - **M0** Skeleton + abstractions + safety spine (stdlib-only; canary, journal, gates, preflight tokens, kill
   switch, charter, dashboard sandbox). ✓ **done** — 129 tests, adversarially hardened.
-- **M1** Data tier (Databento recorder + replay/reconcile + bar cache; dataset matrix pinned + entitlement-verified). ← next
-- **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate).
+- **M1** Data tier (Databento recorder + replay/reconcile + bar cache; dataset matrix pinned + entitlement-verified).
+  ✓ **done** — tier-1 offline (`5f9ef97`, 366 tests, 23 bugs fixed across 6 review rounds) + tier-2 (2a)
+  historical-verified (`3f9d7b2`, 378 tests; L1=`EQUS.MINI`, L2=`XNAS.ITCH` mbp-10 confirmed); tier-2 (2b)
+  live-verified deferred (live subscription not provisioned).
+- **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate). ← next
 - **M3** Signal + observe-only calibration probe.
 - **M4** Risk core (`IntradayMarginModel` + locate/SSR + exposure caps + drawdown kill switch).
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).

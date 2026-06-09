@@ -1,7 +1,7 @@
 # Stocks Trading Agent — Design Spec
 
 - **Date:** 2026-06-08
-- **Status:** **Active — M0 implemented & hardened** (129 tests; design reviewed twice externally + a 5-lens adversarial workflow + a code review; M1 next; later milestones require their own plans/reviews)
+- **Status:** **Active — M1 tier-1 + tier-2(2a) implemented & hardened** (378 tests; HEAD `3f9d7b2`; M0 + M1 tier-1 offline + M1 tier-2 historical-verified done, M1 tier-2 2b live deferred pending the paid live subscription; **M2 next**; each milestone has its own plan/review). Design reviewed twice externally + a 5-lens adversarial workflow + a code review.
 - **Owner:** Robin
 - **Sibling project:** `<sibling-workspace>` (the engineering spine this design ports)
 
