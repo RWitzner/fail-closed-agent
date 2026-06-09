@@ -4,6 +4,7 @@ No network, no clocks, no randomness — everything is scripted/injected so the
 suite is byte-stable and runs offline.
 """
 from agent.broker.base import require_token
+from agent.serializer import dumps
 
 
 class FakeTransport:
@@ -15,6 +16,68 @@ class FakeTransport:
     async def stream(self, symbols):
         for message in self._messages:
             yield message
+
+
+class TransportDisconnected(Exception):
+    """Raised by FlakyTransport.stream to signal a (recoverable) disconnect to the
+    recorder loop. The recorder CATCHES this, increments reconnect_epoch, sleeps
+    the injected backoff, and re-calls stream() (a fresh async generator from the
+    next segment). It is NEVER a fatal/silent exit (M1 §F2)."""
+
+
+class FlakyTransport:
+    """A MarketDataTransport that replays scripted frames and injects faults via
+    inline ``_control`` rows (M1 §F2). Mirrors ``FakeTransport`` structurally:
+    ``async def stream`` + ``yield``. The PARSER never sees a ``_control`` row —
+    ``FlakyTransport`` consumes/strips them.
+
+    ``frames`` is an ordered list of dicts. Two kinds:
+      - DATA frame: a normal vendor record dict (yielded as json bytes).
+      - CONTROL frame: ``{'_control': <verb>, ...}``. Honored verbs (frozen):
+          ``{'_control':'disconnect', 'after_seq': <int>}`` -> on reaching it,
+              RAISE ``TransportDisconnected`` (the recorder bumps reconnect_epoch
+              and may alert).
+          ``{'_control':'reconnect'}`` -> marks the start of the next live segment
+              (the next ``stream()`` call resumes here).
+
+    ``control_aware=True`` (default) honors ``_control`` verbs; ``control_aware=
+    False`` yields data frames only (ignoring control rows, like FakeTransport).
+
+    ``stream`` is STATEFUL across calls: it yields data frames until a
+    ``'disconnect'`` control row, then raises ``TransportDisconnected``; the next
+    ``stream()`` call resumes AFTER the matching ``'reconnect'`` row (or after the
+    disconnect row if none), so the recorder's reconnect loop advances through
+    segments deterministically.
+    """
+
+    def __init__(self, frames, *, control_aware: bool = True):
+        self._frames = list(frames)
+        self._control_aware = control_aware
+        self._pos = 0  # cursor across stream() calls (stateful)
+
+    @staticmethod
+    def _is_control(frame) -> bool:
+        return isinstance(frame, dict) and "_control" in frame
+
+    @staticmethod
+    def _encode(frame) -> bytes:
+        return dumps(frame).encode("utf-8")
+
+    async def stream(self, symbols):
+        while self._pos < len(self._frames):
+            frame = self._frames[self._pos]
+            self._pos += 1
+            if self._is_control(frame):
+                if not self._control_aware:
+                    continue  # ignore control rows; treat file as plain script
+                verb = frame["_control"]
+                if verb == "disconnect":
+                    raise TransportDisconnected(frame)
+                if verb == "reconnect":
+                    # start of the next live segment; resume yielding from here
+                    continue
+                raise ValueError(f"unknown _control verb: {verb!r}")
+            yield self._encode(frame)
 
 
 class FakeClock:

@@ -14,9 +14,24 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   journal dropping a corrupt complete tail, per-stream seq being per-writer, float qty reaching submit) — all
   fixed test-first and re-probed closed. Token authority now lives in an immutable registry, not the token
   object. Stdlib-only; no network; committed gates OFF.
-- Git history on `main`: spec/review/reconcile docs → charter files → `4230c8f` (M0 feat) → `5e45bf4` (M0 harden).
-- **Next step:** implement **M1** (data tier) — but first pin the Databento dataset/schema matrix + provision
-  credentials (see the M1 plan's two acceptance tiers).
+- Git history on `main`: spec/review/reconcile docs → charter files → `4230c8f` (M0 feat) → `5e45bf4` (M0 harden)
+  → `70115f8` (M0 harden round 2, 129 tests).
+- **M1 tier-1 contract FROZEN + verified (2026-06-09):** `docs/superpowers/specs/2026-06-09-M1-tier1-contract.md`
+  (designed via 3-architect panel → synthesis → critic → revision → independent re-critique = READY-TO-BUILD).
+  It pins every module API, the L2 `book_hash` encoding, fixture schemas, and the test→safety-invariant map.
+- **Databento access (2026-06-09):** provisioned key is **historical-only**; live realtime is a separate paid
+  subscription (not provisioned). Since live ≡ historical schema, the whole stack builds + verifies on historical
+  now; the live feed is deferred. M1 tier-2 therefore splits: **(2a) historical-verified** (runnable now) vs
+  **(2b) live-verified** (deferred blocker on the subscription).
+- **M1 tier-1 (offline) BUILT + HARDENED (2026-06-09, uncommitted):** full data tier under `scripts/recorder/`
+  (event/event_row/book_state/book_hash/persistence/replay/reconcile/recorder/status/bar_cache/entitlement) +
+  `marketdata/databento.py`, TDD. **333 tests green**, no-network/no-creds clean, golden `book_hash`es stable.
+  Two adversarial review rounds (each repro-gated) found **18 confirmed defects — all fixed TDD** (contract items
+  C1–C9, D1–D9 appended to the frozen contract). HEAD is still `70115f8` (an agent's stray partial commit was
+  reverted; M1 work is intentionally uncommitted until Robin commits).
+- **Next step:** (optional) a 3rd convergence review round, then **commit** M1 tier-1, then **tier-2 (2a
+  historical-verified)** — runnable now with the historical key (exact dataset codes, schema availability,
+  one-symbol sample pull, sequence semantics, `mbp-10` snapshot-vs-delta). Tier-2 (2b) live stays deferred.
 
 ## Locked decisions
 

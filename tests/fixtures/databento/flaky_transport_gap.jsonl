@@ -1,0 +1,4 @@
+{"dataset":"<DEPTH_DATASET>","schema":"mbp-10","instrument_id":1001,"symbol":"AAPL","vendor_seq":2001,"ts_event":"2026-06-09T13:31:00.000000Z","bids":[["201.3000","100",1]],"asks":[["201.3100","100",1]]}
+{"_control":"disconnect","after_seq":2001}
+{"_control":"reconnect"}
+{"dataset":"<DEPTH_DATASET>","schema":"mbp-10","instrument_id":1001,"symbol":"AAPL","vendor_seq":2004,"ts_event":"2026-06-09T13:31:01.000000Z","bids":[["201.3000","100",1]],"asks":[["201.3300","80",1]]}

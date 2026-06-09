@@ -1,0 +1,3 @@
+{"v":2,"book_hash_algo":"row_hash(canonical_book_payload(snapshot))",
+ "hashes":[{"symbol":"AAPL","vendor_seq":2001,"book_hash":"7e6172e529a0f5814d958624fdef5db1596b78c36e5fbe073d112ed6223b2d0c"},
+           {"symbol":"AAPL","vendor_seq":2002,"book_hash":"41c4b291fe58af81a575478a7be1070c74ff44373999971287f8c9011ba6687f"}]}

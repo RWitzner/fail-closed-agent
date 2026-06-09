@@ -1,0 +1,2 @@
+{"dataset":"EQUS.MINI","schema":"tbbo","instrument_id":1001,"symbol":"AAPL","vendor_seq":1001,"ts_event":"2026-06-09T13:30:00.100000Z","ts_recv":"2026-06-09T13:30:00.100200Z","bid_px":"201.1500","bid_sz":"300","ask_px":"201.1600","ask_sz":"200"}
+{"dataset":"EQUS.MINI","schema":"tbbo","instrument_id":1001,"symbol":"AAPL","vendor_seq":1002,"ts_event":"2026-06-09T13:30:00.250000Z","ts_recv":"2026-06-09T13:30:00.250300Z","bid_px":"201.1500","bid_sz":"300","ask_px":"201.1700","ask_sz":"150"}

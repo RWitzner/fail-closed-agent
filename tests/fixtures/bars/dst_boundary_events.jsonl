@@ -1,0 +1,2 @@
+{"dataset":"EQUS.MINI","schema":"trades","instrument_id":1001,"symbol":"AAPL","vendor_seq":3001,"ts_event":"2026-10-30T19:59:30.000000Z","price":"201.5000","size":"100","side":"B"}
+{"dataset":"EQUS.MINI","schema":"trades","instrument_id":1001,"symbol":"AAPL","vendor_seq":3002,"ts_event":"2026-11-02T14:30:00.000000Z","price":"202.0000","size":"150","side":"A"}
