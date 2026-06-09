@@ -1140,3 +1140,32 @@ Now part of the frozen contract; fixes are TDD with mutation-verified regression
   depth-level size guard (`event.py`) has no test — add an mbp-10 level with `sz<0` asserting `MalformedRecord`.
   (G4) `from_row`'s missing-required-field raise (the §B2 BLOCKER-2 seam) has no test — add a flat row missing a
   required field asserting `MalformedRecord`. Each must go RED when its production guard is mutated away.
+
+---
+
+## Tier-2 (2a) verified findings (2026-06-09) — credentialed Historical API, key = historical-only
+
+Ran the credentialed entitlement verifier against the live Databento Historical API (SDK `databento==0.79.0`).
+Artifact: `reports/databento_entitlements/verified_matrix.json` (gitignored/reproducible; the durable facts are here).
+`access=historical` for every cell; `live_subscription=pending` (live realtime not provisioned).
+
+- **L1 dataset = `EQUS.MINI`** — entitled: `tbbo` (primary NBBO), `bbo-1s`, `bbo-1m`, `trades`, `ohlcv-1s`,
+  `ohlcv-1m`, and **`definition`** (singular). CONFIRMED it has **no `mbp-10`** and **no `status`** (the
+  2026-06-08 claim holds). Correction to the offline contract: the schema is `definition`, NOT `definitions`;
+  EQUS.MINI also offers `mbp-1`/`ohlcv-1h`/`ohlcv-1d`.
+- **L2 depth dataset = `XNAS.ITCH`** (Nasdaq TotalView), replacing the `<DEPTH_DATASET>` placeholder. `mbp-10`
+  entitled (range back to 2018). **`mbp-10` = REPLACE-per-record CONFIRMED:** each record's `levels[0..9]` is the
+  full post-event top-10 book (verified empirically — 1003/1003 records carried 10 populated levels — and against
+  Databento docs); `UNDEF_PRICE` = a legitimately empty level. So `EquityBookState.apply = REPLACE-on-snapshot`
+  (the offline assumption) is CORRECT; the delta-apply seam is NOT needed for XNAS.ITCH.
+- **`DBEQ.BASIC` REJECTED for depth:** its consolidated `mbp-10` carried only 1 populated level on ~598/604
+  records (REPLACE would yield a 1-level book). **Scope note:** `XNAS.ITCH` is single-venue (covers Nasdaq-listed
+  names' Nasdaq book) → the depth-aware universe is downgraded to Nasdaq-listed names (or add per-venue depth
+  later). Recorded, not silent.
+- **Live-transport DBN decoding (for the credentialed/live recorder, M1 tier-2b / live):** raw DBN prices are
+  **int 1e-9 fixed-point** (`315030000000` = `315.03`) → convert to **Decimal exactly, never float** (do NOT use
+  `to_df()`, which yields floats — would trip the serializer's float-reject); level fields `bid_px_00..09` etc.;
+  empty = `UNDEF_PRICE`; carry `action`/`side`/`depth`/`sequence`/`flags`. The hand-authored offline fixtures
+  (string prices) remain the test inputs; this decoding is the live transport's job, not the parser's.
+- **(2b) live-verified DEFERRED** — real live-gateway reconnect/heartbeat/snapshot behavior is blocked on the
+  paid live subscription. In M1, reconnect/gap logic is fixture-tested; real-gateway validation lands later.

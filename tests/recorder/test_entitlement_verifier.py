@@ -13,6 +13,8 @@ from recorder.verify_databento_entitlements import (
     UnverifiableSchema,
     VerifiedCell,
     VerifiedMatrix,
+    credentialed_downgrades,
+    credentialed_planned_matrix,
     list_schemas_offline,
     planned_matrix,
     verify,
@@ -242,10 +244,193 @@ class TestNoNetworkNoCreds(unittest.TestCase):
         verify(planned_matrix(), schemas, downgrades=_DOWNGRADES)
         self.assertNotIn("databento", sys.modules)
 
-    def test_credentialed_stub_raises_not_implemented(self):
-        """verify_credentialed raises NotImplementedError offline (never reached by offline tests)."""
-        with self.assertRaises(NotImplementedError):
-            verify_credentialed(None)
+    def test_credentialed_with_injected_client_imports_no_databento(self):
+        """verify_credentialed with an injected (mocked) client never imports databento."""
+        import sys
+        client = _FakeHistoricalClient(_LIVE_SCHEMAS, _LIVE_RANGES)
+        verify_credentialed(
+            credentialed_planned_matrix(),
+            downgrades=credentialed_downgrades(),
+            client=client,
+        )
+        self.assertNotIn("databento", sys.modules)
+
+
+# ---------------------------------------------------------------------------
+# Credentialed (--live) mode — assembly + downgrade logic, MOCKED client, NO network.
+# ---------------------------------------------------------------------------
+
+# Live list_schemas (verified 2026-06-08): EQUS.MINI definition is SINGULAR; no
+# mbp-10, no status. XNAS.ITCH carries mbp-10 (full 10-level depth).
+_LIVE_SCHEMAS = {
+    "EQUS.MINI": [
+        "bbo-1m", "bbo-1s", "definition", "mbp-1", "ohlcv-1d", "ohlcv-1h",
+        "ohlcv-1m", "ohlcv-1s", "tbbo", "trades",
+    ],
+    "XNAS.ITCH": [
+        "definition", "imbalance", "mbo", "mbp-1", "mbp-10", "ohlcv-1d",
+        "ohlcv-1h", "ohlcv-1m", "ohlcv-1s", "status", "tbbo", "trades",
+    ],
+}
+
+_LIVE_RANGES = {
+    "EQUS.MINI": {"start": "2024-01-01T00:00:00.000000000Z", "end": "2026-06-08T23:59:59.999999999Z"},
+    "XNAS.ITCH": {"start": "2018-05-06T00:00:00.000000000Z", "end": "2026-06-08T23:59:59.999999999Z"},
+}
+
+
+class _FakeMetadata:
+    """Canned metadata facade — returns fixtures, makes NO network call."""
+
+    def __init__(self, schemas, ranges, costs=None):
+        self._schemas = schemas
+        self._ranges = ranges
+        self._costs = costs or {}
+        self.cost_calls = []
+
+    def list_schemas(self, dataset):
+        return list(self._schemas[dataset])
+
+    def get_dataset_range(self, dataset):
+        return dict(self._ranges[dataset])
+
+    def get_cost(self, dataset, start, end, symbols, schema):
+        self.cost_calls.append((dataset, schema, start, end, tuple(symbols)))
+        # Default tiny preview cost; float on purpose (mirrors the real SDK return).
+        return self._costs.get((dataset, schema), 0.0123456789)
+
+
+class _FakeHistoricalClient:
+    """databento.Historical-shaped fake exposing a .metadata facade."""
+
+    def __init__(self, schemas, ranges, costs=None):
+        self.metadata = _FakeMetadata(schemas, ranges, costs)
+
+
+class TestCredentialedAssembly(unittest.TestCase):
+    """verify_credentialed assembly + downgrade logic with a MOCKED client (no network)."""
+
+    def _run(self, **kwargs):
+        client = _FakeHistoricalClient(_LIVE_SCHEMAS, _LIVE_RANGES, costs=kwargs.pop("costs", None))
+        return verify_credentialed(
+            credentialed_planned_matrix(),
+            downgrades=credentialed_downgrades(),
+            client=client,
+            **kwargs,
+        ), client
+
+    def test_equs_mini_tbbo_available_historical(self):
+        """(EQUS.MINI, tbbo) available=True, access='historical'."""
+        result, _ = self._run()
+        cell = next(c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "tbbo")
+        self.assertTrue(cell.available)
+        self.assertEqual(cell.access, "historical")
+
+    def test_equs_mini_definition_singular_available(self):
+        """(EQUS.MINI, definition) (SINGULAR) is available against the live schemas."""
+        result, _ = self._run()
+        cell = next(c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "definition")
+        self.assertTrue(cell.available)
+
+    def test_xnas_itch_mbp10_available(self):
+        """(XNAS.ITCH, mbp-10) available=True — the entitled depth source."""
+        result, _ = self._run()
+        cell = next(c for c in result.cells if c.dataset == "XNAS.ITCH" and c.schema == "mbp-10")
+        self.assertTrue(cell.available)
+        self.assertEqual(cell.access, "historical")
+
+    def test_equs_mini_mbp10_unavailable_with_xnas_downgrade(self):
+        """(EQUS.MINI, mbp-10) unavailable + downgrade names XNAS.ITCH and the DBEQ.BASIC rejection."""
+        result, _ = self._run()
+        cell = next(c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "mbp-10")
+        self.assertFalse(cell.available)
+        self.assertIn("XNAS.ITCH", cell.downgrade)
+        self.assertIn("DBEQ.BASIC", cell.downgrade)
+
+    def test_equs_mini_status_unavailable_with_downgrade(self):
+        """(EQUS.MINI, status) unavailable + downgrade to broker + calendar."""
+        result, _ = self._run()
+        cell = next(c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "status")
+        self.assertFalse(cell.available)
+        self.assertIn("broker", cell.downgrade)
+
+    def test_dataset_range_recorded_for_available_cells(self):
+        """Available cells carry the dataset_range; unavailable cells do not."""
+        result, _ = self._run()
+        for c in result.cells:
+            if c.available:
+                self.assertIsNotNone(c.dataset_range)
+                self.assertIn("start", c.dataset_range)
+                self.assertIn("end", c.dataset_range)
+            else:
+                self.assertIsNone(c.dataset_range)
+
+    def test_live_subscription_pending(self):
+        """Top-level live_subscription stays 'pending' (live realtime not provisioned)."""
+        result, _ = self._run()
+        self.assertEqual(result.live_subscription, "pending")
+
+    def test_all_available_false_due_to_deliberate_downgrades(self):
+        """all_available=False because EQUS.MINI lacks depth + status (deliberate downgrades)."""
+        result, _ = self._run()
+        self.assertFalse(result.all_available)
+
+    def test_pollution_guard_fires_on_live_path(self):
+        """If live list_schemas ever returns mbp-10 on EQUS.MINI, UnverifiableSchema fires."""
+        polluted = dict(_LIVE_SCHEMAS)
+        polluted["EQUS.MINI"] = _LIVE_SCHEMAS["EQUS.MINI"] + ["mbp-10"]
+        client = _FakeHistoricalClient(polluted, _LIVE_RANGES)
+        with self.assertRaises(UnverifiableSchema) as ctx:
+            verify_credentialed(
+                credentialed_planned_matrix(),
+                downgrades=credentialed_downgrades(),
+                client=client,
+            )
+        self.assertIn("verified-2026-06-08", str(ctx.exception))
+
+    def test_sample_cost_is_decimal_string_not_float(self):
+        """sample_cost_usd is a Decimal-as-string for priced cells; no float survives."""
+        result, client = self._run(
+            cost_window=("2026-06-08T15:00:00", "2026-06-08T15:00:02"),
+            cost_symbols=("AAPL", "MSFT"),
+            cost_for=(("EQUS.MINI", "tbbo"), ("XNAS.ITCH", "mbp-10")),
+            costs={("EQUS.MINI", "tbbo"): 0.001234, ("XNAS.ITCH", "mbp-10"): 0.004321},
+        )
+        tbbo = next(c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "tbbo")
+        depth = next(c for c in result.cells if c.dataset == "XNAS.ITCH" and c.schema == "mbp-10")
+        self.assertIsInstance(tbbo.sample_cost_usd, str)
+        self.assertIsInstance(depth.sample_cost_usd, str)
+        self.assertEqual(tbbo.sample_cost_usd, "0.001234")
+        # Two get_cost calls were made (one per priced cell).
+        self.assertEqual(len(client.metadata.cost_calls), 2)
+
+    def test_cost_skipped_when_no_window(self):
+        """No get_cost call when cost_window/cost_for omitted; sample_cost_usd stays None."""
+        result, client = self._run()
+        self.assertEqual(len(client.metadata.cost_calls), 0)
+        for c in result.cells:
+            self.assertIsNone(c.sample_cost_usd)
+
+    def test_artifact_round_trips_with_live_enrichment(self):
+        """write_artifact serializes dataset_range + sample_cost_usd canonically (Decimal-safe)."""
+        result, _ = self._run(
+            cost_window=("2026-06-08T15:00:00", "2026-06-08T15:00:02"),
+            cost_symbols=("AAPL",),
+            cost_for=(("EQUS.MINI", "tbbo"),),
+        )
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            out_path = f.name
+        write_artifact(result, out_path)
+        content = Path(out_path).read_text(encoding="utf-8").strip()
+        data = json.loads(content)
+        self.assertEqual(data["live_subscription"], "pending")
+        self.assertIn("downgrades", data)
+        tbbo = next(c for c in data["cells"] if c["dataset"] == "EQUS.MINI" and c["schema"] == "tbbo")
+        self.assertIn("dataset_range", tbbo)
+        self.assertIn("sample_cost_usd", tbbo)
+        self.assertIsInstance(tbbo["sample_cost_usd"], str)
+        # Canonical (sorted keys) — re-serialize must be byte-identical.
+        self.assertEqual(content, serializer_dumps(data))
 
 
 if __name__ == "__main__":  # pragma: no cover

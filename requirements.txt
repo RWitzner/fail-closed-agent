@@ -1,5 +1,8 @@
-# M0 is stdlib-only — no third-party runtime dependencies.
-# Third-party deps are pinned to exact versions in the milestone that first
-# imports them (see docs/superpowers/specs/2026-06-08-stocks-agent-design.md):
-#   M1: databento==<pin>, exchange_calendars==<pin>
-#   M5: alpaca-py==<pin>
+# Tests are stdlib-only and require NO third-party deps (the offline suite runs on a
+# bare checkout with no install). Third-party deps are pinned to exact versions in the
+# milestone that first imports them; each is imported LAZILY (never at module scope) so
+# the offline no-network/no-creds suite stays green without them.
+#   M1 tier-2 (entitlement verify + live transport): the databento SDK.
+#   M2 (session/calendar gate): exchange_calendars==<pin>
+#   M5 (paper broker): alpaca-py==<pin>
+databento==0.79.0

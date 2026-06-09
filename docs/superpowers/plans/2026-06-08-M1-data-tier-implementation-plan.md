@@ -24,12 +24,16 @@ Data-plane only:
 
 M1 starts from a `planned_matrix` (placeholder dataset codes, written offline) and produces a `verified_matrix` with **exact dataset codes after per-`(dataset, schema)` entitlement verification**. EQUS.MINI is an L1 top-of-book composite (verified 2026-06-08): it has **no `mbp-10`** and **no `status`** schema. Each schema is bound to a specific dataset — no single mixed query.
 
-| Use | Dataset (pin exact code) | Required schemas | Verification |
+**VERIFIED against the live Historical API 2026-06-09** (artifact `reports/databento_entitlements/verified_matrix.json`, gitignored/reproducible; `access=historical`, `live_subscription=pending`):
+
+| Use | Dataset (verified code) | Required schemas | Status |
 |-----|--------------------------|------------------|--------------|
-| L1 signals / bars / NBBO | `EQUS.MINI` (or equivalent L1 composite) | `tbbo` (primary NBBO), `bbo-1s`, `bbo-1m`, `trades`, `ohlcv-1s`, `ohlcv-1m`, `definitions` | `--dataset EQUS.MINI` list-schemas + one-symbol sample |
-| L2 depth-aware modeled fills | depth-capable US equities dataset (pin exact) | `mbp-10` | separate `--dataset <depth>` list-schemas + one-symbol sample |
-| L3 queue-position (optional upgrade) | venue-native ITCH-class (if entitled) | `mbo` | `--dataset <venue>` + queue-position fixture |
-| halt/LULD/SSR status | **broker (Alpaca) + `exchange_calendars`** (EQUS.MINI has no `status`) | n/a (status feed) | record the downgrade explicitly; primary halt source is broker/calendar for M1 |
+| L1 signals / bars / NBBO | `EQUS.MINI` | `tbbo` (primary NBBO), `bbo-1s`, `bbo-1m`, `trades`, `ohlcv-1s`, `ohlcv-1m`, **`definition`** (singular, NOT `definitions`) | ✓ all entitled (historical) |
+| L2 depth-aware modeled fills | **`XNAS.ITCH`** (Nasdaq TotalView) | `mbp-10` | ✓ entitled; **REPLACE-per-record** (each record = full post-event top-10 book; `UNDEF_PRICE` = empty level — confirmed empirically + Databento docs). `DBEQ.BASIC` **rejected**: its consolidated `mbp-10` carried only 1 populated level on ~598/604 records. **Scope note:** XNAS.ITCH is single-venue (Nasdaq-listed names) → depth-aware universe downgrade. |
+| L3 queue-position (optional upgrade) | `XNAS.ITCH` (`mbo`, entitled back to 2018) | `mbo` | deferred (optional) |
+| halt/LULD/SSR status | **broker (Alpaca) + `exchange_calendars`** (EQUS.MINI has no `status`) | n/a (status feed) | downgrade recorded; primary halt source is broker/calendar for M1 |
+
+Live-transport note (for the credentialed/live DBN decoder): raw DBN prices are **int 1e-9 fixed-point** (e.g. `315030000000` = `315.03`) → convert to **Decimal exactly, never float** (do NOT use `to_df()` which yields floats); level fields are `bid_px_00..09`/`ask_px_00..09`/`*_sz_*`/`*_ct_*`; empty levels are `UNDEF_PRICE`; carry `action`/`side`/`depth`/`sequence`/`flags`.
 
 Rule: if a candidate dataset lacks a required schema, M1 must **either** pin another dataset **or** downgrade the feature in writing (e.g. status → broker/calendar). **No silent fallback.**
 
@@ -97,6 +101,8 @@ python3 scripts/recorder/verify_databento_entitlements.py \
 M1 has **two acceptance tiers**:
 
 1. **Offline-complete:** the offline command above exits 0; replay re-derives expected hashes from fixtures; the `planned_matrix` + any downgrade notes (e.g. status → broker/calendar) are written.
-2. **Entitlement-verified (requires credentials):** the dataset-scoped artifacts (the `verified_matrix`) record exact dataset IDs, schemas, **per-`(dataset,schema)` availability**, sequence-number behavior, and timestamps; any unsupported schema is explicitly downgraded or moved to a later milestone in writing.
+2. **Entitlement-verified.** Split by access (the provisioned key is historical-only; live realtime is an unprovisioned paid subscription):
+   - **(2a) Historical-verified — DONE 2026-06-09.** Ran the credentialed verifier against the live Historical API; the `verified_matrix` (`reports/databento_entitlements/verified_matrix.json`) records exact dataset IDs, per-`(dataset,schema)` availability, ranges, and sample costs. Resolved: L1 = `EQUS.MINI` (`tbbo`/`bbo`/`trades`/`ohlcv`/`definition`), L2 depth = `XNAS.ITCH` `mbp-10` (REPLACE-per-record confirmed; `DBEQ.BASIC` rejected), status → broker/calendar downgrade, `live_subscription=pending`. No silent fallback.
+   - **(2b) Live-verified — DEFERRED.** Real live-gateway reconnect/heartbeat/snapshot behavior; blocked on the paid live subscription (not provisioned). Reconnect/gap logic is tested against fixtures in M1 tier-1; real-gateway validation lands when the subscription exists.
 
-M1 is not fully done until tier 2 runs — Databento account provisioning is an explicit blocker, not an optional footnote.
+Tier 2a is complete; tier 2b is an explicit, written deferral (not a silent footnote).
