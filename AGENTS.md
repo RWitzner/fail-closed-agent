@@ -9,7 +9,7 @@ Polymarket agent: it starts **paper-only with "nothing opens by default"** and i
 live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
 **Current state:** **M1 tier-1 (offline data tier) + tier-2 (2a historical-verified) built, hardened, and green**
-(378 tests, gates OFF; HEAD `3f9d7b2`). The agent skeleton, safety spine, and dashboard sandbox exist under
+(395 tests, gates OFF; HEAD `b07870a`). The agent skeleton, safety spine, and dashboard sandbox exist under
 `scripts/agent/` and `dashboard/`. The full data tier is live under `scripts/recorder/` and
 `scripts/agent/marketdata/databento.py`. Verified datasets: L1 = EQUS.MINI (tbbo/bbo-1s/bbo-1m/trades/ohlcv-1s/
 ohlcv-1m/definition; no mbp-10/status); L2 depth = XNAS.ITCH (mbp-10, REPLACE-per-record, full post-event
