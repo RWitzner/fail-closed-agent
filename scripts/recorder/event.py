@@ -103,7 +103,7 @@ class DepthEvent:                 # mbp-10 (L2, <=10 levels each side; full snap
 
 
 @dataclass(frozen=True)
-class DefinitionEvent:            # definitions (instrument_id <-> symbol/MIC identity)
+class DefinitionEvent:            # definition (instrument_id <-> symbol/MIC identity)
     provenance: Provenance
     mic: str
     raw_symbol: str
@@ -119,6 +119,10 @@ SCHEMA_REGISTRY: Dict[str, Type] = {
     "ohlcv-1s": BarEvent,
     "ohlcv-1m": BarEvent,
     "mbp-10": DepthEvent,
+    # H1: the live EQUS.MINI schema is `definition` (SINGULAR, confirmed in tier-2
+    # verification). It is the CANONICAL key; `definitions` (plural) is kept as an
+    # explicit alias so both names parse to the same DefinitionEvent.
+    "definition": DefinitionEvent,
     "definitions": DefinitionEvent,
 }
 

@@ -33,7 +33,12 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   definition; NO mbp-10, NO status); L2 depth = `XNAS.ITCH` (mbp-10 = REPLACE-per-record, full post-event top-10
   book; `DBEQ.BASIC` rejected — sparse 1-level; `XNAS.ITCH` single-venue Nasdaq scope noted); status →
   broker/calendar downgrade. `access=historical`, `live_subscription=pending`. Artifact (gitignored/reproducible):
-  `reports/databento_entitlements/verified_matrix.json`.
+  `reports/databento_entitlements/verified_matrix.json`. **Scope of the reproducible tool** (`verify_databento_entitlements.py
+  --live`): it reproduces schema/range/cost availability **+ entitlement-by-sample-pull** (a tiny
+  `timeseries.get_range` per available cell: ≥1 record + a decode sanity = int 1e-9 fixed-point→Decimal, no float;
+  `mbp-10` carries the 10-level/REPLACE structure) — recording a **redacted summary only** (counts/flags, never raw
+  licensed data). A **full decode through the project parser/`book_state`** (byte-level book reconstruction + hash)
+  remains a **tracked tier-2b / live item**, not a tier-2a claim.
 - **M1 tier-2 (2b) live-verified: DEFERRED** — blocked on unprovisioned paid live realtime subscription.
 - **Next step: M2 (market-state)** — session/halt/LULD/SSR + fail-closed corporate actions + market calendar +
   session gate; `exchange_calendars` pinned there.

@@ -11,12 +11,29 @@ paid subscription, NOT provisioned. The ``verified_matrix`` carries a per-cell
 ``access`` field and a top-level ``live_subscription: "pending"``.
 
 Credentialed (``--live``) mode is the M1 tier-2 HISTORICAL-verified deliverable
-(§P 2a): given a planned matrix it hits the REAL Databento Historical metadata API
-(``list_schemas`` / ``get_dataset_range`` / ``get_cost``) — plus an optional tiny
-``timeseries.get_range`` sample to confirm entitlement — and assembles the
-``verified_matrix`` with per-cell ``{available, access, dataset_range,
-sample_cost_usd?}``. The ``databento`` SDK import is LAZY (inside the live path
-only) so ``tests/agent/test_no_network_no_creds.py`` stays green; the assembly +
+(§P 2a). Given a planned matrix it reproduces, against the REAL Databento Historical
+API:
+  * schema availability per (dataset, schema) — ``metadata.list_schemas``;
+  * each dataset's coverage range — ``metadata.get_dataset_range``;
+  * a tiny ``get_cost`` preview for the load-bearing cells — ``metadata.get_cost``;
+  * entitlement-by-sample-pull — a tiny ``timeseries.get_range`` per AVAILABLE
+    selected cell (§957-963): asserts >=1 record and a minimal decode sanity (each
+    record's price is an int 1e-9 fixed-point convertible to Decimal with NO float;
+    for ``mbp-10`` each record carries the full 10-level book = the XNAS.ITCH REPLACE
+    structural property). Only a REDACTED SUMMARY is recorded (record_count + flags),
+    never raw licensed data.
+It assembles the ``verified_matrix`` with per-cell ``{available, access,
+dataset_range, sample_cost_usd?, sample_record_count?, sample_decode_ok?,
+sample_levels?}``.
+
+SCOPE (honest claim): this tool reproduces schema/range/cost availability +
+entitlement-by-sample-pull + the ``mbp-10`` 10-level/REPLACE *structural* check. A
+FULL decode through the project's own parser/``book_state`` (byte-level book
+reconstruction + hash) remains a TRACKED tier-2b / live item — it is NOT what this
+tool asserts.
+
+The ``databento`` SDK import is LAZY (inside the live path only) so
+``tests/agent/test_no_network_no_creds.py`` stays green; the assembly + sample +
 downgrade logic is testable OFFLINE via an injected (mocked) ``client``.
 """
 import argparse
@@ -27,7 +44,17 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from agent.serializer import dumps as _dumps
+# M4: this is a standalone CLI entrypoint. The test suite bootstraps `<repo>/scripts`
+# onto sys.path (tests/__init__.py + conftest.py), but running this file directly
+# (the documented invocation) has no such bootstrap, so `import agent...` fails with
+# ModuleNotFoundError. Prepend `<repo>/scripts` here, BEFORE the agent import, so the
+# documented command works standalone. `parents[1]` of scripts/recorder/<file>.py IS
+# the `scripts/` dir (mirrors the ROOT/scripts convention; repo root is NOT added).
+_SCRIPTS_DIR = str(Path(__file__).resolve().parents[1])
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from agent.serializer import dumps as _dumps  # noqa: E402 (after sys.path bootstrap)
 
 # Path to the historical-only key (git-ignored). Read lazily inside the live path.
 SECRETS_PATH = Path(__file__).resolve().parents[2] / ".secrets" / "databento.json"
@@ -52,6 +79,11 @@ class VerifiedCell:
     # Live-only enrichment (§P 2a). None offline / for unavailable cells.
     dataset_range: Optional[Dict[str, str]] = None   # {"start","end"} from get_dataset_range
     sample_cost_usd: Optional[str] = None            # Decimal-as-string get_cost preview (NEVER float)
+    # H3 entitlement-by-sample-pull SUMMARY (REDACTED — counts/flags only, never raw
+    # licensed data). None unless this cell was sampled via timeseries.get_range.
+    sample_record_count: Optional[int] = None        # >=1 records returned by the tiny get_range pull
+    sample_decode_ok: Optional[bool] = None          # each record's price is int 1e-9 fixed-point (no float)
+    sample_levels: Optional[int] = None              # populated book levels (mbp-10 => 10; the REPLACE property)
 
 
 @dataclass(frozen=True)
@@ -177,6 +209,12 @@ def _cell_payload(c: VerifiedCell) -> Dict[str, Any]:
         payload["dataset_range"] = c.dataset_range
     if c.sample_cost_usd is not None:
         payload["sample_cost_usd"] = c.sample_cost_usd
+    if c.sample_record_count is not None:
+        payload["sample_record_count"] = c.sample_record_count
+    if c.sample_decode_ok is not None:
+        payload["sample_decode_ok"] = c.sample_decode_ok
+    if c.sample_levels is not None:
+        payload["sample_levels"] = c.sample_levels
     return payload
 
 
@@ -256,6 +294,64 @@ def _historical_client():
     return databento.Historical(api_key)
 
 
+# Number of book levels mbp-10 must carry per record (the XNAS.ITCH REPLACE property).
+_MBP10_REQUIRED_LEVELS = 10
+# databento_dbn fixed-point: prices are int scaled by 1e9 (1_000_000_000).
+_DBN_UNDEF_PRICE = 9223372036854775807  # databento_dbn.UNDEF_PRICE sentinel
+
+
+def _decode_sample_summary(records: List[Any], schema: str) -> Dict[str, Any]:
+    """H3 decode sanity over a tiny get_range pull. Returns a REDACTED summary
+    (counts + structural flags only — NEVER any raw licensed price/size).
+
+    Each record's ``price`` must be an int 1e-9 fixed-point convertible to Decimal
+    with NO float (bool is rejected — a bool is an int subclass). For ``mbp-10`` each
+    record must carry the full 10-level book (the REPLACE property). Raises
+    UnverifiableSchema on an empty pull or a failed decode/structure check.
+    """
+    if not records:
+        raise UnverifiableSchema(
+            f"sample pull for schema {schema!r} returned ZERO records "
+            "(entitlement-by-sample-pull requires >=1)"
+        )
+
+    levels_seen: Optional[int] = None
+    for rec in records:
+        price = getattr(rec, "price", None)
+        # bool is an int subclass; reject it explicitly. Reject any non-int (float).
+        if isinstance(price, bool) or not isinstance(price, int):
+            raise UnverifiableSchema(
+                f"sample record for schema {schema!r} has a non-int price "
+                f"(type {type(price).__name__}); expected int 1e-9 fixed-point, NO float"
+            )
+        # Convertible to Decimal as a fixed-point value (no float ever constructed).
+        if price != _DBN_UNDEF_PRICE:
+            _ = Decimal(price) / Decimal(1_000_000_000)
+
+        if schema == "mbp-10":
+            levels = getattr(rec, "levels", None) or []
+            populated = sum(
+                1 for lvl in levels
+                if getattr(lvl, "bid_px", _DBN_UNDEF_PRICE) != _DBN_UNDEF_PRICE
+                or getattr(lvl, "ask_px", _DBN_UNDEF_PRICE) != _DBN_UNDEF_PRICE
+            )
+            if populated < _MBP10_REQUIRED_LEVELS:
+                raise UnverifiableSchema(
+                    f"sample record for schema {schema!r} has only {populated} populated "
+                    f"book level(s); the REPLACE property requires {_MBP10_REQUIRED_LEVELS} "
+                    "(XNAS.ITCH full-depth check)"
+                )
+            levels_seen = _MBP10_REQUIRED_LEVELS
+
+    summary: Dict[str, Any] = {
+        "sample_record_count": len(records),
+        "sample_decode_ok": True,
+    }
+    if levels_seen is not None:
+        summary["sample_levels"] = levels_seen
+    return summary
+
+
 def verify_credentialed(
     planned: Iterable[PlannedCell],
     downgrades: Optional[Dict[Tuple[str, str], str]] = None,
@@ -264,6 +360,9 @@ def verify_credentialed(
     cost_window: Optional[Tuple[str, str]] = None,
     cost_symbols: Optional[Tuple[str, ...]] = None,
     cost_for: Optional[Iterable[Tuple[str, str]]] = None,
+    sample_window: Optional[Tuple[str, str]] = None,
+    sample_symbols: Optional[Tuple[str, ...]] = None,
+    sample_for: Optional[Iterable[Tuple[str, str]]] = None,
 ) -> VerifiedMatrix:
     """M1 tier-2 (2a) HISTORICAL-verified credentialed mode (§P 2a).
 
@@ -274,6 +373,12 @@ def verify_credentialed(
     offline ``verify()`` (same no-silent-fallback contract); availability is then
     re-derived from the live ``list_schemas`` response.
 
+    H3 (entitlement-by-sample-pull): when ``sample_window``/``sample_for`` are given,
+    performs a tiny ``timeseries.get_range`` pull per selected AVAILABLE cell, asserts
+    >=1 record, and records a REDACTED decode summary (record_count + decode_ok flag,
+    plus the 10-level structural flag for mbp-10 = the REPLACE property) — NEVER the
+    raw licensed data. A failed decode/structure check raises UnverifiableSchema.
+
     The ``databento`` SDK import is LAZY (only when ``client is None``) so offline
     tests can inject a MOCKED client and run with no network and no credential read.
 
@@ -281,12 +386,16 @@ def verify_credentialed(
       planned: PlannedCell instances (credentialed_planned_matrix()).
       downgrades: (dataset,schema)->note (credentialed_downgrades()).
       client: injected Databento Historical-like client; built lazily if None.
-      cost_window: (start, end) ISO strings for the get_cost/get_range preview.
-      cost_symbols: tuple of symbols for the preview (e.g. ("AAPL","MSFT")).
+      cost_window: (start, end) ISO strings for the get_cost preview.
+      cost_symbols: tuple of symbols for the cost preview (e.g. ("AAPL","MSFT")).
       cost_for: which (dataset,schema) cells to price; defaults to none.
+      sample_window: (start, end) ISO strings for the tiny get_range sample pull.
+      sample_symbols: tuple of symbols for the sample pull (e.g. ("AAPL",)).
+      sample_for: which (dataset,schema) cells to sample; defaults to none.
 
     Returns a VerifiedMatrix with every available cell access='historical',
-    per-cell dataset_range, optional sample_cost_usd (Decimal-as-string), and
+    per-cell dataset_range, optional sample_cost_usd (Decimal-as-string), an optional
+    REDACTED sample summary (sample_record_count/sample_decode_ok/sample_levels), and
     top-level live_subscription='pending' (live realtime is the deferred paid
     subscription, §P 2b).
     """
@@ -334,11 +443,32 @@ def verify_credentialed(
             # NEVER store the float: round-trip through str -> Decimal -> str.
             cost_by_cell[(ds, schema)] = str(Decimal(str(cost_float)))
 
-    # Enrich each cell with dataset_range (available cells) + sample_cost_usd.
+    # H3: optional entitlement-by-sample-pull for selected AVAILABLE cells. A tiny
+    # timeseries.get_range pull -> decode sanity -> REDACTED summary (counts/flags only).
+    available_cells = {(c.dataset, c.schema) for c in base.cells if c.available}
+    sample_targets = set(sample_for or ())
+    sample_by_cell: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    if sample_targets and sample_window is not None and sample_symbols is not None:
+        s_start, s_end = sample_window
+        for ds, schema in sample_targets:
+            if (ds, schema) not in available_cells:
+                continue  # never sample an unavailable/downgraded cell
+            store = client.timeseries.get_range(
+                dataset=ds,
+                start=s_start,
+                end=s_end,
+                symbols=list(sample_symbols),
+                schema=schema,
+            )
+            records = list(store)
+            sample_by_cell[(ds, schema)] = _decode_sample_summary(records, schema)
+
+    # Enrich each cell with dataset_range (available cells) + sample_cost_usd + sample summary.
     enriched: List[VerifiedCell] = []
     for c in base.cells:
         dataset_range = range_by_dataset.get(c.dataset) if c.available else None
         sample_cost = cost_by_cell.get((c.dataset, c.schema))
+        sample_summary = sample_by_cell.get((c.dataset, c.schema), {})
         enriched.append(VerifiedCell(
             dataset=c.dataset,
             schema=c.schema,
@@ -348,6 +478,9 @@ def verify_credentialed(
             downgrade=c.downgrade,
             dataset_range=dataset_range,
             sample_cost_usd=sample_cost,
+            sample_record_count=sample_summary.get("sample_record_count"),
+            sample_decode_ok=sample_summary.get("sample_decode_ok"),
+            sample_levels=sample_summary.get("sample_levels"),
         ))
 
     enriched_tuple = tuple(enriched)
@@ -364,6 +497,12 @@ _DEFAULT_COST_WINDOW = ("2026-06-08T15:00:00", "2026-06-08T15:00:02")
 _DEFAULT_COST_SYMBOLS = ("AAPL", "MSFT")
 # Price the two load-bearing cells: the primary NBBO source + the depth source.
 _DEFAULT_COST_FOR = (("EQUS.MINI", "tbbo"), ("XNAS.ITCH", "mbp-10"))
+
+# H3 sample-pull defaults (§957-963): a tiny ~1-2s window on a liquid name; the same
+# two load-bearing cells (NBBO source + depth source). Total cost must stay < ~$0.05.
+_DEFAULT_SAMPLE_WINDOW = ("2026-06-08T15:00:00", "2026-06-08T15:00:02")
+_DEFAULT_SAMPLE_SYMBOLS = ("AAPL",)
+_DEFAULT_SAMPLE_FOR = (("EQUS.MINI", "tbbo"), ("XNAS.ITCH", "mbp-10"))
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -385,6 +524,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Write the verified_matrix artifact to this path")
     parser.add_argument("--no-cost", action="store_true",
                         help="Skip the get_cost preview in --live mode")
+    parser.add_argument("--no-sample", action="store_true",
+                        help="Skip the timeseries.get_range entitlement-by-sample-pull in --live mode")
     args = parser.parse_args(argv)
 
     if args.offline and args.live:
@@ -398,6 +539,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 cost_window=None if args.no_cost else _DEFAULT_COST_WINDOW,
                 cost_symbols=None if args.no_cost else _DEFAULT_COST_SYMBOLS,
                 cost_for=None if args.no_cost else _DEFAULT_COST_FOR,
+                sample_window=None if args.no_sample else _DEFAULT_SAMPLE_WINDOW,
+                sample_symbols=None if args.no_sample else _DEFAULT_SAMPLE_SYMBOLS,
+                sample_for=None if args.no_sample else _DEFAULT_SAMPLE_FOR,
             )
         except UnverifiableSchema as exc:
             print(f"ERROR: {exc}", file=sys.stderr)

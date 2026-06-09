@@ -189,6 +189,40 @@ class TestRegistryDispatch(unittest.TestCase):
             _parse_record(record)
 
 
+class TestDefinitionSchemaName(unittest.TestCase):
+    """H1: the live EQUS.MINI definition schema is `definition` (SINGULAR). It is the
+    canonical SCHEMA_REGISTRY key; `definitions` (plural) is an explicit alias. Both
+    parse to DefinitionEvent, and a `definition` row survives to_row/from_row."""
+
+    def _definition_record(self, schema):
+        return {
+            "dataset": "EQUS.MINI", "schema": schema, "instrument_id": 1001, "symbol": "AAPL",
+            "vendor_seq": 6001, "ts_event": "2026-06-09T13:00:00.000000Z",
+            "mic": "XNAS", "raw_symbol": "AAPL",
+        }
+
+    def test_singular_definition_is_canonical_key(self):
+        self.assertIs(SCHEMA_REGISTRY["definition"], DefinitionEvent)
+
+    def test_parses_singular_definition_schema(self):
+        ev = _parse_record(self._definition_record("definition"))
+        self.assertIsInstance(ev, DefinitionEvent)
+        self.assertEqual(ev.provenance.schema, "definition")
+        self.assertEqual(ev.mic, "XNAS")
+        self.assertEqual(ev.raw_symbol, "AAPL")
+
+    def test_plural_definitions_alias_still_parses(self):
+        ev = _parse_record(self._definition_record("definitions"))
+        self.assertIsInstance(ev, DefinitionEvent)
+        self.assertEqual(ev.provenance.schema, "definitions")
+
+    def test_singular_definition_row_roundtrips(self):
+        ev = _parse_record(self._definition_record("definition"))
+        row = to_row(ev)
+        self.assertEqual(row["schema"], "definition")
+        self.assertEqual(from_row(row), ev)
+
+
 class TestTradeSideVocabulary(unittest.TestCase):
     """D4 (R2#4): trades `side` is a CLOSED vocabulary {A,B,N}; anything else
     RAISES MalformedRecord at parse (fail-closed, not fail-open)."""

@@ -276,6 +276,45 @@ class TestOneDayBucketEndDST(unittest.TestCase):
         self.assertEqual(bar.session_date_et, "2026-06-15")
 
 
+class TestResampleSortsByParsedInstant(unittest.TestCase):
+    """H2: resample() must order events by the PARSED instant, not the raw
+    ts_event_utc STRING. _parse_utc accepts mixed ISO-8601 forms (bare 'Z' with
+    no fractional seconds vs '.NNNNNN'); those string-sort WRONG because
+    '.' (0x2E) < 'Z' (0x5A), so a later fractional trade would string-sort BEFORE
+    an earlier bare-'Z' trade in the same bucket -> open/close swapped, corrupt OHLC.
+    """
+
+    def test_mixed_format_open_close_not_swapped(self):
+        """Two chronological trades in ONE 1m bucket with MIXED timestamp formats:
+        the EARLIER trade has the bare-'Z' (no-fractional) form, the LATER trade has
+        '.500000Z'. Raw-string sort puts '.500000Z' first ('.' < 'Z') -> open/close
+        swapped. Correct (parsed-instant) sort: open = earlier price, close = later
+        price, with high/low spanning both.
+        """
+        # 13:30:00Z (earlier) @ 201.0000, then 13:30:00.500000Z (later) @ 202.0000.
+        # Both fall in the 09:30 ET (13:30 UTC) 1m bucket.
+        ev_earlier = _make_trade("AAPL", "2026-06-09T13:30:00Z", "201.0000", "100", vendor_seq=1)
+        ev_later = _make_trade("AAPL", "2026-06-09T13:30:00.500000Z", "202.0000", "100", vendor_seq=2)
+        bars = resample([ev_earlier, ev_later], interval="1m")
+        self.assertEqual(len(bars), 1)
+        bar = bars[0]
+        self.assertEqual(bar.open, Decimal("201.0000"))   # earlier price
+        self.assertEqual(bar.close, Decimal("202.0000"))  # later price
+        self.assertEqual(bar.high, Decimal("202.0000"))
+        self.assertEqual(bar.low, Decimal("201.0000"))
+        self.assertEqual(bar.trade_count, 2)
+
+    def test_mixed_format_input_order_independent(self):
+        """Same two mixed-format trades fed in REVERSE order still resolve to the
+        correct parsed-instant ordering (open = earlier price)."""
+        ev_earlier = _make_trade("AAPL", "2026-06-09T13:30:00Z", "201.0000", "100", vendor_seq=1)
+        ev_later = _make_trade("AAPL", "2026-06-09T13:30:00.500000Z", "202.0000", "100", vendor_seq=2)
+        bars = resample([ev_later, ev_earlier], interval="1m")
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0].open, Decimal("201.0000"))
+        self.assertEqual(bars[0].close, Decimal("202.0000"))
+
+
 class TestParseUtcOffsetForms(unittest.TestCase):
     """C5 (#4): _parse_utc must accept '+00:00' (numeric offset) ISO-8601, not only
     a literal 'Z' suffix — the repo's own datetime.now(timezone.utc).isoformat()

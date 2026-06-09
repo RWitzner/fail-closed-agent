@@ -165,12 +165,17 @@ def resample(events: Iterable, *, interval: str) -> List[Bar]:
     VWAP_QUANTUM ROUND_HALF_EVEN. If a caller forces a bar on an empty window,
     raises EmptyWindowVWAP — NEVER produces Decimal('NaN') / Decimal('Infinity').
 
-    Input sorted defensively by ts_event_utc for determinism.
+    Input sorted defensively by the PARSED ts_event_utc instant for determinism.
+    Sorting by the raw STRING is WRONG when mixed ISO-8601 forms are present (a
+    bare 'Z' with no fractional seconds vs '.NNNNNN'): '.' (0x2E) < 'Z' (0x5A), so
+    a later fractional trade would string-sort BEFORE an earlier bare-'Z' trade in
+    the same bucket, swapping open/close. Sorting by ``_parse_utc(...)`` (a true
+    instant) is correct regardless of the surface form (H2).
     """
     if interval not in _INTERVAL_DELTA:
         raise ValueError(f"unsupported interval: {interval!r}")
 
-    event_list = sorted(events, key=lambda e: e.provenance.ts_event_utc)
+    event_list = sorted(events, key=lambda e: _parse_utc(e.provenance.ts_event_utc))
 
     # Group by (symbol, bucket_key) where bucket_key is the ET-floored datetime.
     # Use an ordered dict (insertion order = temporal order after sort).

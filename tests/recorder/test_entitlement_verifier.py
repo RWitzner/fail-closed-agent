@@ -300,11 +300,76 @@ class _FakeMetadata:
         return self._costs.get((dataset, schema), 0.0123456789)
 
 
-class _FakeHistoricalClient:
-    """databento.Historical-shaped fake exposing a .metadata facade."""
+class _FakeLevel:
+    """databento_dbn.BidAskPair-shaped: int 1e-9 fixed-point px (UNDEF when empty)."""
 
-    def __init__(self, schemas, ranges, costs=None):
+    _UNDEF_PRICE = 9223372036854775807  # databento_dbn.UNDEF_PRICE
+
+    def __init__(self, bid_px, ask_px, bid_sz=100, ask_sz=100):
+        self.bid_px = bid_px
+        self.ask_px = ask_px
+        self.bid_sz = bid_sz
+        self.ask_sz = ask_sz
+
+
+class _FakeRecord:
+    """databento_dbn message-shaped: a top-of-book `.price` (int 1e-9) + a `.levels`
+    list of _FakeLevel (mbp-10 carries 10 populated levels; tbbo carries 1)."""
+
+    def __init__(self, price, levels):
+        self.price = price
+        self.levels = levels
+
+
+def _full_mbp10_levels():
+    """10 populated levels (the XNAS.ITCH mbp-10 REPLACE property)."""
+    return [
+        _FakeLevel(bid_px=190_000_000_000 - i, ask_px=190_100_000_000 + i)
+        for i in range(10)
+    ]
+
+
+class _FakeDBNStore:
+    """databento DBNStore-shaped: iterable of records."""
+
+    def __init__(self, records):
+        self._records = list(records)
+
+    def __iter__(self):
+        return iter(self._records)
+
+
+class _FakeTimeseries:
+    """Canned timeseries facade — returns fixture records, makes NO network call."""
+
+    def __init__(self, records_by_cell):
+        self._records_by_cell = records_by_cell
+        self.get_range_calls = []
+
+    def get_range(self, dataset, start, end, symbols, schema, limit=None):
+        self.get_range_calls.append((dataset, schema, start, end, tuple(symbols), limit))
+        records = self._records_by_cell.get((dataset, schema), [])
+        return _FakeDBNStore(records)
+
+
+# Default sample records per available cell: tbbo = 1 top-of-book level, mbp-10 = 10 levels.
+def _default_sample_records():
+    tbbo_rec = _FakeRecord(price=190_050_000_000, levels=[_FakeLevel(190_000_000_000, 190_100_000_000)])
+    mbp10_rec = _FakeRecord(price=190_050_000_000, levels=_full_mbp10_levels())
+    return {
+        ("EQUS.MINI", "tbbo"): [tbbo_rec, tbbo_rec],
+        ("XNAS.ITCH", "mbp-10"): [mbp10_rec, mbp10_rec, mbp10_rec],
+    }
+
+
+class _FakeHistoricalClient:
+    """databento.Historical-shaped fake exposing .metadata + .timeseries facades."""
+
+    def __init__(self, schemas, ranges, costs=None, sample_records=None):
         self.metadata = _FakeMetadata(schemas, ranges, costs)
+        self.timeseries = _FakeTimeseries(
+            sample_records if sample_records is not None else {}
+        )
 
 
 class TestCredentialedAssembly(unittest.TestCase):
@@ -431,6 +496,145 @@ class TestCredentialedAssembly(unittest.TestCase):
         self.assertIsInstance(tbbo["sample_cost_usd"], str)
         # Canonical (sorted keys) — re-serialize must be byte-identical.
         self.assertEqual(content, serializer_dumps(data))
+
+
+class TestSamplePull(unittest.TestCase):
+    """H3: the --live entitlement-by-sample-pull (timeseries.get_range) decode sanity.
+
+    A tiny get_range pull per AVAILABLE cell must: return >=1 record, decode each
+    record's price as an int 1e-9 fixed-point convertible to Decimal with NO float,
+    and (for mbp-10) confirm the 10-level book structure (the REPLACE property). The
+    recorded summary is REDACTED: record_count + structural flags only, never raw
+    licensed prices. The assembly is tested with a MOCKED client (no network)."""
+
+    def _run(self, **kwargs):
+        client = _FakeHistoricalClient(
+            _LIVE_SCHEMAS, _LIVE_RANGES,
+            sample_records=kwargs.pop("sample_records", _default_sample_records()),
+        )
+        result = verify_credentialed(
+            credentialed_planned_matrix(),
+            downgrades=credentialed_downgrades(),
+            client=client,
+            sample_window=kwargs.pop("sample_window", ("2026-06-08T15:00:00", "2026-06-08T15:00:01")),
+            sample_symbols=kwargs.pop("sample_symbols", ("AAPL",)),
+            sample_for=kwargs.pop(
+                "sample_for", (("EQUS.MINI", "tbbo"), ("XNAS.ITCH", "mbp-10"))
+            ),
+            **kwargs,
+        )
+        return result, client
+
+    def test_sample_pull_records_record_count_for_available_cell(self):
+        """A sampled available cell records sample_record_count >= 1."""
+        result, _ = self._run()
+        tbbo = next(c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "tbbo")
+        self.assertIsNotNone(tbbo.sample_record_count)
+        self.assertGreaterEqual(tbbo.sample_record_count, 1)
+        self.assertEqual(tbbo.sample_record_count, 2)
+
+    def test_sample_pull_decode_ok_true_when_prices_are_int_fixed_point(self):
+        """Decode sanity passes when each record's price is an int 1e-9 fixed-point."""
+        result, _ = self._run()
+        tbbo = next(c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "tbbo")
+        self.assertTrue(tbbo.sample_decode_ok)
+
+    def test_mbp10_sample_confirms_ten_level_structure(self):
+        """mbp-10 sample records the 10-level book structure (REPLACE property)."""
+        result, _ = self._run()
+        depth = next(c for c in result.cells if c.dataset == "XNAS.ITCH" and c.schema == "mbp-10")
+        self.assertTrue(depth.sample_decode_ok)
+        self.assertEqual(depth.sample_levels, 10)
+
+    def test_sample_pull_raises_when_zero_records(self):
+        """An available, sampled cell that returns ZERO records is a hard failure."""
+        empty = dict(_default_sample_records())
+        empty[("EQUS.MINI", "tbbo")] = []  # no records returned
+        with self.assertRaises(UnverifiableSchema) as ctx:
+            self._run(sample_records=empty)
+        self.assertIn("tbbo", str(ctx.exception))
+
+    def test_sample_pull_raises_when_price_is_float(self):
+        """A record whose price is a float (not int 1e-9 fixed-point) is a hard failure
+        (no float allowed; the decode-sanity contract)."""
+        bad = dict(_default_sample_records())
+        bad[("EQUS.MINI", "tbbo")] = [_FakeRecord(price=190.05, levels=[_FakeLevel(1, 2)])]
+        with self.assertRaises(UnverifiableSchema) as ctx:
+            self._run(sample_records=bad)
+        self.assertIn("float", str(ctx.exception).lower())
+
+    def test_mbp10_sample_raises_when_fewer_than_ten_levels(self):
+        """An mbp-10 sample with < 10 populated levels fails (the REPLACE structural check)."""
+        sparse = dict(_default_sample_records())
+        sparse[("XNAS.ITCH", "mbp-10")] = [
+            _FakeRecord(price=190_050_000_000, levels=[_FakeLevel(1, 2)])  # only 1 level
+        ]
+        with self.assertRaises(UnverifiableSchema) as ctx:
+            self._run(sample_records=sparse)
+        self.assertIn("10", str(ctx.exception))
+
+    def test_sample_summary_is_redacted_no_raw_prices(self):
+        """The recorded summary carries counts/flags only — NEVER a raw price int."""
+        result, _ = self._run()
+        depth = next(c for c in result.cells if c.dataset == "XNAS.ITCH" and c.schema == "mbp-10")
+        # The only sample fields are counts/flags; no raw bid/ask price survives.
+        self.assertEqual(depth.sample_record_count, 3)
+        self.assertEqual(depth.sample_levels, 10)
+        self.assertTrue(depth.sample_decode_ok)
+        # No attribute carries a raw price.
+        for field_name in ("sample_record_count", "sample_levels"):
+            val = getattr(depth, field_name)
+            self.assertNotIn(190_000_000_000, (val,))
+
+    def test_sample_only_pulled_for_available_cells(self):
+        """Unavailable (downgraded) cells are never sampled; sample fields stay None."""
+        result, client = self._run()
+        # EQUS.MINI mbp-10 is unavailable (downgraded to XNAS.ITCH) -> never sampled.
+        equs_depth = next(
+            c for c in result.cells if c.dataset == "EQUS.MINI" and c.schema == "mbp-10"
+        )
+        self.assertIsNone(equs_depth.sample_record_count)
+        self.assertIsNone(equs_depth.sample_decode_ok)
+        # get_range called exactly once per available sampled cell (tbbo + XNAS mbp-10).
+        sampled = {(c[0], c[1]) for c in client.timeseries.get_range_calls}
+        self.assertEqual(sampled, {("EQUS.MINI", "tbbo"), ("XNAS.ITCH", "mbp-10")})
+
+    def test_no_sample_when_window_omitted(self):
+        """No get_range call when sample_window/sample_for omitted; fields stay None."""
+        client = _FakeHistoricalClient(_LIVE_SCHEMAS, _LIVE_RANGES)
+        result = verify_credentialed(
+            credentialed_planned_matrix(),
+            downgrades=credentialed_downgrades(),
+            client=client,
+        )
+        self.assertEqual(len(client.timeseries.get_range_calls), 0)
+        for c in result.cells:
+            self.assertIsNone(c.sample_record_count)
+            self.assertIsNone(c.sample_decode_ok)
+
+    def test_sample_fields_round_trip_in_artifact(self):
+        """write_artifact serializes sample_record_count + sample_levels + sample_decode_ok
+        canonically (and the offline non-sampled artifact stays clean of these fields)."""
+        result, _ = self._run()
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            out_path = f.name
+        write_artifact(result, out_path)
+        content = Path(out_path).read_text(encoding="utf-8").strip()
+        data = json.loads(content)
+        depth = next(
+            c for c in data["cells"] if c["dataset"] == "XNAS.ITCH" and c["schema"] == "mbp-10"
+        )
+        self.assertEqual(depth["sample_record_count"], 3)
+        self.assertEqual(depth["sample_levels"], 10)
+        self.assertTrue(depth["sample_decode_ok"])
+        # Canonical (sorted keys) — re-serialize must be byte-identical.
+        self.assertEqual(content, serializer_dumps(data))
+
+    def test_sample_pull_imports_no_databento_with_injected_client(self):
+        """Sample-pull path with an injected client never imports databento (offline-safe)."""
+        import sys
+        self._run()
+        self.assertNotIn("databento", sys.modules)
 
 
 if __name__ == "__main__":  # pragma: no cover
