@@ -11,5 +11,47 @@
   "market_state": {
     "calendar_pin": "4.13.2",
     "calendar_mic": "XNYS"
+  },
+  "signal": {
+    "interval": "1m",
+    "feature_windows": ["9", "21", "50"],
+    "rsi_period": "14",
+    "z_window": "21",
+    "vol_window": "21",
+    "horizons": ["5m", "30m"],
+    "threshold_k": "0",
+    "spread_bps_max": "50",
+    "quote_staleness_ms_max": "2000",
+    "feature_staleness_ms_max": "5000",
+    "bar_lag_max_intervals": "2",
+    "refresh_cadence_ms": "1000",
+    "prob_bins": "10",
+    "min_reference_samples": "30",
+    "model": {
+      "model_version": "logit-mom-v1",
+      "standardization": "identity",
+      "coefficients": {
+        "5m": {
+          "intercept": "0",
+          "z_ret_21": "0.05",
+          "momentum_9": "1.0",
+          "momentum_21": "0.5",
+          "rsi14_centered": "0.20",
+          "ema_gap_9_21": "5.0",
+          "sma_gap_21_50": "2.5",
+          "realized_vol_21": "0"
+        },
+        "30m": {
+          "intercept": "0",
+          "z_ret_21": "0.05",
+          "momentum_9": "1.0",
+          "momentum_21": "0.5",
+          "rsi14_centered": "0.20",
+          "ema_gap_9_21": "5.0",
+          "sma_gap_21_50": "2.5",
+          "realized_vol_21": "0"
+        }
+      }
+    }
   }
 }

@@ -46,9 +46,16 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   heavy SDK at module scope, and preserves committed run/live gates OFF. Hardening fixed identity/provenance risks:
   symbol/status/NBBO mismatches now fail closed; blank FIGI/CUSIP/source CA IDs, mismatched fetcher/source
   boundaries, and mirrored whitespace IDs cannot manufacture durable identity or fake source independence.
-- **Next step: M3 (signal + observe-only calibration probe)** — feature engine, quote-quality filters,
-  observe-only forecasts (`paper_eligible=false`), realized-move scoring, and calibration report. S1 remains the
-  load-bearing invariant: the probe opens nothing.
+- **M3 signal + observe-only calibration probe DONE on branch `m3-signal` (700 tests green):** contract
+  designed → 4-lens critic pass (52 findings applied) → independent re-critique (READY-TO-BUILD) → TDD build
+  (quote-quality filters, mid-bar label series with watermark anti-lookahead, feature engine, signal snapshot
+  gates, stable-logistic forecaster, as-of climatology reference, resolver with future-receipt deferral,
+  calibration report with funnel identities + committed byte-identical golden) → 4-lens adversarial code
+  review (22 agents, repro-gated: 17 confirmed findings = 9 unique defects, incl. 1 blocker
+  climatology double-ingest) → all fixed TDD. S1 holds: the probe opens nothing, imports no order-capable
+  module (AST + subprocess guards), and journals `paper_eligible=false` on every row.
+- **Next step: M4 (risk core)** — 3-architect design panel complete; contract synthesis → critic pass →
+  TDD build. `IntradayMarginModel` (FINRA 26-10) + `can_open()` chokepoint + drawdown kill switch.
 
 ## Locked decisions
 
@@ -73,8 +80,9 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 - **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate).
   ✓ **done on `m2-market-state`** — 532 tests; pure tradability READ only; no order submit/preflight-token mint;
   fail-closed CA validation; no module-scope `exchange_calendars`; gates OFF.
-- **M3** Signal + observe-only calibration probe. ← next
-- **M4** Risk core (`IntradayMarginModel` + locate/SSR + exposure caps + drawdown kill switch).
+- **M3** Signal + observe-only calibration probe. ✓ **done on `m3-signal`** — 700 tests; observe-only
+  (`paper_eligible=false` ledger-enforced); S1/S2/S3/S4/S6 test-mapped; calibration report + golden.
+- **M4** Risk core (`IntradayMarginModel` + locate/SSR + exposure caps + drawdown kill switch). ← next
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation).
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy.

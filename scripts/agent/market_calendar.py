@@ -272,6 +272,16 @@ class MarketCalendar:
         dt_et = dt_utc.astimezone(ET)
         return dt_et.strftime("%Y-%m-%d")
 
+    def schedule_for(self, session_date_et: str) -> SessionSchedule:
+        """M3 additive passthrough (contract rev2 BUILD-F2): delegate to the provider.
+        Propagates ``UnknownSessionDate`` unchanged (fail-closed; the M3 horizon gate
+        maps it to ``calendar_unknown``). No M2 behavior changes."""
+        return self._provider.schedule_for(session_date_et)
+
+    def calendar_pin(self) -> str:
+        """M3 additive passthrough: the provider's provenance pin string."""
+        return self._provider.calendar_pin()
+
     def phase_at(self, ts_utc_iso: str) -> SessionPhase:
         """PURE function of (instant, schedule). Convert ts_utc -> ET, classify against
         the schedule:

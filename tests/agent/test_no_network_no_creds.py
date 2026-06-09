@@ -167,5 +167,47 @@ class TestM2OfflinePurity(unittest.TestCase):
         self.assertNotIn("exchange_calendars", sys.modules)
 
 
+class TestM3OfflinePurity(unittest.TestCase):
+    """M3 §M.11: importing every M3 module pulls in NO vendor SDK / plotting / ML
+    lib, and a minimal feature -> snapshot -> forecast -> score path opens no
+    socket (design §9)."""
+
+    def test_m3_modules_import_no_heavy_sdk(self):
+        import agent.signal_config  # noqa: F401
+        import agent.quote_quality  # noqa: F401
+        import agent.bar_series  # noqa: F401
+        import agent.feature_engine  # noqa: F401
+        import agent.signal_snapshot  # noqa: F401
+        import agent.strategy  # noqa: F401
+        import agent.candidate  # noqa: F401
+        import agent.forecast  # noqa: F401
+        import agent.calibration  # noqa: F401
+        import agent.calibration_report  # noqa: F401
+        import agent.strategies.calibration_probe  # noqa: F401
+
+        for banned in ("alpaca", "databento", "exchange_calendars",
+                       "matplotlib", "plotly", "pandas", "numpy", "scipy",
+                       "sklearn", "torch"):
+            self.assertNotIn(banned, sys.modules)
+
+    def test_m3_minimal_path_opens_no_socket(self):
+        from tempfile import TemporaryDirectory
+
+        from tests.lib.signal_fixtures import quotes_session_v1
+        from tests.lib.signal_pipeline import SignalPipeline
+
+        with mock.patch("socket.socket",
+                        side_effect=AssertionError("M3 must not open sockets")):
+            with TemporaryDirectory() as tmpdir:
+                pipeline = SignalPipeline(quote_rows=quotes_session_v1(),
+                                          journal_dir=tmpdir, run_id="run-purity")
+                decisions = pipeline.tick_on_bar(50)
+                stats = pipeline.resolve(now_utc="2026-06-15T20:30:00.000000Z")
+                report = pipeline.report()
+        self.assertEqual(len(decisions), 2)
+        self.assertGreaterEqual(stats.scored, 1)
+        self.assertEqual(report["funnel"]["forecasts"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
