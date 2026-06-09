@@ -528,5 +528,48 @@ class TestSharedSeq(unittest.TestCase):
         self.assertEqual(r2["seq"], r1["seq"] + 1)
 
 
+class TestLedgerPriceCanonicalization(unittest.TestCase):
+    """harden CROSS-MODULE-1: LULD band prices + SSR prior_close are quantized at the ledger seam, so the
+    SAME economic value serializes to ONE canonical Dec-string -> ONE row_hash (replay/determinism)."""
+
+    def _luld_hash(self, px):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = EventWriter(Path(tmp) / "status.jsonl", RUN_ID, clock=_fake_clock())
+            ledger = StatusLedger(writer, rules_hash=RULES_HASH)
+            row = ledger.record_luld_transition(
+                symbol="AAPL", instrument_id=1, from_state="normal", to_state="paused",
+                luld_tier="tier1", reference_px=Decimal(px), lower_px=Decimal("200.0000"),
+                upper_px=Decimal("210.0000"), doubled=False,
+                ts_market_utc="2026-06-15T14:00:00.000000Z",
+            )
+            return row["hash"]
+
+    def _ssr_hash(self, px):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = EventWriter(Path(tmp) / "status.jsonl", RUN_ID, clock=_fake_clock())
+            ledger = StatusLedger(writer, rules_hash=RULES_HASH)
+            row = ledger.record_ssr_transition(
+                symbol="AAPL", instrument_id=1, from_state="inactive", to_state="active",
+                prior_close_px=Decimal(px), ts_market_utc="2026-06-15T14:00:00.000000Z",
+            )
+            return row["hash"]
+
+    def test_luld_price_precision_canonicalized(self):
+        # 201.5 and 201.5000 are the SAME price -> identical row_hash (quantized to 4dp).
+        self.assertEqual(self._luld_hash("201.5"), self._luld_hash("201.5000"))
+
+    def test_ssr_prior_close_precision_canonicalized(self):
+        self.assertEqual(self._ssr_hash("200"), self._ssr_hash("200.0000"))
+
+    def test_subquantum_price_fails_loud(self):
+        # a sub-4dp price does not round-trip -> ValueError (mirrors event PrecisionLoss / CA quantize).
+        with self.assertRaises(ValueError):
+            self._luld_hash("201.50001")
+        with self.assertRaises(ValueError):
+            self._ssr_hash("200.00001")
+
+
 if __name__ == "__main__":
     unittest.main()

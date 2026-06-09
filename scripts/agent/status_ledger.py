@@ -20,7 +20,7 @@ DETERMINISM (DET-2): no set/frozenset ever enters a row — only ``provenance_so
 sorted list) and the flat ``provenance`` list of sublists. Decimals stay Decimal (the
 serializer renders them as strings and rejects floats / non-finite — ``serializer.py:27-44``).
 """
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN
 from typing import Optional
 
 from agent.corporate_actions import (
@@ -88,6 +88,27 @@ def _optional_decimal(value, *, field: str) -> Optional[Decimal]:
     if value is None:
         return None
     return _require_decimal(value, field=field)
+
+
+PRICE_QUANTUM = Decimal("0.0001")  # 4dp Reg-NMS tick (mirror event.PRICE_QUANTUM); canonical ledger price form
+
+
+def _quantize_price(value, *, field: str) -> Decimal:
+    """A REQUIRED price quantized to PRICE_QUANTUM so ONE economic value -> ONE canonical Dec-string ->
+    ONE row_hash (CROSS-MODULE-1). Trailing-zero variants (201.5 / 201.5000) collapse to one form; a
+    sub-quantum value that does NOT round-trip fails loud, mirroring the CA path's _quantize_checked and
+    event.py's PrecisionLoss."""
+    d = _require_decimal(value, field=field)
+    q = d.quantize(PRICE_QUANTUM, rounding=ROUND_HALF_EVEN)
+    if q != d:
+        raise ValueError(f"{field}: price {d} does not round-trip through {PRICE_QUANTUM} (precision loss)")
+    return q
+
+
+def _quantize_optional_price(value, *, field: str) -> Optional[Decimal]:
+    if value is None:
+        return None
+    return _quantize_price(value, field=field)
 
 
 def canonical_status_payload(*, version: int, body: dict) -> dict:
@@ -236,9 +257,9 @@ class StatusLedger:
         An ABSENT band is NOT a ``luld_transition``: it routes through the decider as
         ``luld_band_unknown`` (§B step 5b) -> a halt/session transition, never a null-priced
         LULD row."""
-        reference_px = _require_decimal(reference_px, field="reference_px")
-        lower_px = _require_decimal(lower_px, field="lower_px")
-        upper_px = _require_decimal(upper_px, field="upper_px")
+        reference_px = _quantize_price(reference_px, field="reference_px")
+        lower_px = _quantize_price(lower_px, field="lower_px")
+        upper_px = _quantize_price(upper_px, field="upper_px")
         if not isinstance(doubled, bool):
             raise TypeError(f"doubled: must be a bool (got {type(doubled).__name__})")
         fields = self._common(symbol=symbol, instrument_id=instrument_id, ts_market_utc=ts_market_utc)
@@ -255,7 +276,7 @@ class StatusLedger:
 
     def record_ssr_transition(self, *, symbol, instrument_id, from_state, to_state,
                               prior_close_px: Optional[Decimal], ts_market_utc) -> dict:
-        prior_close_px = _optional_decimal(prior_close_px, field="prior_close_px")
+        prior_close_px = _quantize_optional_price(prior_close_px, field="prior_close_px")
         fields = self._common(symbol=symbol, instrument_id=instrument_id, ts_market_utc=ts_market_utc)
         fields.update(
             from_state=from_state,

@@ -234,6 +234,23 @@ def _is_complete(obs: SourceObservation) -> bool:
     return True
 
 
+def _obs_total_key(obs, norm_factor, norm_cash):
+    """TOTAL order over a SourceObservation (CA-1): ties on (source, source_ca_id) are broken by the FULL
+    normalized payload, so the EMITTED reference fields, the persisted provenance order, and the row_hash
+    never depend on input order — even for same-source-same-source_ca_id duplicates (a real vendor data
+    defect: one source emitting two/amended records under one CA id). Decimals are compared as strings via
+    the already-quantized norm_factor/norm_cash (None -> "" sentinel to avoid a None-vs-str ordering error)."""
+    p = obs.provenance
+    d = obs.durable_id
+    return (
+        p.source.value, p.source_ca_id, obs.ca_type.value, obs.ex_date_et,
+        "" if norm_factor is None else str(norm_factor),
+        "" if norm_cash is None else str(norm_cash),
+        d.cusip or "", d.figi or "", d.ticker,
+        p.announced_ts_utc, p.ts_recv_utc,
+    )
+
+
 def cross_validate(observations: Tuple[SourceObservation, ...], *,
                    lead_days: int = BLACKOUT_LEAD_DAYS,
                    trail_days: int = BLACKOUT_TRAIL_DAYS) -> AdjustmentEvent:
@@ -279,11 +296,11 @@ def cross_validate(observations: Tuple[SourceObservation, ...], *,
 
     # Quantize-check every factor/cash up-front (fail-loud on a non-round-tripping value).
     norm = [(o, _norm_factor(o), _norm_cash(o)) for o in observations]
-    # harden OFFLINE-1: deterministic reference. Sort by the SAME key as provenance ordering so the
-    # EMITTED ca_type/factor/cash/durable_id/symbol (and thus the persisted row_hash) are order-INDEPENDENT
-    # even in the non-CONFIRMED path where sources disagree. Conflict/independence/completeness are already
-    # set-based; this only canonicalizes WHICH observation supplies the emitted reference fields.
-    norm.sort(key=lambda t: (t[0].provenance.source.value, t[0].provenance.source_ca_id))
+    # harden OFFLINE-1 + CA-1: deterministic reference via a TOTAL order. Ties on (source, source_ca_id)
+    # are broken by the full normalized payload so the EMITTED ca_type/factor/cash/durable_id/symbol AND
+    # the persisted provenance order (hence row_hash) are order-INDEPENDENT for ANY observation set,
+    # including same-source-same-source_ca_id duplicates. Conflict/independence/completeness stay set-based.
+    norm.sort(key=lambda t: _obs_total_key(t[0], t[1], t[2]))
 
     # Reference observation (canonical first after sort) — disagreement is measured pairwise against it.
     ref_obs, ref_factor, ref_cash = norm[0]
@@ -322,13 +339,9 @@ def cross_validate(observations: Tuple[SourceObservation, ...], *,
     blackout_to = _shift_iso_date(ref_obs.ex_date_et, days=trail_days)
 
     provenance_set: FrozenSet[CaSource] = frozenset(distinct_sources)
-    # Deterministic provenance ordering: by source value then source_ca_id (stable across input order).
-    provenance = tuple(
-        sorted(
-            (o.provenance for o in observations),
-            key=lambda p: (p.source.value, p.source_ca_id),
-        )
-    )
+    # Provenance order derived from the SAME total ordering as the reference (CA-1): consistent and
+    # order-independent for ANY input order. (norm is already sorted by _obs_total_key above.)
+    provenance = tuple(t[0].provenance for t in norm)
 
     return AdjustmentEvent(
         durable_id=ref_obs.durable_id,

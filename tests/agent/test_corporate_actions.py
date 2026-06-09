@@ -186,6 +186,32 @@ class TestEmittedFieldDeterminism(unittest.TestCase):
         self.assertEqual(ca_to_row(ev_ab), ca_to_row(ev_ba))
         self.assertEqual(row_hash(ca_to_row(ev_ab)), row_hash(ca_to_row(ev_ba)))
 
+    def test_same_source_same_id_emitted_fields_order_independent(self):
+        # harden CA-1: two records from the SAME source under the SAME source_ca_id (a vendor duplicate /
+        # amended record) but a DIFFERENT factor are ONE observation SET; cross_validate must emit an
+        # IDENTICAL row + row_hash regardless of input order. Round 1's (source, source_ca_id) sort key was
+        # NOT total, so it tie-broke on input order. S7 status stays CONFLICTING_BLACKOUT throughout.
+        from itertools import permutations
+
+        did = DurableId(cusip="123456789", figi=None, ticker="ABC")
+
+        def _obs(factor):
+            return SourceObservation(
+                source=CaSource.ALPACA, durable_id=did, ca_type=CaType.SPLIT, ex_date_et="2026-06-10",
+                factor=Decimal(factor), cash_amount=None,
+                provenance=CaProvenance(
+                    source=CaSource.ALPACA, source_ca_id="A1",
+                    announced_ts_utc="2026-06-01T00:00:00.000000Z",
+                    ts_recv_utc="2026-06-02T00:00:00.000000Z",
+                ),
+            )
+
+        members = [_obs("2.00000000"), _obs("5.00000000"), _obs("3.00000000")]
+        hashes = {row_hash(ca_to_row(cross_validate(p))) for p in permutations(members)}
+        statuses = {cross_validate(p).validation_status for p in permutations(members)}
+        self.assertEqual(statuses, {ValidationStatus.CONFLICTING_BLACKOUT})
+        self.assertEqual(len(hashes), 1, f"row_hash must be order-independent; got {len(hashes)} distinct")
+
 
 class TestBlackoutWindow(unittest.TestCase):
     def test_blackout_window_is_closed_inclusive(self):
