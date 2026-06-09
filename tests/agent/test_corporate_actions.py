@@ -35,7 +35,8 @@ from agent.corporate_actions import (
     ValidationStatus,
     cross_validate,
 )
-from agent.serializer import dumps
+from agent.serializer import dumps, row_hash
+from agent.status_ledger import ca_to_row
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "corporate_actions"
 
@@ -170,6 +171,20 @@ class TestCrossValidateTriState(unittest.TestCase):
         rows[1]["factor"] = "4.000000001"
         with self.assertRaises(CorporateActionError):
             cross_validate(tuple(_obs_from_row(r) for r in rows))
+
+
+class TestEmittedFieldDeterminism(unittest.TestCase):
+    def test_conflicting_emitted_fields_are_order_independent(self):
+        # harden OFFLINE-1: equivalent observation SETS in different INPUT order must produce an
+        # IDENTICAL persisted row (and row_hash), not merely an identical validation_status. In the
+        # CONFLICTING path the emitted ca_type/factor/cash/durable_id/symbol must be CANONICAL, not
+        # "whichever observation came first" — otherwise status.jsonl bytes/hashes are order-dependent.
+        a, b = (_obs_from_row(r) for r in _load_jsonl("conflicting_blackout.jsonl"))
+        ev_ab = cross_validate((a, b))
+        ev_ba = cross_validate((b, a))
+        self.assertEqual(ev_ab.validation_status, ValidationStatus.CONFLICTING_BLACKOUT)
+        self.assertEqual(ca_to_row(ev_ab), ca_to_row(ev_ba))
+        self.assertEqual(row_hash(ca_to_row(ev_ab)), row_hash(ca_to_row(ev_ba)))
 
 
 class TestBlackoutWindow(unittest.TestCase):

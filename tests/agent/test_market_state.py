@@ -131,6 +131,14 @@ class TestNbboTwoSided(unittest.TestCase):
         self.assertFalse(_nbbo(bid="100.00", bid_sz="0", ask="100.10", ask_sz="1").two_sided)
         self.assertFalse(_nbbo(bid="100.00", bid_sz="1", ask="100.10", ask_sz="0").two_sided)
 
+    def test_non_finite_price_or_size_is_false(self):
+        # harden DECIDER-2: a non-finite (NaN/Inf) price/size -> two_sided False (fail-closed DATA),
+        # NEVER a raised decimal.InvalidOperation from the ordered comparisons.
+        self.assertFalse(_nbbo(bid="100.00", bid_sz="NaN", ask="100.10", ask_sz="1").two_sided)
+        self.assertFalse(_nbbo(bid="NaN", bid_sz="1", ask="100.10", ask_sz="1").two_sided)
+        self.assertFalse(_nbbo(bid="100.00", bid_sz="1", ask="Infinity", ask_sz="1").two_sided)
+        self.assertFalse(_nbbo(bid="100.00", bid_sz="1", ask="100.10", ask_sz="-Infinity").two_sided)
+
 
 class TestDeciderPurity(unittest.TestCase):
     def test_decider_is_pure_deterministic(self):
@@ -436,6 +444,34 @@ class TestFailClosedEnum(unittest.TestCase):
         object.__setattr__(bad, "session_phase", "totally_bogus_phase")
         with self.assertRaises(MarketStateError):
             TradabilityDecider().decide(bad)
+
+    def test_auction_phase_input_raises_market_state_error(self):
+        # harden DECIDER-1: AUCTION is an internal-only SessionState (produced on HaltState.RESUMING);
+        # the calendar's phase_at NEVER emits it as a phase. An AUCTION session_phase INPUT is an
+        # upstream invariant break -> MarketStateError (fail-closed), NOT a raw KeyError — and even the
+        # frozen/ca_blackout terminal short-circuits must not mask it.
+        with self.assertRaises(MarketStateError):
+            TradabilityDecider().decide(_inputs(session_phase=SessionPhase.AUCTION))
+        with self.assertRaises(MarketStateError):
+            TradabilityDecider().decide(
+                _inputs(session_phase=SessionPhase.AUCTION, frozen=True, ca_blackout=True)
+            )
+
+    def test_non_finite_nbbo_is_not_tradable_not_raise(self):
+        # harden DECIDER-2: a non-finite NBBO size -> NOT_TRADABLE (anomaly as DATA), never a raised
+        # decimal.InvalidOperation escaping the decider.
+        nbbo = _nbbo(bid="200.00", bid_sz="NaN", ask="200.10", ask_sz="1")
+        verdict = TradabilityDecider().decide(
+            _inputs(luld=LuldState.NORMAL, luld_band=_band(), nbbo=nbbo)
+        )
+        self.assertEqual(verdict.tradability, Tradability.NOT_TRADABLE)
+        self.assertIn("no_two_sided_nbbo", verdict.reasons)
+
+    def test_luld_band_check_non_finite_is_false(self):
+        # harden DECIDER-2: a non-finite price or band edge -> luld_band_check False (fail-closed), no raise.
+        dec = TradabilityDecider()
+        self.assertFalse(dec.luld_band_check(price=Decimal("NaN"), band=_band()))
+        self.assertFalse(dec.luld_band_check(price=Decimal("100.00"), band=_band(lower="NaN")))
 
 
 # --- §H.3 fixture-driven coverage of every transition -------------------------

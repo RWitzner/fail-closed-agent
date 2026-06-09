@@ -134,6 +134,12 @@ class Nbbo:
             return False
         if self.bid_sz is None or self.ask_sz is None:
             return False
+        # harden DECIDER-2: a non-finite (NaN/Inf) price/size is an anomaly -> fail-closed to NOT
+        # two-sided (surfaced as DATA -> NOT_TRADABLE, never a raised decimal.InvalidOperation from
+        # the ordered comparisons below). Mirrors the decider's "anomalies are DATA, not exceptions".
+        for d in (self.best_bid, self.best_ask, self.bid_sz, self.ask_sz):
+            if not d.is_finite():
+                return False
         if self.bid_sz <= 0 or self.ask_sz <= 0:
             return False
         # not crossed and not locked: strictly bid < ask
@@ -222,6 +228,16 @@ class TradabilityDecider:
         # --- fail-closed vocabulary guard (out-of-vocab enum -> FATAL) ---
         if not isinstance(phase, SessionPhase) or phase.value not in _SESSION_PHASE_VALUES:
             raise MarketStateError(f"out-of-vocabulary session_phase: {phase!r}")
+        if phase == SessionPhase.AUCTION:
+            # harden DECIDER-1: AUCTION is produced ONLY internally (HaltState.RESUMING -> session_state
+            # AUCTION); the calendar's phase_at NEVER emits it as a phase (§A). An AUCTION session_phase
+            # INPUT is an upstream invariant break -> fail-closed FATAL, raised HERE as a real
+            # MarketStateError BEFORE _phase_to_session_state would raise a raw KeyError and before the
+            # frozen/ca_blackout terminal short-circuits could mask it.
+            raise MarketStateError(
+                "SessionPhase.AUCTION is not a valid session_phase input "
+                f"(produced only internally on HaltState.RESUMING): {phase!r}"
+            )
         if not isinstance(status.halt, HaltState):
             raise MarketStateError(f"out-of-vocabulary halt: {status.halt!r}")
         if not isinstance(status.luld, LuldState):
@@ -358,6 +374,9 @@ class TradabilityDecider:
         returns False (fail-closed: an unknown band is a band violation). Decimal-only. Wired into
         decide() step 7."""
         if band is None:
+            return False
+        # harden DECIDER-2: a non-finite price or band edge -> fail-closed False (no raise).
+        if not price.is_finite() or not band.lower_px.is_finite() or not band.upper_px.is_finite():
             return False
         return band.lower_px < price < band.upper_px
 

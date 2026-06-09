@@ -279,8 +279,13 @@ def cross_validate(observations: Tuple[SourceObservation, ...], *,
 
     # Quantize-check every factor/cash up-front (fail-loud on a non-round-tripping value).
     norm = [(o, _norm_factor(o), _norm_cash(o)) for o in observations]
+    # harden OFFLINE-1: deterministic reference. Sort by the SAME key as provenance ordering so the
+    # EMITTED ca_type/factor/cash/durable_id/symbol (and thus the persisted row_hash) are order-INDEPENDENT
+    # even in the non-CONFIRMED path where sources disagree. Conflict/independence/completeness are already
+    # set-based; this only canonicalizes WHICH observation supplies the emitted reference fields.
+    norm.sort(key=lambda t: (t[0].provenance.source.value, t[0].provenance.source_ca_id))
 
-    # Reference observation (first) — disagreement is measured pairwise against it.
+    # Reference observation (canonical first after sort) — disagreement is measured pairwise against it.
     ref_obs, ref_factor, ref_cash = norm[0]
     conflicting = False
     all_complete = _is_complete(ref_obs)
