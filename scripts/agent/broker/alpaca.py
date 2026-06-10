@@ -193,7 +193,7 @@ class AlpacaPaperBroker(BrokerBase):
         from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
         from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest
 
-        client = TradingClient(api_key=creds["key_id"], secret_key=creds["secret"],
+        client = TradingClient(api_key=creds["key_id"], secret_key=creds["secret_key"],
                                paper=True, raw_data=True)
 
         def _wire(call):

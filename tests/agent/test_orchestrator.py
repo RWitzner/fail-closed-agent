@@ -609,6 +609,112 @@ class OrchestratorCase(unittest.TestCase):
         self.assertEqual(Decimal(position_closes[0]["realized_broker_pnl"]),
                          Decimal("2.00"))        # 10x(200.30-200.10)
 
+    def test_over_qty_exit_journals_refusal_and_loop_survives(self):
+        # LC-1/SF-1: an ExitInstruction whose qty exceeds the held size makes
+        # mint_reduce_only_token raise PreflightRejected ("reduce-only qty must
+        # be >0 and <= held size"). _start_close MUST catch it, journal a
+        # contract-legal refusal, and return — the tick loop must survive (the
+        # re-emitting provider would otherwise re-crash every subsequent tick).
+        # No reduce submit happens; self._task stays None (set after the mint).
+        from agent.strategies.synthetic import ScriptedSyntheticStrategy
+        strategy = ScriptedSyntheticStrategy([
+            {"on_bar": 1, "action": "open", "symbol": "AAPL", "qty": "10",
+             "limit": "210.00"}])
+        provider = FakeAccountProvider(positions_payloads=[[
+            {"symbol": "AAPL", "qty": "10", "market_value": "2000.00",
+             "instrument_id": 1001}]])
+        over_qty = ReEmittingExitProvider(symbol="AAPL", qty="999",
+                                          start_call=2)
+        pipeline = self.make_pipeline(
+            subdir="overqty", strategy=strategy, exit_provider=over_qty,
+            account_provider=provider, fill_policy="immediate_full")
+
+        # bar 50: open fills at the ack (immediate_full); exit not yet due.
+        pipeline.tick_on_bar(50)
+        pipeline.tick_quote_only(50)
+        opens = pipeline.rows_of("positions", "position_open")
+        self.assertEqual(len(opens), 1)
+        self.assertFalse(pipeline.orch.in_flight)
+
+        # bar 51+: exits() emits the over-qty instruction. The loop MUST NOT
+        # crash; subsequent ticks keep running (the re-emit re-attempts).
+        pipeline.tick_on_bar(51)
+        self.assertFalse(pipeline.orch.in_flight)   # mint refused -> no task
+        pipeline.tick_on_bar(52)                    # re-emit still survives
+        pipeline.tick_on_bar(53)
+
+        # A refusal is journaled (the over-qty exit is NOT silently dropped):
+        # an order_state_alert naming the over-qty reduce — the contract-faithful
+        # diagnostic row (no fabricated reduce-side reject reason; the reduce
+        # reject vocab is {no_price_for_cap, broker_rejected}, neither apt).
+        alerts = pipeline.rows_of("orders", "order_state_alert")
+        over = [r for r in alerts if r["note"] == "reduce_qty_exceeds_held"]
+        self.assertTrue(over, "the over-qty exit must journal a refusal alert")
+
+        # NO reduce order ever submitted; NO position close booked.
+        reduce_attempts = [
+            r for r in pipeline.rows_of("orders", "order_submit_attempt")
+            if r["token_kind"] == "reduce_only"]
+        self.assertEqual(reduce_attempts, [])
+        self.assertEqual(pipeline.rows_of("positions", "position_close"), [])
+        # the position is still open and intact.
+        position = pipeline.orch.book.position(opens[0]["position_id"])
+        self.assertEqual(position.status, "open")
+        self.assertEqual(position.qty, Decimal("10"))
+
+    def test_close_path_feeds_sell_side_modeled_fill(self):
+        # EC-1: the strategy close path must compute a SELL-side ModeledFill from
+        # the SAME quote_b it priced reduce_cap on (§J/§K/EX-9), journal a
+        # modeled_execution_fill row for the close order, carry it on the close
+        # task, and pass it to close_position at terminal — so the close
+        # fill_divergence gets a REAL side-aware flag (EX-3) and the
+        # position_close carries a non-null realized_modeled_pnl with sell-side
+        # fees over the MODELED exit proceeds (EX-9). Pre-fix these were dead in
+        # every integrated run (close modeled=None, flag hardcoded "unassessed").
+        from agent.strategies.synthetic import ScriptedSyntheticStrategy
+        strategy = ScriptedSyntheticStrategy([
+            {"on_bar": 2, "action": "open", "symbol": "AAPL", "qty": "10",
+             "limit": "210.00"},
+            {"on_bar": 4, "action": "close", "symbol": "AAPL", "qty": "10",
+             "limit": None}])
+        pipeline = self.make_pipeline(
+            subdir="ec1", strategy=strategy, exit_provider=strategy,
+            fill_policy="immediate_full")
+        for index in range(50, 59):
+            pipeline.tick_on_bar(index)
+            pipeline.tick_quote_only(index)
+
+        opens = pipeline.rows_of("positions", "position_open")
+        closes = pipeline.rows_of("positions", "position_close")
+        self.assertEqual(len(opens), 1)
+        self.assertEqual(len(closes), 1)
+        close_order_id = closes[0]["order_id"]
+        open_order_id = opens[0]["order_id"]
+
+        # TWO modeled_execution_fill rows now: the open buy AND the close sell,
+        # each joined to its own order.
+        modeled = pipeline.rows_of("fills", "modeled_execution_fill")
+        by_order = {r["order_id"]: r for r in modeled}
+        self.assertIn(open_order_id, by_order)
+        self.assertIn(close_order_id, by_order)
+        self.assertEqual(by_order[close_order_id]["model"], "tob_l1_v1")
+
+        # the close fill_divergence carries a REAL side-aware flag (not the dead
+        # hardcoded "unassessed").
+        sell_div = [r for r in pipeline.rows_of("fills", "fill_divergence")
+                    if r["side"] == "sell"]
+        self.assertEqual(len(sell_div), 1)
+        self.assertIn(sell_div[0]["flag"],
+                      ("aligned", "broker_optimistic", "broker_conservative"))
+        self.assertIsNotNone(sell_div[0]["divergence_usd"])
+
+        # the position_close now carries realized_modeled_pnl + sell-side fees
+        # (EX-9: fees over the modeled exit proceeds; a full close of 10 shares
+        # at a >$0 price ⇒ nonzero SEC+TAF).
+        self.assertIsNotNone(closes[0]["realized_modeled_pnl"])
+        self.assertGreater(Decimal(closes[0]["fees_assessed"]["total_usd"]),
+                           Decimal("0"))
+
     # ------------------------------------------------------- §R 13 (deferred)
 
     def test_rules_hash_identical_with_and_without_run_gates_file(self):

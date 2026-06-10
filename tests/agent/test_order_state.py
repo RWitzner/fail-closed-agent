@@ -336,6 +336,25 @@ class TestFillDelta(unittest.TestCase):
         delta = fill_delta(s1, s2)
         self.assertIsInstance(delta.delta_cost_usd, BrokerUSD)
 
+    def test_delta_cost_immune_to_corrupted_global_context(self):
+        """DJ-hardening (M4-DET-1 ambient-immunity precedent): the integrated-
+        notional product is computed under a pinned prec=28 context, so a
+        globally-mutated Decimal context cannot silently truncate delta_cost.
+        Under a hostile prec=3 ambient context the unpinned product 70x100.18
+        would round to 7.01E+3; the pinned guard keeps it exact at 4009.60."""
+        import decimal
+        _, s1, s2, _ = self._sequence()
+        baseline = fill_delta(s1, s2).delta_cost_usd
+        self.assertEqual(baseline, Decimal("4009.60"))
+        saved = decimal.getcontext()
+        try:
+            decimal.setcontext(decimal.Context(prec=3))  # hostile: would truncate
+            poisoned = fill_delta(s1, s2).delta_cost_usd
+        finally:
+            decimal.setcontext(saved)
+        self.assertEqual(poisoned, baseline)
+        self.assertEqual(poisoned, Decimal("4009.60"))
+
     def test_filled_qty_regression_is_order_invalid(self):
         _, s1, s2, _ = self._sequence()
         result = fill_delta(s2, s1)

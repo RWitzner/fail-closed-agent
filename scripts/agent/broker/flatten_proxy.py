@@ -25,10 +25,21 @@ kill loop into ``failed[]`` -> ``residual`` -> ``retry_residual`` once quotable;
 NEVER a bare market order (FD-M5-1). The exception's message string IS the
 journaled reason. ``cap_bps`` is injected by the orchestrator (FLATTEN_CAP_BPS —
 M5C-B6 keeps this module free of `execution_config`).
+
+SF-2 (token hygiene): a raised ``FlattenUnpriced`` would otherwise STRAND the
+reduce-only authorization the M0 actuator already minted (the registry leaks it
+across ``retry_residual`` passes). The proxy may NOT import
+``agent.execution_preflight`` (§3 import row: [agent.broker.base, order_pricing,
+exec_reasons]), so the void is dependency-INJECTED: an optional ``void_token``
+callable (default ``None`` ⇒ no-op so existing construction/tests are unchanged)
+is invoked as ``void_token(token, "no_price_for_cap")`` before every raise. The
+orchestrator — which legitimately imports ``execution_preflight`` — passes
+``execution_preflight.void_token`` when it builds the proxy (§M.6);
+``"no_price_for_cap"`` is a legal void reason (EXTRA_REJECT_REASONS).
 """
 from dataclasses import replace
 from decimal import Decimal
-from typing import Mapping
+from typing import Callable, Mapping, Optional
 
 from agent.broker.base import OrderIntent
 from agent.exec_reasons import ExecError
@@ -45,7 +56,12 @@ class PriceCappedFlattenBroker:
                  instrument_ids: Mapping[str, int],   # symbol -> instrument_id,
                  # injected by the orchestrator from universe ∪ held positions
                  # (M5C-S8: QuoteView.latest needs both; kill intents carry symbol only)
-                 cap_bps: Decimal) -> None:
+                 cap_bps: Decimal,
+                 # SF-2: optional injected token-void callable (the proxy may not
+                 # import execution_preflight — §3); the orchestrator passes
+                 # execution_preflight.void_token (§M.6). None ⇒ no-op default.
+                 void_token: Optional[Callable[[object, str], None]] = None,
+                 ) -> None:
         if (isinstance(cap_bps, float) or not isinstance(cap_bps, Decimal)
                 or not cap_bps.is_finite()):
             raise ExecError("cap_bps must be a finite Decimal (S2)")
@@ -53,17 +69,27 @@ class PriceCappedFlattenBroker:
         self._quote_view = quote_view
         self._instrument_ids = dict(instrument_ids)
         self._cap_bps = cap_bps
+        self._void_token = void_token
+
+    def _unpriced(self, token):
+        """SF-2: void the minted reduce authorization (if a voider was injected)
+        BEFORE raising, so no token leaks into the next retry_residual pass.
+        ``"no_price_for_cap"`` is the only M5 flatten reject reason (FD-M5-1) and
+        is a legal void reason (EXTRA_REJECT_REASONS)."""
+        if self._void_token is not None:
+            self._void_token(token, "no_price_for_cap")
+        raise FlattenUnpriced("no_price_for_cap")
 
     def submit_order(self, intent: OrderIntent, token):
         instrument_id = self._instrument_ids.get(intent.symbol)
         if instrument_id is None:
-            raise FlattenUnpriced("no_price_for_cap")   # M5C-S8: never a gate
+            self._unpriced(token)   # M5C-S8: never a gate
         quote = self._quote_view.latest(intent.symbol, instrument_id)  # STALE ACCEPTED
         if quote is None:
-            raise FlattenUnpriced("no_price_for_cap")
+            self._unpriced(token)
         cap = reduce_cap(side=intent.side, quote=quote, cap_bps=self._cap_bps)
         if cap is None:
-            raise FlattenUnpriced("no_price_for_cap")
+            self._unpriced(token)
         # The reduce authorization binds symbol/side/qty ONLY, so the SAME token
         # stays valid; the inner broker's submit_order consumes it.
         priced = replace(intent, limit_price=cap)

@@ -370,6 +370,53 @@ class TestCtorModes(unittest.TestCase):
     def test_paper_host_constant_is_pinned(self):
         self.assertEqual(_PAPER_HOST, "https://paper-api.alpaca.markets")
 
+    def test_build_real_client_reads_the_frozen_secret_key_field(self):
+        """CC-1: _build_real_client must read the §O.2 / secrets_runtime frozen
+        credential key `secret_key` (NOT `secret`). The deferred live path is not
+        exercised by the offline suite, so this stubs the SDK to drive the one
+        line that consumes the credential dict and asserts no KeyError + the value
+        flows through. The fake `alpaca` modules are removed afterward so the
+        sys.modules purity test stays honest."""
+        for name in [n for n in sys.modules if n == "alpaca"
+                     or n.startswith("alpaca.")]:
+            del sys.modules[name]
+
+        def _restore():
+            for name in [n for n in sys.modules if n == "alpaca"
+                         or n.startswith("alpaca.")]:
+                del sys.modules[name]
+        self.addCleanup(_restore)
+
+        recorded = {}
+
+        class _FakeTradingClient:
+            def __init__(self, **kwargs):
+                recorded.update(kwargs)
+
+        def _mod(name, **attrs):
+            m = types.ModuleType(name)
+            for k, v in attrs.items():
+                setattr(m, k, v)
+            sys.modules[name] = m
+            return m
+
+        _mod("alpaca")
+        _mod("alpaca.common")
+        _mod("alpaca.common.exceptions", APIError=type("APIError", (Exception,), {}))
+        _mod("alpaca.trading")
+        _mod("alpaca.trading.client", TradingClient=_FakeTradingClient)
+        _mod("alpaca.trading.enums", OrderSide=object, QueryOrderStatus=object,
+             TimeInForce=object)
+        _mod("alpaca.trading.requests", GetOrdersRequest=object,
+             LimitOrderRequest=object)
+
+        loader = lambda: {"key_id": "k", "secret_key": "s-secret",  # noqa: E731
+                          "base_url": _PAPER_HOST}
+        AlpacaPaperBroker(credentials_loader=loader)   # must not KeyError
+        self.assertEqual(recorded["secret_key"], "s-secret")
+        self.assertEqual(recorded["api_key"], "k")
+        self.assertTrue(recorded["paper"])
+
 
 # --------------------------------------------------------------------------- #
 # cancel_order / order_status: tokenless pass-through (FD-M5-23).

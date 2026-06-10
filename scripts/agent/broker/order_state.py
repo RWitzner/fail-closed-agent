@@ -23,11 +23,18 @@ coerced).
 duty over the deltas this module emits.
 """
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Context, Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from typing import Mapping, Optional, Protocol, Union, runtime_checkable
 
 from agent.exec_reasons import ExecError, FILL_SOURCES, ORDER_STATES, TERMINAL_STATES
 from agent.serializer import BrokerUSD
+
+# Pinned Decimal context for the integrated-notional product (M4-DET-1 ambient-
+# immunity precedent; mirrors exec_ledger's prec=28 for cum_notional_after, so the
+# telescoping invariant Σ delta_cost == final qty x avg is immune to a globally
+# mutated context). The products are exact-representable, so this only guards the
+# pathological case of a corrupted global context.
+_DELTA_CTX = Context(prec=28, rounding=ROUND_HALF_EVEN)
 
 # FROZEN; total over the 16 verified Alpaca status strings (§0.2 A4). Any string
 # not in the map -> "unknown". unknown is NEVER terminal, never filled: the watcher
@@ -286,10 +293,11 @@ def fill_delta(prev: Optional[BrokerOrder],
     if cur.filled_qty == prev_qty:
         return None   # unchanged (incl. avg-only correction) — caller keeps prev
 
-    prev_cost = (prev.filled_qty * prev.filled_avg_price
-                 if prev is not None and prev.filled_qty > 0 else _ZERO)
     delta_qty = cur.filled_qty - prev_qty
-    delta_cost = cur.filled_qty * cur.filled_avg_price - prev_cost
+    with localcontext(_DELTA_CTX):
+        prev_cost = (prev.filled_qty * prev.filled_avg_price
+                     if prev is not None and prev.filled_qty > 0 else _ZERO)
+        delta_cost = cur.filled_qty * cur.filled_avg_price - prev_cost
     if delta_cost <= 0:
         return OrderInvalid(reason="nonpositive_delta_cost", raw=raw)   # EX-10
     return FillDelta(

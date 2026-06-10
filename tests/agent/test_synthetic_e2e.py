@@ -93,10 +93,17 @@ class TestSyntheticGoldenE2E(unittest.TestCase):
                          ["filled", "filled"])
         fills = self.pipeline.rows_of("fills", "broker_fill")
         self.assertEqual(len(fills), 4)          # two slices per order
+        # EC-1: a modeled_execution_fill for BOTH the open buy AND the close
+        # sell (the close path now feeds a sell-side ModeledFill — §J/§K/EX-9).
         self.assertEqual(
-            len(self.pipeline.rows_of("fills", "modeled_execution_fill")), 1)
-        self.assertEqual(
-            len(self.pipeline.rows_of("fills", "fill_divergence")), 2)
+            len(self.pipeline.rows_of("fills", "modeled_execution_fill")), 2)
+        divergences = self.pipeline.rows_of("fills", "fill_divergence")
+        self.assertEqual(len(divergences), 2)
+        # EC-1/EX-3: the close (sell) divergence now carries a REAL side-aware
+        # flag (not the dead hardcoded "unassessed").
+        sell_div = [row for row in divergences if row["side"] == "sell"]
+        self.assertEqual(len(sell_div), 1)
+        self.assertNotEqual(sell_div[0]["flag"], "unassessed")
         opens = self.pipeline.rows_of("positions", "position_open")
         closes = self.pipeline.rows_of("positions", "position_close")
         self.assertEqual(len(opens), 1)

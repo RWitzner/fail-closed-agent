@@ -372,6 +372,68 @@ class TestProxyDrillUnit(unittest.TestCase):
         retry = switch.retry_residual(proxy, portfolio_fixture("long_short"))
         self.assertEqual(retry.residual, ())
 
+    def test_unpriceable_flatten_voids_its_reduce_token_no_leak(self):
+        # SF-2: an unpriceable flatten (unmapped / no quote / no cap) MUST void
+        # the already-minted reduce-only authorization before raising
+        # FlattenUnpriced — otherwise the token leaks across retry_residual
+        # passes. The proxy may not import execution_preflight (§3 import row),
+        # so the void path is dependency-injected; the orchestrator passes
+        # execution_preflight.void_token (§M.6). "no_price_for_cap" is a legal
+        # void reason (EXTRA_REJECT_REASONS).
+        self.addCleanup(purge_open_authorizations)
+        purge_open_authorizations()
+        before = dict(execution_preflight._authorizations)
+
+        class _Held:
+            qty = Decimal("5")
+            symbol = "MSFT"
+
+        # If the fix is absent the reduce token leaks; drop any authorization
+        # this test introduced on teardown so a failing run never poisons
+        # sibling suites' registry assertions.
+        def _drop_leaked(baseline=before):
+            for nonce in list(execution_preflight._authorizations):
+                if nonce not in baseline:
+                    del execution_preflight._authorizations[nonce]
+        self.addCleanup(_drop_leaked)
+
+        # Unmapped symbol => no_price_for_cap on the FIRST proxy check.
+        fake = _fake(HeldQuoteView(), {"AAPL": _AAPL_ID})
+        proxy = PriceCappedFlattenBroker(
+            inner=fake, quote_view=HeldQuoteView(),
+            instrument_ids={"AAPL": _AAPL_ID}, cap_bps=FLATTEN_CAP_BPS,
+            void_token=execution_preflight.void_token)
+        intent = OrderIntent(symbol="MSFT", side="sell", qty=Decimal("5"),
+                             is_reducing=True, intent_id="flatten-MSFT")
+        token = execution_preflight.mint_reduce_only_token(_Held(), intent)
+        # the mint registered exactly one reduce_only authorization.
+        self.assertEqual(
+            [a.kind for a in execution_preflight._authorizations.values()
+             if a not in before.values()],
+            ["reduce_only"])
+
+        with self.assertRaises(FlattenUnpriced) as ctx:
+            proxy.submit_order(intent, token)
+        self.assertEqual(str(ctx.exception), "no_price_for_cap")
+
+        # SF-2: the reduce authorization is GONE — no registry leak.
+        self.assertEqual(dict(execution_preflight._authorizations), before)
+        self.assertIsNone(execution_preflight.authorization_of(token))
+
+    def test_unpriceable_flatten_without_void_token_is_a_noop_default(self):
+        # The injected callable defaults to None (no-op): existing constructions
+        # and the M0/M4 unit drills (which mint NO token before the proxy) keep
+        # working — SF-2's fix never changes the default surface.
+        fake = _fake(HeldQuoteView(), {"AAPL": _AAPL_ID})
+        proxy = PriceCappedFlattenBroker(
+            inner=fake, quote_view=HeldQuoteView(),
+            instrument_ids={"AAPL": _AAPL_ID}, cap_bps=FLATTEN_CAP_BPS)
+        intent = OrderIntent(symbol="MSFT", side="buy", qty=Decimal("5"),
+                             is_reducing=True, intent_id="flatten-MSFT")
+        with self.assertRaises(FlattenUnpriced) as ctx:
+            proxy.submit_order(intent, token=None)
+        self.assertEqual(str(ctx.exception), "no_price_for_cap")
+
     def test_stale_inputs_reflects_account_store_get_freshness(self):
         # M5C-B5: trigger's `account` comes straight from AccountStore.get — the
         # journaled stale_inputs is the REAL freshness verdict (strict-'>' TTL
@@ -682,6 +744,114 @@ class TestKillSequenceOrchestrator(unittest.TestCase):
                          [("monitoring", "flattening"),
                           ("flattening", "halted")])
         _no_open_authorizations(self)              # voided at §M.6 step 2
+
+    def test_kill_with_strategy_close_in_flight_reconciles_single_flatten(self):
+        """LC-2: a RiskKillSwitch trip while a strategy CLOSE (reduce sell) order
+        is non-terminal. The §M.6 sequence MUST reconcile to a SINGLE flatten of
+        record (never two concurrent broker sells on one position), the loop MUST
+        survive (the superseded close's terminal poll cannot crash on an
+        already-closed position), and the held position MUST end flat.
+
+        Driven via the prompt's repro: open a position, install a close
+        _OrderTask in 'watch' for it (a resting non-marketable reduce sell at the
+        broker), trigger_kill — pre-fix this closed the position AND left the
+        close task alive, so its next terminal poll raised
+        `ExecError: position ... is closed (terminal)` and crashed on_tick."""
+        from agent.execution_preflight import (
+            DecisionStamp,
+            mint_reduce_only_token,
+        )
+        from agent.orchestrator import _OrderTask
+        from agent.broker.order_state import fill_delta, parse_order_payload
+
+        strategy = ScriptedSyntheticStrategy([
+            {"on_bar": 1, "action": "open", "symbol": "AAPL", "qty": "10",
+             "limit": "210.00"}])
+        provider = FakeAccountProvider(positions_payloads=[[
+            {"symbol": "AAPL", "qty": "10", "market_value": "2000.00",
+             "instrument_id": _AAPL_ID}]])
+        pipeline = self.make_pipeline(
+            "close-inflight", strategy=strategy, account_provider=provider,
+            fill_policy="immediate_full")
+        orch = pipeline.orch
+        events = self._record_broker_calls(orch.broker)
+
+        # open 10 AAPL (immediate_full fills the buy at the ask on the ack).
+        pipeline.tick_on_bar(50)
+        pipeline.tick_quote_only(50)
+        opens = pipeline.rows_of("positions", "position_open")
+        self.assertEqual(len(opens), 1)
+        pos_id = opens[0]["position_id"]
+        position = orch.book.position(pos_id)
+        self.assertEqual(position.status, "open")
+        self.assertEqual(position.qty, Decimal("10"))
+
+        # install a resting strategy CLOSE in 'watch' for that position: a sell
+        # with a limit ABOVE the bid is non-marketable at the FakeBroker, so it
+        # rests 'accepted' (a genuine non-terminal reduce on the wire).
+        quote_b = orch._quote_view.latest("AAPL", _AAPL_ID)
+        rest_limit = (quote_b.bid + Decimal("5.0000"))
+        close_order_id = "synthetic-o-closeinflight"
+        intent = OrderIntent(
+            symbol="AAPL", side="sell", qty=Decimal("10"),
+            order_type="marketable_limit", tif="day", limit_price=rest_limit,
+            is_reducing=True, intent_id=close_order_id)
+        token = mint_reduce_only_token(position, intent)
+        ack = orch.broker.submit_order(intent, token)
+        self.assertEqual(parse_order_payload(ack, source="fake").state,
+                         "accepted")               # rests, non-terminal
+        stamp = DecisionStamp(decision_id="d-closeinflight",
+                              decision_ts_utc=quote_b.ts_recv_utc,
+                              decision_seen_at_ms=orch._clock.now_ms(),
+                              quote_a=quote_b)
+        close_task = _OrderTask(
+            kind="close", state="watch", decision_id="d-closeinflight",
+            symbol="AAPL", instrument_id=_AAPL_ID,
+            strategy_id=strategy.strategy_id, side="sell", qty=Decimal("10"),
+            stamp=stamp, session_date_et="2026-06-15", order_id=close_order_id,
+            position_id=pos_id, close_reason="strategy_exit",
+            capped_limit=rest_limit, quote_b=quote_b,
+            bound_epoch=quote_b.reconnect_epoch,
+            last_poll_ms=orch._clock.now_ms())
+        orch._task = close_task
+        submit_count_before = len([e for e in events if e[0] == "submit"])
+
+        # THE KILL — with the strategy close non-terminal in flight.
+        orch.trigger_kill("drill")
+
+        # (1) loop survives + position ends flat after the kill.
+        self.assertEqual(orch.risk_kill.state, "halted")
+        self.assertEqual(orch.book.position(pos_id).status, "closed")
+
+        # (2) the superseded close task is RETIRED (cleared) — not left alive to
+        # crash the next terminal poll.
+        self.assertFalse(orch.in_flight)
+
+        # (3) the in-flight close was cancelled (cause=kill_trip) BEFORE any new
+        # sell — single flatten of record, no concurrent double-sell.
+        cancels = pipeline.rows_of("orders", "post_submit_cancel_attempt")
+        self.assertIn(
+            ("kill_trip", close_order_id),
+            [(c["cause"], c["order_id"]) for c in cancels])
+        # the cancelled reduce is terminal at the broker (no more fills).
+        self.assertEqual(orch.broker.order_status(close_order_id)["status"],
+                         "canceled")
+        # exactly ONE new broker sell after the kill: the flatten of record.
+        new_submits = [e for e in events[submit_count_before:]
+                       if e[0] == "submit"]
+        self.assertEqual([getattr(v, "intent_id", v) for _, v in new_submits],
+                         ["flatten-AAPL"])
+
+        # (4) the kill flatten booked exactly ONE position_close of record.
+        closes = pipeline.rows_of("positions", "position_close")
+        self.assertEqual([(c["reason"], c["position_id"]) for c in closes],
+                         [("kill_flatten", pos_id)])
+
+        # (5) the loop genuinely survives a SUBSEQUENT tick (the superseded close
+        # would otherwise be terminal-polled here and crash on the closed pos).
+        pipeline.tick_quote_only(50, advance_ms=500, shift_ms=1400)
+        self.assertFalse(orch.in_flight)
+        self.assertEqual(orch.book.position(pos_id).status, "closed")
 
 
 if __name__ == "__main__":

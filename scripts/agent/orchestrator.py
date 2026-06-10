@@ -986,7 +986,8 @@ class Orchestrator:
         instrument_ids = dict(self._instrument_ids)  # universe ∪ held (M5C-S8)
         return PriceCappedFlattenBroker(
             inner=self.broker, quote_view=self._quote_view,
-            instrument_ids=instrument_ids, cap_bps=FLATTEN_CAP_BPS)
+            instrument_ids=instrument_ids, cap_bps=FLATTEN_CAP_BPS,
+            void_token=void_token)   # SF-2: void a stranded reduce auth on raise
 
     def _flatten_portfolio(self, now_ms: int):
         portfolio = self._portfolio_read(now_ms)
@@ -1003,10 +1004,25 @@ class Orchestrator:
     def _kill_sequence(self, cause: str, evaluation, now_ms: int) -> None:
         """§M.6 (FD-M5-25, rev 2): cancel-opens -> void tokens -> trigger with
         the price-capped flatten proxy -> book the resulting closes."""
-        # (1) best-effort cancel EVERY open order.
+        # (1) best-effort cancel EVERY open order (cause=kill_trip) so nothing
+        # can still change exposure mid-flatten.
         task = self._task
         if task is not None and task.state == "watch":
             self._attempt_cancel(task, "kill_trip")
+        # (1b) LC-2: a non-terminal strategy CLOSE (reduce sell) in flight is a
+        # SELL on the same position the kill flatten is about to flatten. We
+        # cancelled it above (a single flatten of record — never two concurrent
+        # broker sells on one position; FD-M5-26/§M.6); now RETIRE the superseded
+        # close task so step 6 never terminal-polls it into
+        # `PaperBook.close_position` on the position the kill flatten just closed
+        # (which would raise "position ... is closed (terminal)" and crash the
+        # loop). The position is flattened by the kill (book-of-record close);
+        # any late fill on the now-cancelled close is the M6 reconcile's job
+        # (the broker is position-of-record). An OPEN task is kept: it is a BUY
+        # (never a double-sell) and must survive for the M5C-S11
+        # `late_fill_post_kill` tripwire.
+        if task is not None and task.kind == "close":
+            self._task = None
         # (2) void any minted-unconsumed open token (hygiene).
         for token, token_task in list(self._outstanding_open_tokens):
             void_token(token, "kill_generation_changed")
@@ -1536,18 +1552,40 @@ class Orchestrator:
         if filled > 0 and consistent:
             self._fill_divergence(task, parsed, total_cost, filled)
             if task.kind == "close" and task.position_id is not None:
-                self._book.close_position(
-                    position_id=task.position_id, order_id=task.order_id,
-                    fills=list(task.deltas), modeled=None,
-                    reason=task.close_reason or "strategy_exit",
-                    decision_id=task.decision_id)
+                if self._position_open(task.position_id):
+                    self._book.close_position(
+                        position_id=task.position_id, order_id=task.order_id,
+                        fills=list(task.deltas), modeled=task.modeled,
+                        reason=task.close_reason or "strategy_exit",
+                        decision_id=task.decision_id)
+                else:
+                    # LC-2 (defense-in-depth): the target position was already
+                    # closed (e.g. a kill flatten superseded this close, or M6
+                    # reconciled it). Closing again would raise "position ... is
+                    # closed (terminal)" and crash on_tick — log a benign
+                    # reconcile note and skip (the broker stays position-of-
+                    # record; M6 folds any residual fill).
+                    self._exec_ledger.record_order_state_alert(
+                        broker_order_id=parsed.broker_order_id,
+                        raw_status=parsed.raw_status,
+                        note="close_superseded_position_closed",
+                        order_id=task.order_id)
         self._task = None
+
+    def _position_open(self, position_id: str) -> bool:
+        position = self._book._positions.get(position_id)
+        return position is not None and position.status == "open"
 
     def _fill_divergence(self, task: _OrderTask, parsed: BrokerOrder,
                          total_cost: Decimal, filled: Decimal) -> None:
-        if task.kind == "open" and task.modeled is not None:
+        # EX-3: side-aware divergence whenever a modeled basis exists — for the
+        # OPEN buy AND (EC-1) the strategy CLOSE sell. `broker_cost_usd` is the
+        # broker fill notional on EITHER side (sale PROCEEDS on a sell — the sign
+        # asymmetry is handled inside assess_divergence). modeled None ⇒
+        # unassessed (a kill-flatten close, which carries no modeled fill).
+        if task.modeled is not None:
             result = assess_divergence(
-                side="buy", broker_cost_usd=BrokerUSD(total_cost),
+                side=parsed.side, broker_cost_usd=BrokerUSD(total_cost),
                 filled_qty=filled, modeled=task.modeled)
             modeled_over_filled = None
             if result.divergence_usd is not None:
@@ -1567,7 +1605,7 @@ class Orchestrator:
             if task.position_id is not None:
                 self._book.set_divergence_flag(task.position_id, result.flag)
         else:
-            # close path (resolution 4): no modeled basis -> unassessed.
+            # no modeled basis (kill-flatten close) -> unassessed.
             self._exec_ledger.record_fill_divergence(
                 side=parsed.side, broker_cost_usd=BrokerUSD(total_cost),
                 modeled_cost_usd=None, divergence_usd=None,
@@ -1754,7 +1792,23 @@ class Orchestrator:
             symbol=instruction.symbol, side="sell", qty=instruction.qty,
             order_type="marketable_limit", tif="day", limit_price=cap,
             is_reducing=True, intent_id=order_id)
-        token = mint_reduce_only_token(position, intent)
+        # LC-1/SF-1: an over-qty (or otherwise position-invalid) ExitInstruction
+        # makes the reduce-only mint raise PreflightRejected ("may flatten, never
+        # flip"). The reduce path NEVER gains a gate (FD-M4-3), but a bad
+        # instruction must not crash the loop: refuse it with a diagnostic
+        # order_state_alert and return. self._task is still None here (set after
+        # the mint), so the tick loop survives and the next tick re-scans.
+        # An order_state_alert carries a free-form `note` (§P.2) — the
+        # contract-faithful surface for this anomaly: the reduce-side reject
+        # vocabulary is {no_price_for_cap, broker_rejected} (§2.1/§M.7), and
+        # neither fits a qty>held refusal, so we do NOT fabricate a reject reason.
+        try:
+            token = mint_reduce_only_token(position, intent)
+        except PreflightRejected:
+            self._exec_ledger.record_order_state_alert(
+                broker_order_id=None, raw_status="reduce_only_mint_rejected",
+                note="reduce_qty_exceeds_held", order_id=order_id)
+            return
         self._exec_ledger.record_order_submit_attempt(
             client_order_id=order_id, preflight_id=None, risk_verdict_id=None,
             strategy_id=strategy_id, symbol=instruction.symbol,
@@ -1766,6 +1820,15 @@ class Orchestrator:
             kill_generation=self._risk_kill.generation,
             quote_b=self._provenance(quote_b), decision_id=decision_id,
             order_id=order_id)
+        # EC-1 (§J/§K/EX-9, EX-3): compute a SELL-side ModeledFill from the SAME
+        # quote_b (and cap) the close priced reduce_cap on — never re-shopped
+        # after broker fills (no hindsight; §I). Journal its modeled_execution_
+        # fill row, carry it on the close task, and pass it to close_position at
+        # terminal so realized_modeled_pnl reflects the EX-9 sell fee (notional =
+        # the MODELED exit proceeds) and the close fill_divergence gets a real
+        # side-aware flag (EX-3) instead of the dead hardcoded "unassessed".
+        modeled = self._close_modeled_fill(quote_b, cap, instruction.qty,
+                                           order_id, decision_id, now_ms)
         stamp = DecisionStamp(decision_id=decision_id,
                               decision_ts_utc=ctx.snapshot.decision_ts_utc,
                               decision_seen_at_ms=now_ms, quote_a=quote_b)
@@ -1776,7 +1839,7 @@ class Orchestrator:
             strategy_id=strategy_id, side="sell", qty=instruction.qty,
             stamp=stamp, session_date_et=ctx.snapshot.session_date_et,
             order_id=order_id, position_id=position.position_id,
-            close_reason=instruction.reason, capped_limit=cap,
+            close_reason=instruction.reason, capped_limit=cap, modeled=modeled,
             quote_b=quote_b, bound_epoch=quote_b.reconnect_epoch,
             last_poll_ms=now_ms)
         self._task = task
@@ -1786,6 +1849,38 @@ class Orchestrator:
             self._submit_recovery(task, err)
             return
         self._after_submit(task, result, quote_b, None, now_ms)
+
+    def _close_modeled_fill(self, quote_b, cap, qty, order_id, decision_id,
+                            now_ms: int):
+        """EC-1: the SELL-side ModeledFill for a strategy close, computed from
+        quote_b (the quote the close priced reduce_cap on) and the close cap —
+        symmetric with the open-side block in `_after_submit`. Journals the
+        `modeled_execution_fill` row and returns the bound ModeledFill (carried
+        on the close task and passed to close_position at terminal)."""
+        quote_b_verdict = evaluate_quote(
+            quote_b, now_ms=now_ms,
+            spread_bps_max=self._exec_config.spread_bps_max,
+            staleness_ms_max=self._exec_config.quote_staleness_ms_max)
+        modeled = model_fill(side="sell", qty=qty, capped_limit=cap,
+                             quote_b=quote_b, quote_b_verdict=quote_b_verdict,
+                             depth=None, now_ms=now_ms)
+        modeled = bind_modeled_fill_id(modeled, order_id=order_id)
+        notional = (modeled.modeled_cost_usd
+                    if modeled.modeled_cost_usd is not None else cap * qty)
+        fees = fees_for(side="sell", qty=qty, notional=Decimal(notional))
+        self._exec_ledger.record_modeled_execution_fill(
+            modeled_fill_id=modeled.modeled_fill_id, model=modeled.model,
+            realism_class=modeled.realism_class,
+            requested_qty=modeled.requested_qty,
+            modeled_fillable_qty=modeled.modeled_fillable_qty,
+            modeled_vwap=modeled.modeled_vwap, worst_price=modeled.worst_price,
+            touch_price=modeled.touch_price,
+            levels_consumed=modeled.levels_consumed,
+            slippage_vs_mid_bps=modeled.slippage_vs_mid_bps,
+            modeled_cost_usd=modeled.modeled_cost_usd, fees_assumed=fees,
+            quote=dict(modeled.quote), reasons=list(modeled.reasons),
+            decision_id=decision_id, order_id=order_id)
+        return modeled
 
     # -- step 9: marks --------------------------------------------------------------------
 
