@@ -63,14 +63,17 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   → 4-lens adversarial review (13 agents, repro-gated: 8 confirmed defects — 2 majors in the freeze
   mechanics — all fixed TDD; see the contract's §R harden log). Committed `risk_rules.json` caps stay 0;
   every `can_open` on the committed config terminates at `run_gates` (S1 extended).
-- **M5 paper-exec: DESIGN ARTIFACTS READY, build NOT started (stopped here on Robin's instruction).**
-  3-architect panel done (incl. Alpaca API facts verified against docs.alpaca.markets) → contract draft
-  `docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md` (1616 lines, DRAFT FOR CRITIC PASS) →
-  critic pass PARTIAL: repo-facts lens complete (6 findings incl. 1 blocker: the FakeBroker synthetic wall
-  must exempt reducing intents), safety + execution-realism lenses complete (findings in the session's
-  workflow outputs), buildability lens MISSING (died on session limit). **Resume point:** re-run the
-  buildability critic, apply all findings (the saved findings JSONs land in the next session's context via
-  the M5 contract + this note), revise → READY-TO-BUILD → TDD build per the M3/M4 discipline.
+- **M5 paper-exec: contract rev 2 READY-TO-BUILD (2026-06-10); TDD build IN PROGRESS.**
+  3-architect panel (Alpaca API facts verified against docs.alpaca.markets) → contract draft → FULL
+  4-lens critic pass (repo-facts 6, safety 12, execution-realism 12, buildability 18 = 48 findings,
+  2 of them the same blocker: the FakeBroker synthetic wall blocked kill-flatten reductions; 1 more
+  blocker: the cross-stream seq ordering assertion was unbuildable) → ALL 48 applied in
+  `docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md` rev 2 (§V resolution log) →
+  independent re-critique verified all 48 resolved + found 5 revision-introduced defects (RC-1 major:
+  per-tick close ids removed the accidental double-sell backstop ⇒ FD-M5-21 made global; RC-2…5
+  minor) — all applied. Findings archive:
+  `docs/superpowers/reviews/2026-06-10-M5-contract-critic-findings.json` (incl. the re-critique).
+  Next: TDD build per the M3/M4 discipline (build → adversarial review rounds → harden).
 
 ## Locked decisions
 

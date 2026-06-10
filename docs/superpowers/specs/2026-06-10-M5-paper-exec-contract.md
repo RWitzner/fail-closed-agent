@@ -1,6 +1,11 @@
-# M5 (Paper-exec hybrid) — FROZEN CONTRACT (DRAFT FOR CRITIC PASS)
+# M5 (Paper-exec hybrid) — FROZEN CONTRACT (rev 2 — READY-TO-BUILD)
 
-> **Status:** DRAFT FOR CRITIC PASS, 2026-06-10. Synthesized from THREE independent architect designs
+> **Status:** rev 2, 2026-06-10, **READY-TO-BUILD** — the 4-lens critic pass is COMPLETE (repo-facts,
+> safety, execution-realism, buildability ×2: 48 findings in
+> `docs/superpowers/reviews/2026-06-10-M5-contract-critic-findings.json`), EVERY finding is applied
+> (resolution log in §V), and an INDEPENDENT re-critique verified all 48 resolutions and contributed
+> 5 revision-introduced defects (RC-1 major: the global in-flight close guard; RC-2…RC-5 minor) —
+> all applied in this same revision (§V bottom). Synthesized from THREE independent architect designs
 > (execution-correctness / fail-closed-safety / integration-runnability lenses) around Robin's locked
 > decisions LD-M5-1…10 (restated as FD-M5-1…10 below; every cross-design disagreement is resolved
 > explicitly in §1 with a one-line rationale). Mirrors the M4 contract
@@ -8,9 +13,9 @@
 > APIs, code skeletons, frozen vocabularies, journal row shapes, deterministic ids, fixtures, and a
 > test→invariant map. A build agent TDDs from this without relitigating.
 >
-> **Branch:** `m3-signal` @ `f9ec7c6` + the frozen M4 contract treated as the real API (the M4 build is
-> in flight under `scripts/agent/risk/` — this contract relies on the M4 CONTRACT, never on in-flight
-> file contents). Baseline suite: 700 tests green at `f9ec7c6` (M4 build adds its own).
+> **Branch:** `m3-signal` @ `7e0a8ad` — the M4 build is now COMMITTED (`7bf8df2`, 896 tests green)
+> and `scripts/agent/risk/` is the REAL API this contract builds against (the M4 contract remains the
+> spec authority; M5C-6). Baseline suite: 896 tests green at `7e0a8ad` (M5 adds its own).
 
 ## 0. Scope, ground rules, verified facts
 
@@ -56,7 +61,7 @@ shorts (post-M5 / short milestone), `AlpacaLiveBroker` + two-key consumption (M8
   broker number wins (M6 reconciles and emits adjustment rows); the modeled fill is a label and never
   back-voids or overrides a `broker_fill` row.
 
-### 0.1 Verified repo facts this contract builds on (file:line at `f9ec7c6`)
+### 0.1 Verified repo facts this contract builds on (file:line at `7e0a8ad` — M4 committed; M5C-6)
 
 | Fact | Source |
 |---|---|
@@ -80,7 +85,7 @@ shorts (post-M5 / short milestone), `AlpacaLiveBroker` + two-key consumption (M8
 | `CalibrationProbe` ctor seams (`config, calendar, market_state_cache, feature_view, quote_view, ledger, climatology, run_id, clock`) + `on_bar_complete(...)`; `QuoteView` Protocol (`latest(symbol, instrument_id)`) | `scripts/agent/strategies/calibration_probe.py:94-117,214` |
 | Resolver: `resolve_due(decision_rows, *, now_utc)`; `AsOfClimatology` | `scripts/agent/calibration.py:52,189-195` |
 | `MidBar.watermark_utc` (FD-2 anti-lookahead), `resample_midbars(quote_rows, ...)`, `MidBarSeriesReader` as-of/watermark-gated reads | `scripts/agent/bar_series.py:39-49,103,203,275-292` |
-| `FeatureView.refresh(symbol, instrument_id, as_of_utc)` → `FeatureSnapshot` | `scripts/agent/feature_engine.py:51,183-192` |
+| `FeatureView.refresh(*, symbol, instrument_id, as_of_utc)` → `FeatureSnapshot` (**keyword-only** — §M.3 step 4's call site is written keyword-only; M5C-B4) | `scripts/agent/feature_engine.py:51,183-192` |
 | M2 `Verdict{symbol,instrument_id,session_state,tradability,halt,luld,ssr,two_sided_nbbo,short_allowed,reasons,ca_blackout,session_date_et}`; `SessionState.RTH/AUCTION`; `Tradability` closed vocab; `MarketStateError` on out-of-vocab | `scripts/agent/market_state.py:29-37,77-99,185-209` |
 | `MarketStateCache.get` strict-`>` TTL, stale/missing ⇒ `safe_default_verdict` with `reasons=("cache_stale_safe_default",)`; `DEFAULT_FRESHNESS_TTL_MS=2000`; ctor clamp shorten-only | `scripts/agent/market_state_cache.py:34,52-99` |
 | Calendar seam: `ScheduleProvider` Protocol, `FixtureScheduleProvider` raises `UnknownSessionDate` out-of-coverage, `MarketCalendar.phase_at/session_date_for/schedule_for/calendar_pin` | `scripts/agent/market_calendar.py:56-85,167-225,261-285` |
@@ -89,12 +94,12 @@ shorts (post-M5 / short milestone), `AlpacaLiveBroker` + two-key consumption (M8
 | Recorder event rows: quote rows carry `bid_px/bid_sz/ask_px/ask_sz` + provenance prefix (`schema, dataset, instrument_id, symbol, vendor_seq, ts_event_utc, ts_recv_utc, reconnect_epoch`); depth rows carry `bids/asks` level lists + `derived_book_hash`; `EquityBookState.apply/apply_quote/snapshot`, `book_hash(snapshot)` | `scripts/recorder/event_row.py:34-101`, `scripts/recorder/book_state.py:49-119`, `scripts/recorder/book_hash.py:103` |
 | Committed offline data fixtures: `equs_mini_tbbo_sample.jsonl` (L1 tbbo), `mbp10_depth_sample.jsonl` (L2 depth), sub-dollar sample, out-of-order/gap samples | `tests/fixtures/databento/` |
 | Committed calendar fixtures: `nyse_2026_schedule.json` (8 scattered dates) + `nyse_margin_window_v1.json` (**2026-06-01…07-31 contiguous** — covers the 2026-06-09 tbbo fixture dates; M4 §L) | `tests/fixtures/calendar/` |
-| `agent_rules.json`: gates false; `universe.symbols:[]`; **`latency_budget_ms: 250` is a top-level JSON int — `min()`-merge polarity is INVERTED for it** (lowering it loosens realism) ⇒ code floor (FD-M5-10); `signal.refresh_cadence_ms="1000"`, `signal.quote_staleness_ms_max="2000"`, `signal.spread_bps_max="50"` | `config/agent_rules.json:2-10,24-27` |
-| `risk_rules.json` already carries the committed M4 additions: 7 integer-0 caps + `risk.short_selling.enabled:false` + `risk.universe:{}` — M5 does NOT edit this file (fees are code constants, FD-M5-15) | `config/risk_rules.json:1-19` |
+| `agent_rules.json`: gates false; `universe.symbols:[]`; **`latency_budget_ms: 250` is a top-level JSON int — `min()`-merge polarity is INVERTED for it** (lowering it loosens realism) ⇒ code floor (FD-M5-10); `signal.refresh_cadence_ms="1000"`, `signal.quote_staleness_ms_max="2000"`, `signal.spread_bps_max="50"` | `config/agent_rules.json:2-10,23-27` |
+| `risk_rules.json` carries the M4 additions **committed at `7bf8df2`**: 7 integer-0 caps + `risk.short_selling.enabled:false` + `risk.universe:{}` — M5 does NOT edit this file (fees are code constants, FD-M5-15). M5 build precondition: the M4 build + these config additions are committed (TRUE at `7e0a8ad`; M5C-6) | `config/risk_rules.json:1-19` |
 | `requirements.txt`: `databento==0.79.0` uncommented + the header note reserving the M5 `alpaca-py` pin | `requirements.txt:1-8` |
 | Test doubles: `FakeClock(now_ms/advance)`; `SpyBroker` records every attempt at entry (`self.calls`) then `require_token` | `tests/lib/fakes.py:83-114` |
 | Canary + purity test patterns to EXTEND (never duplicate): committed-config canary at the broker boundary; socket-block + `sys.modules` purity + AST module-scope import guard | `tests/agent/test_config_canary.py:23-64`, `tests/agent/test_no_network_no_creds.py:7-166` |
-| M4 build IN FLIGHT under `scripts/agent/risk/` (`reasons.py`, `account_state.py` exist at HEAD) — this contract binds to the M4 CONTRACT API only | `scripts/agent/risk/` (not relied on) |
+| M4 build COMMITTED at `7bf8df2` under `scripts/agent/risk/` (12 modules; 896 tests green at HEAD `7e0a8ad`) — the CODE is now the real API and matches the M4 contract (rev 2 + §R harden log); where this contract cites `scripts/agent/risk/*` line numbers they were re-verified at HEAD (M5C-6) | `scripts/agent/risk/` |
 
 **M4 contract API consumed here (authority: `2026-06-09-M4-risk-core-contract.md`):**
 `RiskEngine.can_open(candidate, portfolio, account, *, market_state, marks, kill_state, kill_generation,
@@ -149,19 +154,19 @@ resolve every cross-design disagreement, each with a one-line rationale.
 | FD-M5-5 | **(LD-M5-5) `alpaca-py==0.43.4` pinned exact, UNCOMMENTED** in `requirements.txt` (the `databento==0.79.0` precedent), installed only in `.venv` (PEP-668), imported ONLY inside `_build_real_client()` (never reached offline); AST + `sys.modules` guards extend with `alpaca`. Rate/version verification per §0.2 F1–F3. | Locked; resolves execution/fail-closed "commented pin" → uncommented (comment-only pins drift; the purity tests prove non-import, not absence). |
 | FD-M5-6 | **(LD-M5-6) Modeled fills: top-of-book v1 (`model="tob_l1_v1"`) is the wired default** (honest for EQUS.MINI L1); **depth-VWAP v2 (`model="depth_vwap_l2_v2"`) exists code+tests** behind a `DepthView` seam left `None` in observe/paper until L2 recording is provisioned. Divergence: flag ALWAYS (`fill_divergence` row); a `divergence_alert` row when `|divergence_usd| > notional × 10 bps` (`DIVERGENCE_ALERT_BPS = Decimal("10")`, code constant). | Locked. |
 | FD-M5-7 | **(LD-M5-7) Broker order-state via REST polling** (no websocket in M5); **`client_order_id = our deterministic `order_id`** (idempotency + the M6 reconcile join key; ≤128 chars per A8). | Locked. |
-| FD-M5-8 | **(LD-M5-8) Synthetic structural isolation uses BOTH walls:** (wall 1) the orchestrator pipeline ctor type check — `isinstance(strategy, SyntheticStrategy) and type(broker) is not FakeBroker ⇒ SyntheticConfinementError` at construction; (wall 2) the broker-side namespace refusal — `AlpacaPaperBroker._place` (ALL modes, spy included) raises `SyntheticConfinementError` on any intent whose `intent_id` starts with `"synthetic-"`, and `FakeBroker._place` refuses any intent whose `intent_id` does NOT; plus (wall 3) the AST import guard on `strategies/`. The **S9 backtest-artifact gate ships in M5 with an empty `artifacts/backtests/` dir ⇒ every real strategy rejects fail-closed** (`backtest_artifact_missing`). | Locked; `type(broker) is FakeBroker` is type-identity (execution DD-M5-13) so a hostile `FakeBroker` subclass of `AlpacaPaperBroker` cannot spoof wall 1. |
+| FD-M5-8 | **(LD-M5-8) Synthetic structural isolation uses BOTH walls:** (wall 1) the orchestrator pipeline ctor type check — `isinstance(strategy, SyntheticStrategy) and type(broker) is not FakeBroker ⇒ SyntheticConfinementError` at construction; (wall 2) the broker-side namespace refusal — `AlpacaPaperBroker._place` (ALL modes, spy included) raises `SyntheticConfinementError` on any intent whose `intent_id` starts with `"synthetic-"`, and `FakeBroker._place` refuses any intent that is **NOT reducing** (`intent.is_reducing is not True`) AND whose `intent_id` does NOT start with `"synthetic-"` — **reductions are NEVER namespace-gated** (the M0 kill actuator builds `flatten-<symbol>` intent_ids and the §0 asymmetry forbids blocking them; M5C-1/M5C-S1 blocker fix, consistent with FD-M4-3); plus (wall 3) the AST import guard on `strategies/`. The **S9 backtest-artifact gate ships in M5 with an empty `artifacts/backtests/` dir ⇒ every real strategy rejects fail-closed** (`backtest_artifact_missing`). | Locked; `type(broker) is FakeBroker` is type-identity (execution DD-M5-13) so a hostile `FakeBroker` subclass of `AlpacaPaperBroker` cannot spoof wall 1. The reduce exemption opens no opening hole: an opening intent (`is_reducing=False`) keeps full namespace enforcement, and reduces only shrink fake-held positions. |
 | FD-M5-9 | **(LD-M5-9) M5 does NOT edit M3's `DecisionLedger` or its frozen `ACTIONS` vocabulary.** `would_open`/`would_close`/order facts live in the NEW exec streams: `strategy_decision` rows go on `journal/orders.jsonl` (not `decisions.jsonl`), `STRATEGY_DECISION_ACTIONS = {"would_open","would_close"}`. An empty `scan()` journals nothing on the strategy path (the M3 probe already owns per-bar observe rows). | Locked; resolves execution DD-M5-16 (new event type on `decisions.jsonl`) → moved to `orders.jsonl` so the M3 stream stays byte-frozen. |
 | FD-M5-10 | **(LD-M5-10) Latency budget:** committed `agent_rules.latency_budget_ms` (JSON int 250) is honored but **floored by `LATENCY_BUDGET_MIN_MS = 250`** (code constant — the `min()`-merge polarity trap: an overlay lowering it would loosen realism); `effective_latency_budget_ms = max(parsed, 250)`, computed once in `ExecutionConfig`. **The await lives in `orchestrator.py` as a scheduler item over the injected clock** (an `OrderTask` in state `AWAIT_LATENCY` becomes due when `clock.now_ms() >= decision_seen_at_ms + effective_latency_budget_ms`), never in `execution_realism.py`, never a real sleep in any decision path. | Locked; resolves execution DD-M5-14's `Sleeper`/async seam → no asyncio in M5: the run loop is a synchronous tick loop (replay-driven offline; honest, since no live feed exists until M1-2b). |
 | FD-M5-11 | **Ladder shape + rung 1.** Two phases mirroring M2 `decide()`/M4 FD-M4-9: Phase 1 terminal short-circuits in frozen order `run_gates → kill → stamp`; Phase 2 collect-ALL in frozen order `candidate → strategy_gate → inflight → latency → quote → market_state → order → risk` (sorted, deduped union; `gate_stage=null`). **Rung 1 is the literal `gates.opening_allowed`** ⇒ on the committed config every preflight terminates at `run_gates` with the byte-exact terminal shape (S1 unchanged in substance — reject-all by ladder instead of by stub). | Resolves execution (stamp before gates) vs fail-closed/integration (gates first) → gates first: M4 FD-M4-9 precedent + the S1 canary's byte-exact terminal assertion; parent PR-1 is honored because `missing_decision_stamp` is a TERMINAL hard reject wherever evaluated and no later stage can run without the stamp. |
 | FD-M5-12 | **`missing_decision_stamp` is a terminal hard reject** (phase-1 rung 3): `stamp is None`, `quote_a` missing, `decision_seen_at_ms` not an int, or `decision_ts_utc` unparseable ⇒ reject; nothing downstream is meaningful without t0 (parent PR-1 verbatim). | All three designs agree on the semantics; only placement differed (FD-M5-11). |
 | FD-M5-13 | **TOCTOU binding at `consume()`** (the task-pinned mechanism): an open `_Authorization` additionally stores `limit_price`, `kill_generation`, `minted_at_ms`; `execution_preflight.bind_runtime(clock=…, kill_generation_source=…)` is set once by the orchestrator; `consume()` of an `"open"` authorization re-checks — runtime unbound ⇒ `PreflightStale("preflight_runtime_unbound")`; `clock.now_ms() − minted_at_ms > OPEN_TOKEN_TTL_MS` (strict `>`) ⇒ `PreflightStale("open_token_expired")`; `kill_generation_source() != kill_generation` ⇒ `PreflightStale("kill_generation_changed")`. Runs INSIDE `BrokerBase.submit_order → require_token → consume` — non-bypassable without touching the `Broker` Protocol. **Reduce-only consume is exempt** (zero new checks; FD-M4-3). `OPEN_TOKEN_TTL_MS = 2000`. | Resolves fail-closed's `require_token(broker=, now_ms=, kill_generation=)` signature change + broker-instance binding → consume-side module runtime (task-locked; keeps `require_token(intent, token)` and the M0 call sites byte-stable); TTL 2000 over fail-closed's 1000 (one freshness family with `quote_staleness_ms_max`/`DEFAULT_FRESHNESS_TTL_MS`). |
-| FD-M5-14 | **Preflight is PURE and the mint runs it ITSELF.** `evaluate_preflight(inputs: PreflightInputs) -> PreflightPass | PreflightReject` (no I/O, no clock read, no journal write — LD5/FD-M4-5 posture; the CALLER journals); `mint_open_token(inputs) -> (OpenPreflightToken, PreflightPass)` evaluates internally (a caller can never assert "passed"), raising `PreflightRejected(reject)` on failure. The legacy `mint_open_token(config, intent)` 2-positional signature is REPLACED (its only legitimate caller was the reject-all test, which is rewritten to the new signature; the registry mechanics are untouched). | All three designs agree on purity + mint-runs-ladder; signature unified on execution's `PreflightInputs` dataclass (one input object beats 20 kwargs for byte-stable tests). |
+| FD-M5-14 | **Preflight is PURE and the mint runs it ITSELF.** `evaluate_preflight(inputs: PreflightInputs) -> PreflightPass | PreflightReject` (no I/O, no clock read, no journal write — LD5/FD-M4-5 posture; the CALLER journals); `mint_open_token(inputs) -> (OpenPreflightToken, PreflightPass)` evaluates internally (a caller can never assert "passed"), raising `PreflightRejected(reject)` on failure. The legacy `mint_open_token(config, intent)` 2-positional signature is REPLACED. **ALL THREE legacy call sites are rewritten to the new `PreflightInputs` signature** (M5C-4): `tests/agent/test_preflight_token.py:79-86` (the reject-all tests), `tests/agent/test_config_canary.py:48` (inside `try/except PreflightRejected` — a `TypeError` from the new signature would ERROR the S1 canary), and `tests/agent/test_alpaca_spy.py:56-58` (under `assertRaises(PreflightRejected)`); each rewritten test asserts the new byte-exact `run_gates` terminal-reject shape so S1 coverage is preserved, not weakened (`tests/agent/test_risk_kill.py:205` mock.patches the mint and survives unmodified). Registry mechanics are untouched. | All three designs agree on purity + mint-runs-ladder; signature unified on execution's `PreflightInputs` dataclass (one input object beats 20 kwargs for byte-stable tests). |
 | FD-M5-15 | **Fee rates are CODE CONSTANTS** (`fees.py` §J): `SEC_SECTION31_RATE=Decimal("0.0000278")`, `TAF_PER_SHARE_SOLD=Decimal("0.000166")`, `TAF_CAP_PER_TRADE_USD=Decimal("8.30")`, `FEE_MODEL_VERSION="reg_fees_v1"`. Sells only; buys ⇒ zero; each component ceil-rounded to the cent (fees round AGAINST us); applied ONLY to `execution_realistic_pnl` (A6: paper charges none; injecting synthetic fees into the broker side would manufacture permanent reconcile drift). `config/risk_rules.json` is NOT edited. | Resolves execution/fail-closed (config-string rates) vs integration (code constants) → code constants: regulatory facts are not knobs (M2 §G / FD-M4-6 discipline); changing a rate = a reviewed commit + version bump either way. |
 | FD-M5-16 | **Order-state vocabulary + fail-closed mapping.** Local `ORDER_STATES = {accepted, partially_filled, filled, canceled, expired, rejected, done_for_day, pending_cancel, unknown}`; `TERMINAL_STATES = {filled, canceled, expired, rejected, done_for_day}`; the frozen `ALPACA_STATUS_MAP` (§F) maps all 16 verified strings — rare/ambiguous ones (`replaced, pending_replace, suspended, accepted_for_bidding, stopped, calculated`) map to **`unknown`**. `unknown` (mapped or unmapped-string) is NEVER terminal and never filled: `order_state_alert` row + best-effort cancel + keep polling. | Resolves execution (rare → SUBMITTED) vs fail-closed (rare → unknown) → unknown: never assume understanding of a status we cannot test against fixtures. |
 | FD-M5-17 | **Write-ahead submit protocol + idempotent recovery.** `order_submit_attempt` is journaled BEFORE the network call; ack ⇒ `order_submitted`; HTTP reject ⇒ `broker_reject` (terminal for that `client_order_id`); timeout/ambiguous ⇒ NEVER blind-resubmit: query by `client_order_id` up to `SUBMIT_RECOVERY_ATTEMPTS=3`, found ⇒ adopt, not found ⇒ `order_submit_unconfirmed` + the symbol enters an in-memory **open-deny set** for the rest of the run (presumed-live until reconciled — fail-closed). `client_order_id` is never reused; a retry is a NEW decision → NEW preflight → NEW id. | Fail-closed §5.4 adopted whole (strongest crash story); execution's adopt-and-watch folded into restart recovery (FD-M5-24). |
-| FD-M5-18 | **Exact integrated notional from polled aggregates.** `delta_qty = cur.filled_qty − prev.filled_qty` (> 0); `delta_cost = cur.filled_qty×cur.filled_avg_price − prev.filled_qty×prev.filled_avg_price` (exact Decimal — never `delta_qty × avg`); `filled_qty` regression or `filled_avg_price` present with `filled_qty == 0` ⇒ `OrderInvalid` (alert, fail-closed, no fill row). Position `broker_cost_usd = Σ delta_cost` exact (parent principle 3). | Both designs that addressed it agree; frozen here with the §F parser as the ONE chokepoint. |
+| FD-M5-18 | **Exact integrated notional from polled aggregates.** `delta_qty = cur.filled_qty − prev.filled_qty` (> 0); `delta_cost = cur.filled_qty×cur.filled_avg_price − prev.filled_qty×prev.filled_avg_price` (exact Decimal — never `delta_qty × avg`); `filled_qty` regression or `filled_avg_price` present with `filled_qty == 0` ⇒ `OrderInvalid` (alert, fail-closed, no fill row). Position `broker_cost_usd = Σ delta_cost` exact (parent principle 3). **`prev` is FROZEN as the `BrokerOrder` snapshot of the last EMITTED `FillDelta`** (`None` before the first): an avg-only change at unchanged `filled_qty` emits nothing and does NOT advance `prev` — telescoping stays exact, no cost change is silently dropped (EX-6). **Terminal consistency check:** at `order_terminal`, assert `Σ emitted delta_cost_usd == final filled_qty × filled_avg_price`; mismatch ⇒ `order_state_alert` + `OrderInvalid` handling (fail-closed, no silent drift). | Both designs that addressed it agree; frozen here with the §F parser as the ONE chokepoint. `prev`=last-emitted is the only choice under which Σ delta_cost telescopes to the broker's final qty×avg. |
 | FD-M5-19 | **Modeled-fill basis covers FULL qty conservatively.** `tob_l1_v1`: `min(qty, displayed opposite size)` modeled at quote-B's opposite touch, the REMAINDER priced at `capped_limit` (the worst-price bound — never better than the cap by construction); `realism_class ∈ {modeled_full, modeled_partial, modeled_unfillable}` with `modeled_fillable_qty` journaled so the honest partial fact is preserved. `depth_vwap_l2_v2`: walk levels `≤ capped_limit`, exact integrated VWAP, same remainder rule. Not marketable vs quote B / no usable quote ⇒ `modeled_unfillable`, `modeled_cost_usd=null`, PnL modeled side `unassessed`. Computed ONCE from quote B (no hindsight, never re-shopped). | Resolves execution (remainder explicitly unfilled) vs integration (remainder at cap): a full-qty modeled basis is required because the broker WILL fill full qty (A5) and a partial-qty basis cannot price a full-qty position; the cap is the documented conservative bound. |
-| FD-M5-20 | **Divergence flag semantics.** `fill_divergence` row on every order that reaches `filled` (and on `partially_filled` terminal states, over the filled qty): `divergence_usd = broker_cost_usd − modeled_cost_over_filled_qty` (plain Decimal — the ONE documented cross-newtype comparison seam), `divergence_bps = divergence_usd / broker_cost_usd × 10000` quantized `BPS_QUANTUM`; `flag ∈ DIVERGENCE_FLAGS = {aligned, broker_optimistic, broker_conservative, unassessed}` — buys: broker cheaper than model ⇒ `broker_optimistic` (the parent PR-8 flag: paper filling flatteringly), dearer ⇒ `broker_conservative`, equal ⇒ `aligned`, modeled side null ⇒ `unassessed`. `divergence_alert` row iff `|divergence_usd| > broker_cost_usd × DIVERGENCE_ALERT_BPS/10000`. `pnl_snapshot.realism_class` = the position's latest flag. | Disentangles the three designs' conflated "realism class" vocabularies into modeled-fillability (FD-M5-19) vs broker-vs-model divergence (this row). |
+| FD-M5-20 | **Divergence flag semantics.** `fill_divergence` row on every order that reaches `filled` (and on `partially_filled` terminal states, over the filled qty): `divergence_usd = broker_cost_usd − modeled_cost_over_filled_qty` (plain Decimal, journaled EXACT — the ONE documented cross-newtype comparison seam), `divergence_bps = divergence_usd / broker_cost_usd × 10000` quantized `BPS_QUANTUM`. **`modeled_cost_over_filled_qty` is FROZEN as exact re-integration, no quantization (EX-2/M5C-S6):** `tob_l1_v1`: `min(filled_qty, modeled_fillable_qty) × touch_price + max(0, filled_qty − modeled_fillable_qty) × capped_limit`; `depth_vwap_l2_v2`: integrate the FIRST `filled_qty` shares of the recorded level walk (same remainder rule). `modeled_vwap × filled_qty` is FORBIDDEN (`modeled_vwap` is MID_QUANTUM-quantized provenance). Computed inside `assess_divergence` from the in-memory `ModeledFill`, whose `touch_price` (unquantized) is journaled for replay recomputation (§I). **Flag mapping is side-aware (EX-3):** `flag ∈ DIVERGENCE_FLAGS = {aligned, broker_optimistic, broker_conservative, unassessed}` — `broker_optimistic` iff the broker number is more favorable to us than the model (buy: `divergence_usd < 0`; sell, where `broker_cost_usd` is sale PROCEEDS: `divergence_usd > 0` — the parent PR-8 flag: paper filling flatteringly), `broker_conservative` for the opposite sign, `aligned` iff 0, `unassessed` iff modeled side null; the row carries `side`. `divergence_alert` row iff `|divergence_usd| > broker_cost_usd × DIVERGENCE_ALERT_BPS/10000`. `pnl_snapshot.divergence_flag` = the position's latest flag, default `"unassessed"` before the first terminal `fill_divergence` row (EX-11). | Disentangles the three designs' conflated "realism class" vocabularies into modeled-fillability (FD-M5-19) vs broker-vs-model divergence (this row). Re-integration over vwap×qty: the two differ by > `DIVERGENCE_ALERT_BPS` on realistic partial fills (verified numerically in the critic pass). |
 | FD-M5-21 | **One in-flight order at a time.** `execution.max_open_orders` committed `1`; the parser REJECTS ≠ 1 in M5; the ladder still carries `open_order_in_flight` (stage `inflight`) as journaled defense-in-depth. Serial decide→await→requote→preflight→submit→watch→book pipeline; concurrency is an M6/M7 loosening. | Execution DD-M5-11 adopted; integration agrees. |
 | FD-M5-22 | **No automatic retry/replace.** A failed requote/preflight/reject/cancel/expiry ENDS the attempt with journal rows; we never send replace; broker-initiated `replaced`/`pending_replace`/`suspended` ⇒ `unknown` + alert + best-effort cancel (FD-M5-16). Retry policy is M6. | Execution DD-M5-12; no dissent. |
 | FD-M5-23 | **Post-submit watcher + cancel-on-state-change.** Until terminal, each open order is watched every poll: trigger set `CANCEL_CAUSES` (§2.4) — feed `reconnect_epoch` change vs the order's bound epoch, halt/LULD/auction, NOT_TRADABLE, stale-default verdict, session leaving RTH, kill trip, unexpected status, restart. On trigger: best-effort `cancel_order` (NO token — cancel is risk-reducing-or-neutral and must never be gated; test-asserted that the cancel path performs no mint and no `require_token`) + `post_submit_cancel_attempt` row; **late fills that land anyway remain authoritative `broker_fill` rows** — price-bounded by `capped_limit` by construction — while the modeled side is flagged, never back-voided (parent PR-9). | All three designs agree; vocabulary unified in §2.4. |
@@ -237,13 +242,13 @@ an upstream phase-2 finding is recorded in `stages_skipped` — the M4 phase-2 s
 
 | # | Stage | Reason(s) | Frozen check |
 |---|-------|-----------|--------------|
-| 4 | `candidate` | `order_matrix_unsupported`, `invalid_lot` | Single-leg M5: `len(candidate.legs) != 1` ⇒ `ExecError`. Matrix (narrow, A1): leg `side != "buy"` (long-only opens, FD-M4-1), or the intended `order_type != "marketable_limit"`, or `tif != "day"`, or an `is_reducing` open ⇒ `order_matrix_unsupported`. Lot: `qty != qty.to_integral_value()` or `qty < 1` ⇒ `invalid_lot` (whole shares only; fractional is out of matrix). |
+| 4 | `candidate` | `order_matrix_unsupported`, `invalid_lot` | Single-leg M5: `len(candidate.legs) != 1` ⇒ `ExecError`. Matrix (narrow, A1): leg `side != "buy"` (long-only opens, FD-M4-1) ⇒ `order_matrix_unsupported` — **the only live matrix clause in M5**: the ladder consumes `Candidate`/`Leg` (which carry no `order_type`/`tif`/`is_reducing`), and `order_type="marketable_limit"`, `tif="day"`, `is_reducing=False` are STRUCTURAL constants of the §M.4 intent builder, asserted by the §R 9 wire-payload test rather than checked here (M5C-B1). Lot: `qty != qty.to_integral_value()` or `qty < 1` ⇒ `invalid_lot` (whole shares only; fractional is out of matrix). |
 | 5 | `strategy_gate` | `strategy_not_paper_eligible`, `backtest_artifact_missing`, `artifact_key_mismatch`, `artifact_hash_invalid`, `synthetic_requires_fake_broker`, `fake_broker_requires_synthetic` | `candidate.paper_eligible is not True` (identity) ⇒ not eligible. **Real strategy** (`inputs.strategy_is_synthetic is False`): `inputs.artifact_check.status` maps `missing/key_mismatch/hash_invalid` → its reason (S9: the shipped-empty dir makes `backtest_artifact_missing` the M5 constant for every real strategy — FD-M5-8); `inputs.broker_kind == "fake"` ⇒ `fake_broker_requires_synthetic`. **Synthetic strategy:** artifact NOT required (`artifact_check` recorded, not consulted); `inputs.broker_kind != "fake"` ⇒ `synthetic_requires_fake_broker` (defense-in-depth; the structural walls are FD-M5-8's). |
 | 6 | `inflight` | `open_order_in_flight` | `inputs.open_orders_in_flight > 0` (FD-M5-21 defense-in-depth; the serial orchestrator never gets here with one in flight). |
 | 7 | `latency` | `latency_not_elapsed`, `requote_not_later`, `epoch_changed` | Evaluated iff `quote_b` present (else recorded in `stages_skipped`; absence is stage 8's). `quote_b.seen_at_ms − stamp.decision_seen_at_ms < exec_config.effective_latency_budget_ms` (strict `<`; passes at exactly the budget) ⇒ `latency_not_elapsed`. **Strictly-later discipline:** `quote_b.seen_at_ms < quote_a.seen_at_ms + MIN_REQUOTE_DELTA_MS` (=1) **or** identical `(vendor_seq, ts_event_utc)` provenance pair (a re-served quote A is not a second quote) ⇒ `requote_not_later`. `quote_b.reconnect_epoch != quote_a.reconnect_epoch` **or** `inputs.feed_epoch_now != quote_b.reconnect_epoch` ⇒ `epoch_changed` (S4). |
 | 8 | `quote` | `quote_missing` + the seven M3 strings verbatim | `quote_b is None` ⇒ `quote_missing`. Else embed `inputs.quote_b_verdict.reasons` UNCHANGED — `quote_quality.evaluate` is the ONE quote decider (the caller computed it with the SAME `now_ms` and the committed `spread_bps_max`/`quote_staleness_ms_max`); the preflight re-derives nothing. |
-| 9 | `market_state` | `market_state_not_tradable`, `market_state_stale_default`, `market_state_not_rth`, `halt_luld_auction`, `ca_blackout` | Identity first: verdict `symbol`/`instrument_id` mismatching the leg ⇒ `ExecError`. `verdict.tradability != TRADABLE` ⇒ not_tradable (REDUCE_ONLY blocks opens too). `"cache_stale_safe_default" in verdict.reasons` ⇒ stale_default. `verdict.session_state != RTH` ⇒ not_rth (M5 opens are RTH-only — A3's queue-for-next-day trap is structurally unreachable). `halt != NONE` or `luld != NONE` or `session_state == AUCTION` ⇒ `halt_luld_auction`. `verdict.ca_blackout` ⇒ `ca_blackout`. (The safe-default verdict fires not_tradable + stale_default + not_rth together — collect-all.) |
-| 10 | `order` | `unpriceable_candidate`, `invalid_tick`, `not_marketable`, `latency_lost_edge` | Recorded in `stages_skipped` iff stage 8 found `quote_b` missing or unusable (`quote_b_verdict.ok is False`). Else run `order_pricing.marketable_limit_cap` (§C) on quote A/B: strategy `limit_price <= 0` ⇒ `unpriceable_candidate` (FD-M4-16 mirror); strategy limit off the Reg-NMS grid ⇒ `invalid_tick` (the derived cap is on-grid by construction); final `capped_limit` not marketable vs quote B ⇒ `not_marketable` (we do not rest orders in M5); adverse move A→B beyond `slippage_cap_bps` (buy: `ask_B > ask_A × (1 + bps/10000)`) ⇒ `latency_lost_edge`. On pass, `capped_limit` is fixed here and becomes THE submitted limit. |
+| 9 | `market_state` | `market_state_not_tradable`, `market_state_stale_default`, `market_state_not_rth`, `halt_luld_auction`, `ca_blackout` | Identity first: verdict `symbol`/`instrument_id` mismatching the leg ⇒ `ExecError`. `verdict.tradability != TRADABLE` ⇒ not_tradable (REDUCE_ONLY blocks opens too). `"cache_stale_safe_default" in verdict.reasons` ⇒ stale_default. `verdict.session_state != RTH` ⇒ not_rth (M5 opens are RTH-only — A3's queue-for-next-day trap is structurally unreachable). `halt != HaltState.NONE` **or `luld in {LuldState.LIMIT, LuldState.PAUSED, LuldState.UNKNOWN}`** (the real vocabulary has no `LuldState.NONE`; `LuldState.NORMAL` is the only non-firing member — `market_state.py:48-52`; M5C-2) or `session_state == AUCTION` ⇒ `halt_luld_auction`. `verdict.ca_blackout` ⇒ `ca_blackout`. (The REAL `safe_default_verdict` — `halt=UNKNOWN, luld=UNKNOWN, ca_blackout=True`, `market_state_cache.py:112-124` — therefore fires **exactly FIVE reasons under these checks: `ca_blackout + halt_luld_auction + market_state_not_rth + market_state_not_tradable + market_state_stale_default`** — fail-closed collect-all, pinned in §R 3; M5C-3. A healthy verdict — halt=NONE, luld=NORMAL, RTH, TRADABLE, no blackout — fires ZERO stage-9 reasons, also test-pinned.) |
+| 10 | `order` | `unpriceable_candidate`, `invalid_tick`, `not_marketable`, `latency_lost_edge` | Recorded in `stages_skipped` iff stage 8 found `quote_b` missing or unusable (`quote_b_verdict.ok is False`). Else run `order_pricing.marketable_limit_cap` (§C) on quote A/B: strategy `limit_price <= 0` ⇒ `unpriceable_candidate` (FD-M4-16 mirror); strategy limit off the Reg-NMS grid ⇒ `invalid_tick` (the derived cap is on-grid by construction); final `capped_limit` not marketable vs quote B ⇒ `not_marketable` (we do not rest orders in M5); adverse move A→B beyond `slippage_cap_bps` (buy: `adverse_move_bps > slippage_cap_bps` per §C — **the quantized-bps comparison is THE authoritative form**; the journaled `CapResult.adverse_move_bps` and the reject reason can therefore never disagree; EX-1) ⇒ `latency_lost_edge`. On pass, `capped_limit` is fixed here and becomes THE submitted limit. |
 | 11 | `risk` | `risk_verdict_missing`, `risk_verdict_stale`, `risk_verdict_mismatch`, `can_open_denied`, `kill_generation_changed` | `risk_verdict is None or risk_verdict_row is None or risk_verdict_now_ms is None` ⇒ missing (the caller failed its journal-then-mint duty; fail closed). Row binding per FD-M5-30: re-hash mismatch ⇒ `ExecError`; `verdict_id`/`decision_id`/symbol/qty mismatch ⇒ `risk_verdict_mismatch`. `now_ms − risk_verdict_now_ms > RISK_VERDICT_TTL_MS` (strict) ⇒ `risk_verdict_stale`. `verdict.allowed is not True` ⇒ `can_open_denied` (the M4 reasons ride the reject row's `detail.risk_reasons`, never this vocabulary). `verdict.kill_generation != inputs.kill_generation` ⇒ `kill_generation_changed` (the verdict was computed under a stale world). |
 
 Pass ⟺ zero reasons collected ⟺ `evaluate_preflight` returns `PreflightPass`. Reject ⇒ no
@@ -284,8 +289,10 @@ Reserved members (`alpaca_live`) emitted in M5 ⇒ test failure.
 
 ## 3. Module map + import discipline
 
-**Existing files that GROW (additive; every existing test stays green unmodified except the M0
-reject-all mint test, rewritten to the new signature — FD-M5-14):**
+**Existing files that GROW (additive; every existing test stays green unmodified except the THREE
+legacy `mint_open_token(config, intent)` call sites enumerated in FD-M5-14 —
+`test_preflight_token.py:79-86`, `test_config_canary.py:48`, `test_alpaca_spy.py:56-58` — each
+rewritten to the new signature asserting the byte-exact `run_gates` terminal reject; M5C-4):**
 
 | File | Growth | Frozen things preserved |
 |---|---|---|
@@ -345,7 +352,12 @@ tests/lib/exec_fixtures.py   # §Q — permissive fixture config, quote-pair/boo
 - `execution_preflight.py` must NOT import `agent.broker*` (no cycle: the ladder consumes
   `Candidate`/`Leg`, never `OrderIntent`).
 - `orchestrator.py` is the ONLY module that may import both `agent.risk.*` and `agent.broker.*` (and
-  the preflight mint). `__main__.py` imports `orchestrator`, `config`, `secrets_runtime` only.
+  the preflight mint). At module scope it may import `agent.broker.base` (light dataclasses) and
+  `agent.broker.order_state` ONLY; `agent.broker.alpaca`, `agent.broker.fake`, and
+  `agent.broker.flatten_proxy` are imported LAZILY inside the §M.2 step-9 mode-select branch /
+  §M.6 kill wiring — so an observe run never has `agent.broker.alpaca` in `sys.modules`
+  (test-asserted, §R 12; M5C-T10). `__main__.py` imports `orchestrator`, `config`,
+  `secrets_runtime` only.
 - `alpaca` (the SDK) appears in exactly ONE function body (`broker/alpaca.py::_build_real_client`) and
   nowhere at module scope (AST + `sys.modules` purity tests extend with `"alpaca"`).
 - No module under `scripts/agent/risk/` and no M3 module is edited. `kill_switch.py`, `gates.py`,
@@ -405,7 +417,11 @@ LATENCY_BUDGET_MIN_MS = 250        # CODE CONSTANT — floors the committed valu
                                    #   min()-merge polarity is INVERTED for latency_budget_ms)
 MIN_REQUOTE_DELTA_MS = 1           # quote B must post-date quote A by >= 1 ms (§2.2 stage 7)
 OPEN_TOKEN_TTL_MS = 2000           # consume-time TTL (FD-M5-13); strict '>'
-RISK_VERDICT_TTL_MS = 2000         # mint-time verdict freshness (FD-M5-30); strict '>'
+RISK_VERDICT_TTL_MS = 2000         # mint-time verdict freshness (FD-M5-30); strict '>'.
+                                   # Fixture-design constraint (EX-12): under ReplayClock, t1 jumps to
+                                   # the next RECORDED event; any fixture driving a successful open
+                                   # must land >=1 quote event in recorded (t0+effective_latency_budget_ms,
+                                   # t0+RISK_VERDICT_TTL_MS] after each scripted decision bar (see §Q).
 ORDER_POLL_INTERVAL_MS_MAX = 1000  # ceiling clamp: effective = min(parsed, 1000)
 SUBMIT_RECOVERY_ATTEMPTS = 3       # FD-M5-17
 DIVERGENCE_ALERT_BPS = Decimal("10")   # FD-M5-6
@@ -425,14 +441,27 @@ class ExecutionConfig:
     quote_staleness_ms_max: int            # re-read from signal block (one source)
     spread_bps_max: Decimal                # re-read from signal block (one source)
     rules_hash: str                        # of the WHOLE assembled config (config.py:17 semantics)
+                                           #   — computed over the PRE-substitution dict (M5C-S4, below)
 
     @classmethod
     def from_config(cls, config: dict) -> "ExecutionConfig": ...
         # config = the assembled {"agent_rules":..., "risk_rules":...} dict (M4 RiskConfig shape;
         # the M4C-9 note transfers: this rules_hash matches RiskConfig's, not M3's — joins key on
         # run_id/decision_id). Unknown/missing keys in agent_rules.execution -> ValueError;
-        # ints must be JSON ints (bool excluded) > 0; latency_budget_ms must be a JSON int > 0.
+        # ints must be JSON ints (bool excluded) > 0; latency_budget_ms must be a JSON int > 0
+        # (0 or negative => ValueError at startup, fail-loud — the floor only applies to values
+        # that PARSE; M5C-T2).
 ```
+
+**`rules_hash`/parser input is the PRE-substitution dict (frozen; M5C-S4):** `rules_hash` and ALL
+THREE parsers (`SignalConfig`/`RiskConfig`/`ExecutionConfig`) are computed over the committed(+overlay)
+assembled dict **BEFORE** the §O.2 run-gates substitution. The substituted **gates view** exists solely
+as the gates-evaluation argument at the two rung-1 call sites (`PreflightInputs.gates_config` for the
+ladder; the RiskEngine's run-gates input for `can_open`). Consequences (test-pinned, §R 13): identical
+committed config ⇒ identical `rules_hash` on every journaled row whether the run-gates file is
+present-true or absent (cross-stream funnel joins keyed on `rules_hash` never fork), and the FD-M5-27
+artifact gate — whose `rules_hash` binding must be reproducible from reviewed inputs — never re-closes
+on the state of a git-ignored file.
 
 Committed `config/agent_rules.json` gains (everything else byte-identical):
 
@@ -457,8 +486,12 @@ Polarity table (M2 §G / M4 FD-M4-22 discipline, applied):
 | TTLs, requote delta, recovery attempts, divergence/flatten bps, fee rates | CODE CONSTANTS | regulatory facts and inverted-polarity values are not knobs (FD-M5-15/29) |
 
 Canary obligations (extends `test_config_canary.py`, loses nothing): the four execution values read as
-committed; a hostile overlay (huge `slippage_cap_bps`, `latency_budget_ms: 0`, `max_open_orders: 99`,
-injected keys) merges back ineffective; gates still identity-False.
+committed; a hostile overlay is DEFANGED, with the mechanism named per knob (M5C-T2 — note
+`tighten_only_merge` `min()`s non-bool numerics, so a lowering overlay DOES take effect at merge;
+the defense is the floor or the parse error, never the merge): huge `slippage_cap_bps` /
+`max_open_orders: 99` merge back ineffective (`min()` keeps committed); `latency_budget_ms: 1` merges
+to 1 and is FLOORED to 250; `latency_budget_ms: 0` merges to 0 and the parser raises `ValueError` at
+startup (fail-loud); injected keys are dropped by the merge; gates still identity-False.
 
 ## C. `scripts/agent/order_pricing.py` — tick grid + marketable-limit cap (PURE)
 
@@ -491,6 +524,11 @@ def reduce_cap(*, side: str, quote: QuoteSnapshot, cap_bps: Decimal) -> Optional
     # the close/flatten pricing helper (FD-M5-1/26): sell -> bid×(1−bps/1e4) quantized
     # ROUND_DOWN to grid; buy-to-cover -> ask×(1+bps/1e4) quantized ROUND_UP; the needed
     # side missing/non-finite/<=0 -> None (caller maps to no_price_for_cap).
+    # FROZEN RATIONALE (EX-7): reduce-path caps round AWAY from the touch (up to one tick
+    # PAST the bps budget) so quantization can never under-price — and thus never impede —
+    # a reduce. This is the DELIBERATE INVERSE of marketable_limit_cap's budget-respect
+    # rounding (open path); do NOT "harmonize" them — tightening a flatten cap is the
+    # dangerous direction. Test-pinned: sell, bid=1.02, bps=25 => 1.01 (§R 2).
 ```
 
 **Frozen cap formula (the load-bearing piece):**
@@ -506,7 +544,11 @@ def reduce_cap(*, side: str, quote: QuoteSnapshot, cap_bps: Decimal) -> Optional
   marketable iff `capped_limit <= bid_B`.
 - `adverse_move_bps`: buy = `(ask_B − ask_A)/ask_A × 10000` quantized `BPS_QUANTUM` ROUND_HALF_EVEN
   (sell mirrors on bids, sign flipped so adverse is positive); `latency_lost_edge` iff
-  `adverse_move_bps > slippage_cap_bps` (strict). `invalid_tick` iff `strategy_limit` is not on its own
+  `adverse_move_bps > slippage_cap_bps` (strict). **This quantized-bps comparison is THE single
+  authoritative `latency_lost_edge` form** (EX-1) — the §2.2 stage-10 raw-price phrasing was removed in
+  rev 2; the boundary pair `ask_A=0.7999 → ask_B=0.8019` at `slippage_cap_bps=25` (raw 25.0031 bps,
+  quantizes to 25.00 ⇒ NOT fired) is a committed §Q quote-pair fixture with a §R 2 case pinning the
+  chosen behavior. `invalid_tick` iff `strategy_limit` is not on its own
   grid. `unpriceable_candidate` iff `strategy_limit <= 0`, or the needed quote-B side is missing /
   non-finite / `<= 0` while the quote stage somehow passed (belt-and-braces; normally stage 8 owns it).
 - The submitted Alpaca `limit_price` **is** `capped_limit` — a late fill after any post-submit state
@@ -679,8 +721,9 @@ class BrokerRejection:
 def parse_order_payload(payload: Mapping, *, source: str) -> Union[BrokerOrder, OrderInvalid]: ...
     # required keys: id, client_order_id, status, symbol, side, qty, filled_qty;
     # money via Decimal(str(v)); float instance / bool in a money slot / non-finite /
-    # negative qty ⇒ OrderInvalid (S2 at the broker seam — the M4 §B parser posture;
-    # never an exception on the read path, never a constructed order).
+    # negative qty / filled_avg_price <= 0 when present ⇒ OrderInvalid (EX-10; S2 at the
+    # broker seam — the M4 §B parser posture; never an exception on the read path, never
+    # a constructed order).
 
 @dataclass(frozen=True)
 class FillDelta:
@@ -690,7 +733,13 @@ class FillDelta:
     filled_avg_price_after: Decimal
 
 def fill_delta(prev: Optional[BrokerOrder], cur: BrokerOrder) -> Union[Optional[FillDelta], OrderInvalid]: ...
-    # None when filled_qty unchanged; FD-M5-18 formula; regression / avg-without-fill ⇒ OrderInvalid.
+    # None when filled_qty unchanged (an avg-only change at unchanged filled_qty emits None
+    # and the CALLER does NOT advance prev — prev is always the snapshot of the last
+    # EMITTED FillDelta, FD-M5-18/EX-6); FD-M5-18 formula; OrderInvalid triggers:
+    # filled_qty regression, avg-without-fill, filled_avg_price <= 0, and delta_qty > 0
+    # with delta_cost <= 0 (reason "nonpositive_delta_cost" — broker avg-correction noise
+    # must never journal a negative-cost buy fill; EX-10). fill_id is NOT produced here —
+    # exec_ledger.record_broker_fill is its ONE home (§P.3; M5C-T7).
 
 @runtime_checkable
 class OrderApi(Protocol):           # RAW wire dicts (the AccountReadProvider precedent, LD8)
@@ -769,6 +818,8 @@ Frozen semantics:
 class FakeBroker(BrokerBase):
     kind = "fake"
     def __init__(self, *, quote_view: "QuoteView", clock,
+                 instrument_ids: Mapping[str, int],        # symbol -> instrument_id (M5C-B3:
+                 #   QuoteView.latest requires both; OrderIntent carries symbol only)
                  starting_cash: Decimal = Decimal("100000"),
                  fill_policy: str = "immediate_full") -> None: ...   # ∈ FILL_POLICIES
 ```
@@ -780,21 +831,40 @@ class FakeBroker(BrokerBase):
   returns `status:"rejected"` payloads. Sells mirror at the bid.
 - Emits the §G wire-shaped order dicts and Alpaca-fixture-shaped `account()`/`positions()` payloads
   (Decimal-string money, M4 §L shape) so the M4 parsers and M5 ledgers run IDENTICAL code paths.
+- A symbol absent from `instrument_ids` (or a quote lookup returning None) ⇒ the order rests as
+  `accepted` with `never_fill` semantics — NEVER a synthesized price (M5C-B3).
 - Extends `BrokerBase` ⇒ even the FakeBroker is token-gated (S1 holds inside the synthetic E2E).
-- **Reverse wall (FD-M5-8):** `_place` raises `SyntheticConfinementError` unless
-  `intent.intent_id.startswith("synthetic-")` — a real strategy can never book against the fake.
+- **Reverse wall (FD-M5-8, rev 2 — the M5C-1/M5C-S1 blocker fix):** `_place` raises
+  `SyntheticConfinementError` iff `intent.is_reducing is not True AND not
+  intent.intent_id.startswith("synthetic-")` — a real strategy can never OPEN against the fake, but
+  **reductions are never namespace-gated**: the M0 kill actuator's `flatten-<symbol>` intents (built
+  by the frozen `kill_switch.py:39`) flatten fake-held positions through `PriceCappedFlattenBroker`
+  unimpeded (§0 asymmetry; test-pinned in §R 15: kill flatten over a FakeBroker inner succeeds with
+  zero `failed[]` in the synthetic composition).
 
 ### H.2 `PriceCappedFlattenBroker` — the FD-M5-1 actuator
 
 ```python
-class PriceCappedFlattenBroker:     # NOT a BrokerBase — it must not consume the token itself
-    kind = "flatten_proxy"
-    def __init__(self, *, inner: "Broker", quote_view: "QuoteView") -> None: ...
+class PriceCappedFlattenBroker:     # deliberately NOT a BrokerBase and NOT a Broker-Protocol
+    # member (M5C-S7): it is a submit-only shim handed EXCLUSIVELY to RiskKillSwitch, which
+    # calls submit_order/positions/account only — it implements no cancel_order/order_status
+    # and carries NO `kind` attribute (BROKER_KINDS stays {spy, fake, alpaca_paper, alpaca_live};
+    # the proxy never appears as a journaled fill source).
+    def __init__(self, *, inner: "Broker", quote_view: "QuoteView",
+                 instrument_ids: Mapping[str, int],   # symbol -> instrument_id, injected by the
+                 #   orchestrator from universe ∪ held positions (M5C-S8: QuoteView.latest needs
+                 #   both and the M0 kill intents carry symbol only)
+                 cap_bps: Decimal) -> None: ...       # the orchestrator passes FLATTEN_CAP_BPS
+                 #   explicitly (M5C-B6: keeps flatten_proxy.py's import list free of
+                 #   execution_config)
     def submit_order(self, intent, token):
         # kill_switch.py:34-40 builds reduce intents with limit_price=None. This proxy:
-        #   quote = quote_view.latest(intent.symbol, ...)   # STALE ACCEPTED (staleness never
-        #                                                   #   blocks a reduce — FD-M4-3)
-        #   cap = order_pricing.reduce_cap(side=intent.side, quote=quote, cap_bps=FLATTEN_CAP_BPS)
+        #   instrument_id = self._instrument_ids.get(intent.symbol)
+        #   instrument_id is None -> raise FlattenUnpriced("no_price_for_cap")   # M5C-S8: an
+        #                  # unmapped symbol resolves like an unpriceable quote — never a gate
+        #   quote = quote_view.latest(intent.symbol, instrument_id)   # STALE ACCEPTED (staleness
+        #                                                   #   never blocks a reduce — FD-M4-3)
+        #   cap = order_pricing.reduce_cap(side=intent.side, quote=quote, cap_bps=self._cap_bps)
         #   cap is None  -> raise FlattenUnpriced("no_price_for_cap")   # the M0 per-position
         #                  # isolation catches it into failed[] -> residual -> retry_residual
         #                  # when quotable. NEVER a bare market order (FD-M5-1).
@@ -842,7 +912,21 @@ class ModeledFill:
     modeled_fillable_qty: Decimal                # displayed-size-bounded qty at/inside the touch
     modeled_vwap: Optional[ModeledUSD]           # per-share, quantized MID_QUANTUM (provenance)
     worst_price: Optional[ModeledUSD]            # deepest level consumed, or the cap for remainder
-    slippage_vs_mid_bps: Optional[Decimal]       # vs quote_b QuoteVerdict.mid, BPS_QUANTUM
+    touch_price: Optional[ModeledUSD]            # UNQUANTIZED opposite-touch price used by the model
+                                                 #   (buy: quote_b.ask) — journaled so FD-M5-20's
+                                                 #   filled-qty re-integration is replay-recomputable
+                                                 #   (EX-2/M5C-S6; LD-R5 money discipline)
+    levels_consumed: Optional[Tuple[Tuple[Decimal, Decimal], ...]]
+                                                 # depth_vwap_l2_v2 ONLY: the (px, qty) level prefix
+                                                 #   the walk consumed (EXACT, best-first) — the
+                                                 #   FD-M5-20 walk-prefix re-integration operand;
+                                                 #   None for tob_l1_v1
+    slippage_vs_mid_bps: Optional[Decimal]       # FROZEN FORMULA (EX-8): buy =
+                                                 #   (modeled_vwap − mid)/mid × 10000, sell =
+                                                 #   (mid − modeled_vwap)/mid × 10000 (adverse
+                                                 #   positive, the adverse_move_bps sign convention),
+                                                 #   quantized BPS_QUANTUM under the pinned context;
+                                                 #   None iff modeled_vwap or mid is None
     modeled_cost_usd: Optional[ModeledUSD]       # FULL-qty integrated cost (FD-M5-19), EXACT
     quote: Mapping                               # frozen provenance keys (§P.2) + book_hash|null
     reasons: Tuple[str, ...]                     # sorted ⊆ {"depth_stale","depth_epoch_mismatch",
@@ -852,11 +936,15 @@ def model_fill(*, side: str, qty: Decimal, capped_limit: Decimal,
                quote_b: QuoteSnapshot, quote_b_verdict: QuoteVerdict,
                depth: Optional[DepthSnapshot], now_ms: int) -> ModeledFill: ...
 
-def assess_divergence(*, broker_cost_usd: BrokerUSD, filled_qty: Decimal,
+def assess_divergence(*, side: str, broker_cost_usd: BrokerUSD, filled_qty: Decimal,
                       modeled: ModeledFill) -> "DivergenceResult": ...
     # DivergenceResult{divergence_usd: Decimal|None, divergence_bps: Decimal|None,
-    #                  flag ∈ DIVERGENCE_FLAGS, alert: bool}   — FD-M5-20 formulas verbatim;
-    # the ONE documented cross-newtype comparison seam (plain Decimal outputs).
+    #                  flag ∈ DIVERGENCE_FLAGS, alert: bool}   — FD-M5-20 formulas verbatim:
+    # modeled_cost_over_filled_qty by exact re-integration (tob: min(filled_qty,
+    # modeled_fillable_qty)×touch_price + remainder×capped_limit; depth: first-filled_qty-shares
+    # walk prefix; vwap×qty FORBIDDEN), side-aware flag mapping (buy favorable = divergence<0,
+    # sell favorable = divergence>0). The ONE documented cross-newtype comparison seam
+    # (plain Decimal outputs).
 ```
 
 **Frozen algorithm (buy side; sell mirrors on bids — used by closes):**
@@ -948,13 +1036,27 @@ class PaperBook:
         # broker_account_pnl = BrokerUSD(qty×mark_bid − broker_cost_usd)      (fee-free, A6)
         # execution_realistic_pnl = ModeledUSD(qty×mark_bid − modeled_cost_usd
         #                                      − fees_assessed_to_date)       or None (unassessed)
-        # carries BOTH + realism_class (the FD-M5-20 flag) + the verbatim
+        # carries BOTH + divergence_flag (the FD-M5-20 flag; default "unassessed" until the
+        # first terminal fill_divergence row — EX-11: the field is NAMED divergence_flag, not
+        # realism_class, so it can never validate against the wrong vocabulary) + the verbatim
         # used_for_strategy_evaluation = "execution_realistic_pnl" (parent §7). Never collapsed.
     def close_position(self, *, position_id, order_id, fills: Sequence[FillDelta],
                        modeled: Optional[ModeledFill], reason: str) -> Mapping: ...
-        # reason ∈ CLOSE_REASONS; realized_broker_pnl = exit_notional − cost (EXACT);
-        # realized_modeled_pnl = modeled exit − modeled cost − fees_for(sell) — or None;
-        # sell-side FeeAssumption assessed HERE (the fees the realistic side pays).
+        # reason ∈ CLOSE_REASONS.
+        # PARTIAL-CLOSE COST ALLOCATION (FROZEN — EX-4; exact proportional slicing is
+        # impossible for non-terminating divisions, so the rule keeps the SUM exact):
+        #   closed_slice_broker_cost = (broker_cost_usd × exit_qty / qty)
+        #                              .quantize(CENT, ROUND_HALF_EVEN)
+        #   residual broker_cost_usd = broker_cost_usd − closed_slice_broker_cost
+        #     (exact by construction; the rounding residue stays on the OPEN slice and
+        #      washes out at full close). IDENTICAL rule for modeled_cost_usd.
+        # realized_broker_pnl = broker_exit_notional − closed_slice_broker_cost (EXACT);
+        # realized_modeled_pnl = modeled exit − closed_slice_modeled_cost − fees_for(sell)
+        #   — or None; the sell-side fee notional is THE MODELED exit proceeds over exit_qty
+        #   (EX-9: the fee enters only the realistic side, so its basis stays entirely on the
+        #   modeled lineage; modeled exit None => realistic side unassessed, NO fee computed).
+        # Both closed_slice_*_cost AND the residual costs are journaled on position_close so
+        # rehydrate folds bytes (LD-R5).
     @staticmethod
     def rehydrate(position_rows, fill_rows) -> Mapping[str, PaperPosition]: ...
         # pure fold by ascending seq: position_open = immutable facts; broker_fill deltas
@@ -993,6 +1095,10 @@ class ScriptedSyntheticStrategy(SyntheticStrategy):
         # deterministic script rows: {"on_bar": <bar_key|ordinal>, "action": "open"|"close",
         #  "symbol", "qty": "<int-str>", "limit": "<Decimal-str>"|None} — drives the first
         # open→mark→close E2E (S9) with zero randomness.
+        # FROZEN MATCHING RULE (M5C-B2): a str "on_bar" matches the M3 bar_key derived from
+        # ctx.snapshot.event_start_bar_end_utc; an int "on_bar" matches the ORDINAL of
+        # successful scan() invocations (1-based, counted only when a SignalSnapshot was
+        # assembled — GateFail ticks do not advance the ordinal).
     def exits(self, ctx: ScanContext) -> Sequence["ExitInstruction"]: ...
 
 @dataclass(frozen=True)
@@ -1034,6 +1140,12 @@ The orchestrator computes `artifact_check` once per (strategy, rules_hash, data_
 it into `PreflightInputs` (ladder stage 5). M5 ships NO artifact ⇒ every real strategy rejects
 `backtest_artifact_missing` (fail-closed); M7 produces the first artifact + the review/signing runbook.
 
+**Empty-dir tripwires (M5C-S12):** the S9 premise rests on `artifacts/backtests/` staying empty, so
+(a) §R 12 asserts the repo's committed `artifacts/backtests/` contains NO entries besides `.gitkeep`,
+and (b) every §Q artifact BUILDER takes a **mandatory** `artifacts_dir` argument (no default pointing
+at `ARTIFACTS_DIR`) so tests structurally cannot write into the committed dir; `verify_artifact`
+keeps its production default.
+
 ## M. `scripts/agent/orchestrator.py` — the impure composer
 
 ### M.1 Process discipline
@@ -1046,9 +1158,14 @@ journaled `status` note.
 ### M.2 Startup sequence (frozen ORDER; any step failing ⇒ fail-loud exit, nothing submitted)
 
 1. **Lock** — acquire `run_lock`.
-2. **Config** — load committed `config/*.json` (+ optional `--overlay` via `tighten_only_merge`);
-   paper mode ONLY: assemble the gates view per §O.2; parse `SignalConfig` / `RiskConfig` /
-   `ExecutionConfig` (each fail-loud at startup); compute `rules_hash` over the assembled dict.
+2. **Config** — load committed `config/*.json` (+ optional `--overlay` via `tighten_only_merge`) into
+   the assembled dict `{"agent_rules":..., "risk_rules":...}`; compute `rules_hash` over THIS
+   (pre-substitution) dict; parse the three configs fail-loud — **input shapes differ and are pinned
+   (M5C-B7):** `SignalConfig.from_config(assembled["agent_rules"])` (it requires a top-level
+   `"signal"` key — `signal_config.py:104-106`) vs `RiskConfig.from_config(assembled)` /
+   `ExecutionConfig.from_config(assembled)` (the M4C-9 hash note extends to the input shape).
+   Paper mode ONLY: additionally assemble the §O.2 gates view (the substitution NEVER feeds the
+   parsers or `rules_hash` — §B/M5C-S4).
 3. **run_id** — `"run-" + strftime("%Y%m%dT%H%M%SZ") + "-" + row_hash({host, pid, ts_utc})[:12]`
    (CLI; tests inject) — injected into every writer; the recorder shares the namespace (S6).
 4. **Ledgers** — open `DecisionLedger` (M3, untouched), `RiskLedger` (M4), `ExecLedger`
@@ -1066,10 +1183,11 @@ journaled `status` note.
    rehydrate (safety-F5/M4C-10)."* Test-asserted call ordering (§R 10). M5 discharges RM-8 at fill
    granularity: long-only ⇒ every opening buy fill is IML-reducing (`classify_iml_reducing`) ⇒ one
    `MarginObservation` per buy fill + `close_of_day` at the session-close edge.
-6. **Exec rehydrate** — fold `orders/fills/positions.jsonl`: `PaperBook.rehydrate` + the open-order
-   set; every non-terminal order ⇒ FD-M5-24 recovery (paper: query-by-`client_order_id`, adopt, one
-   best-effort cancel `restart_unknown_state`, resume polling; not found ×3 ⇒
-   `order_submit_unconfirmed{not_found}` + open-deny; observe/offline ⇒ `offline_orphan` + open-deny).
+6. **Exec rehydrate (PURE — M5C-S2):** fold `orders/fills/positions.jsonl`: `PaperBook.rehydrate` +
+   the open-order set; classify every non-terminal order. NO broker call happens here (the broker
+   does not exist yet): observe/offline-mode non-terminal orders resolve NOW as
+   `order_submit_unconfirmed{offline_orphan}` + open-deny; paper-mode candidates are QUEUED for
+   step 10's broker-touching recovery.
 7. **HALTED latch** — a rehydrated HALTED kill state ⇒ the run starts halted: observe-only ticks
    continue, opens are structurally impossible (M4 rung 2 + ladder rung 2), and the runbook's
    operator-attended `retry_residual` is the only trade action.
@@ -1077,9 +1195,25 @@ journaled `status` note.
    kill_generation_source=lambda: risk_kill.generation)` (FD-M5-13).
 9. **Mode select (derived, never a flag):** observe ⇒ NO broker object constructed (FD-M5-4;
    strongest S1); synthetic ⇒ `FakeBroker` + the in-memory permissive fixture config (FD-M5-3);
-   paper ⇒ `AlpacaPaperBroker(credentials_loader=...)` iff the §O.2 gates view is identity-True AND
-   `.secrets/alpaca_paper.json` exists — else the run degrades to observe with a loud status row.
-   `--mode` only ASSERTS the expectation (fails loud on mismatch); no flag can enable anything.
+   paper ⇒ `AlpacaPaperBroker(credentials_loader=...)` **iff `.secrets/alpaca_paper.json` exists —
+   credentials are the ONLY construction key (M5C-S3): the run-gates view governs OPENING only**
+   (ladder rung 1 / `can_open` rung 1), never broker existence. Gates-False paper is the
+   **"paper, reduce-and-recover only"** posture: recovery cancels, the watcher, strategy closes,
+   kill flatten and `retry_residual` all work; every open rejects at `run_gates` (a gates-off
+   restart can still cancel a dangling order and flatten a held position — the §0 asymmetry).
+   No credentials file ⇒ degrade to observe with a loud status row. `--mode` only ASSERTS the
+   expectation (fails loud on mismatch); no flag can enable anything.
+   **Test seam (M5C-T3):** the orchestrator ctor accepts `broker=`, `strategy=` and
+   `status_provider=` injections; step 9 constructs a broker ONLY when `broker is None`
+   (wall 1 runs on the injected pair too).
+10. **Order recovery (broker-touching — M5C-S2):** paper mode, for every step-6-queued
+   non-terminal order: FD-M5-24 — re-query by `client_order_id`, ADOPT the broker's answer, one
+   best-effort cancel `restart_unknown_state`, resume polling; not found ×3 ⇒
+   `order_submit_unconfirmed{not_found}` + open-deny. Runs even when the gates view is False
+   (reduce-and-recover; a dangling order must never be presumed dead while credentials exist).
+   **Degrade-to-observe at step 9 (no credentials) ⇒ this step resolves every step-6-queued
+   candidate as `order_submit_unconfirmed{resolution:"offline_orphan"}` + open-deny instead
+   (the FD-M5-24 observe branch — the bookkeeping row is never silently skipped; RC-3).**
 
 ### M.3 Tick loop (cadence = `signal.refresh_cadence_ms`, committed "1000"; frozen step order)
 
@@ -1088,8 +1222,9 @@ TICK n:
  1 ingest      replay/feed events up to the tick horizon -> QuoteView/DepthView update;
                track feed_epoch_now
  2 market state for refresh_set = universe ∪ held symbols ∪ in-flight-order symbols:
-               build TradabilityInputs (calendar schedule + latest NBBO + scripted/UNKNOWN
-               status — §N honesty note) -> decider.decide -> MarketStateCache.put
+               build TradabilityInputs (calendar schedule + latest NBBO + status from the
+               injected status_provider — default None => UNKNOWN fail-closed; §N honesty
+               note + M5C-T4 seam) -> decider.decide -> MarketStateCache.put
  3 account     (paper/synthetic, every account_refresh_interval_ms): provider payloads ->
                M4 parse chokepoints -> AccountStore.put + RiskLedger.record_account_snapshot
                (the F4 obligation, valid and invalid alike) -> PortfolioRead with
@@ -1099,11 +1234,27 @@ TICK n:
  5 kill        RiskKillSwitch.evaluate(account, loss_read); accepted cause -> §M.6 sequence
  6 orders      advance every in-flight OrderTask (§M.4) + post-submit watcher (§M.5);
                fills -> exec ledger -> PaperBook -> MarginObservation per buy fill
- 7 scan        ONLY when gates view is identity-True AND a non-spy broker is bound AND no
-               order in flight (FD-M5-21) AND symbol not in the open-deny set:
-               strategy.scan(ScanContext) -> first Candidate -> §M.4 pipeline
+ 7 scan        ONLY when a non-spy broker is bound AND no order in flight (FD-M5-21) AND
+               symbol not in the open-deny set — there is NO gates pre-check here (M5C-S9):
+               the run-gates refusal is journaled PER DECISION at can_open rung 1 (and at
+               the mint's rung 1 if ever reached), so on the committed config every scan
+               decision terminates as a journaled run_gates refusal the S1 canary can see.
+               SNAPSHOT ASSEMBLY (frozen — M5C-B2): per universe symbol the orchestrator
+               calls signal_snapshot.assemble(...) with the step-2/4 collaborators
+               (SignalConfig horizons/threshold_k, FeatureView.refresh result,
+               QuoteView.latest, fresh MarketStateCache.get, calendar_pin); a GateFail =>
+               NO scan call for that symbol this tick and nothing journaled on the strategy
+               path (the M3 probe owns the observe row); on a SignalSnapshot:
+               strategy.scan(ScanContext{snapshot, rules_hash, now_ms}) -> first Candidate
+               -> §M.4 pipeline
  8 exits       ExitProvider.exits(...) -> §M.7 close path (reduce; independent of gates'
-               open keys — closes are risk-reducing)
+               open keys — closes are risk-reducing). FD-M5-21 IS GLOBAL (RC-1): an
+               ExitInstruction is processed ONLY when NO order — open or close — is in
+               flight; a re-emitted exit while a close order is non-terminal is DROPPED
+               (not journaled). Rev 2's per-tick close ids (M5C-S5) removed the accidental
+               duplicate-client_order_id backstop, so without this guard a slow close
+               could double-sell and flip the position; "may flatten, never flip" is
+               enforced here, not by id collision.
  9 marks       per held position per COMPLETED bar: PaperBook.mark + pnl_snapshot
 10 session edge leaving RTH: best-effort cancel of open orders (cause session_end) +
                IntradayMarginModel.close_of_day
@@ -1162,25 +1313,41 @@ trigger: ONE best-effort `broker.cancel_order(order_id)` (no token) + a `post_su
 row `{cause, outcome ∈ CANCEL_OUTCOMES, broker_state_at_attempt}`; keep watching — late fills remain
 authoritative `broker_fill` rows (price-bounded by `capped_limit`), the modeled side is flagged, never
 back-voided. Cancel re-triggering is suppressed per cause (one attempt per cause per order; a second
-distinct cause may attempt again).
+distinct cause may attempt again). **Post-kill late-fill tripwire (M5C-S11):** when an order reaches a
+terminal state with `filled_qty > 0` while `kill_state != "monitoring"`, journal
+`order_state_alert{note:"late_fill_post_kill"}` naming the symbol as an operator
+`retry_residual`/manual-flatten item — the position it created/increased post-dates the kill's
+`at_trigger` snapshot and is otherwise invisible to the kill bookkeeping until M6 reconcile
+(asserted in §R 15's cancel-then-late-fill script).
 
 ### M.6 Kill sequence (FD-M5-25; S8)
 
 On `RiskKillSwitch.evaluate` returning an accepted cause: (1) best-effort cancel EVERY open order
 (`post_submit_cancel_attempt{cause:"kill_trip"}`); (2) `void_token` any minted-unconsumed open token
 (journaled reject `stage:"consume"`, reason `kill_generation_changed`); (3)
-`risk_kill.trigger(cause, PriceCappedFlattenBroker(inner=broker, quote_view=quote_view), portfolio,
-evaluation=…, account=wrap(AccountStore.latest_unsafe()), tradability=…)` — flatten attempts ALL
-positions (FD-M4-20); a `FlattenUnpriced` symbol lands in `failed[]`/`residual` with reason
-`no_price_for_cap` (FD-M5-1) and is retried via the operator-attended `retry_residual` when quotable;
-(4) the generation bump invalidates every outstanding open token at consume (FD-M5-13). Position
-closes that result book through `PaperBook.close_position(reason="kill_flatten")`.
+`risk_kill.trigger(cause, PriceCappedFlattenBroker(inner=broker, quote_view=quote_view,
+instrument_ids=<the orchestrator's universe ∪ held-positions map — M5C-S8>,
+cap_bps=FLATTEN_CAP_BPS), portfolio, evaluation=…,
+account=AccountStore.get(now_ms=clock.now_ms()), tradability=…)` — **no `wrap()` helper exists
+(M5C-B5): `AccountStore.get` already produces a correctly-statused `AccountRead`, so `trigger`'s
+journaled `stale_inputs` annotation reflects real freshness (§R 15 asserts the resulting value)** —
+flatten attempts ALL positions (FD-M4-20); a `FlattenUnpriced` symbol lands in `failed[]`/`residual`
+with reason `no_price_for_cap` (FD-M5-1) and is retried via the operator-attended `retry_residual`
+when quotable; (4) the generation bump invalidates every outstanding open token at consume
+(FD-M5-13). Position closes that result book through
+`PaperBook.close_position(reason="kill_flatten")` — including in the SYNTHETIC composition, where
+the FakeBroker inner accepts the un-prefixed flatten intents because reductions are never
+namespace-gated (FD-M5-8 rev 2).
 
 ### M.7 Strategy close path (FD-M5-26)
 
-`ExitInstruction` → journal `strategy_decision(action="would_close")` →
+`ExitInstruction` (processed only with NO order of any kind in flight — the §M.3 step-8 global
+FD-M5-21 guard; RC-1) → journal `strategy_decision(action="would_close")` →
 `cap := reduce_cap(side="sell", quote=quote_b, cap_bps=exec_config.slippage_cap_bps)`; `cap is None`
-⇒ `reject{stage:"reduce_pricing", reasons:("no_price_for_cap",)}` + retry next tick; else
+⇒ `reject{stage:"reduce_pricing", reasons:("no_price_for_cap",)}` + retry next tick — **each tick's
+exit attempt is a NEW decision** (the §P.3 close-path `event_basis` carries the tick's
+`decision_seen_at_ms`, so a retried/re-emitted close NEVER reuses `decision_id`/`order_id`/
+`client_order_id` — M5C-S5/FD-M5-17/A8); else
 `token := mint_reduce_only_token(held_position, intent)` (M0, unedited) → write-ahead
 `order_submit_attempt(token_kind="reduce_only")` → submit → WATCH → `position_close`. No open
 preflight, no risk verdict, no run-gate consultation (closes work even with gates off — they are
@@ -1192,7 +1359,12 @@ risk-reducing; S1 is about opens).
 class ReplayClock:
     """now_ms = ms offset of the LAST DELIVERED event's ts_recv_utc from stream start.
     Deterministic: 'awaiting the latency budget' = delivering more recorded events until
-    the budget has elapsed in RECORDED time. FakeClock-compatible surface (now_ms())."""
+    the budget has elapsed in RECORDED time. FakeClock-compatible surface (now_ms()).
+    TIMESTAMP PARSE DISCIPLINE (frozen — EX-5/SAFETY-F2): ReplayClock and the
+    events.jsonl -> QuoteSnapshot field map parse ALL timestamps via the
+    bar_series._parse_utc chokepoint (NO local strptime/fromisoformat) — the repo
+    provably mixes whole-second and .%f ISO forms (the shipped M3-02 bug class), and
+    every downstream staleness/latency/requote ms computation keys off these offsets."""
 
 class ReplayQuoteFeed:
     def __init__(self, path, *, symbols: Optional[Sequence[str]] = None) -> None: ...
@@ -1211,15 +1383,25 @@ class ReplayQuoteFeed:
         # MidBarSeriesReader — SAFE because every feature/label read is as-of/watermark-
         # gated (M3 FD-2 anti-lookahead), so preloading cannot leak the future;
         # on_bar_complete fires in recorded-time order; on_tick fires per refresh_cadence_ms
-        # of RECORDED time.
+        # of RECORDED time. CATCH-UP RULE (RC-5): at most ONE on_tick fires per
+        # delivered-event batch — a single recorded event jumping multiple cadence
+        # boundaries fires on_tick ONCE; equivalently now_ms STRICTLY increases between
+        # consecutive on_tick invocations (the §M.7 per-tick close ids key on
+        # decision_seen_at_ms, so two ticks must never share a now_ms).
 ```
 
 **Honesty note (frozen):** EQUS.MINI has no `status` schema, so observe/synthetic-mode
-`TradabilityInputs` carry halt/LULD/SSR = UNKNOWN unless a fixture status script is injected;
-tradability is calendar+NBBO-driven and the M2 decider's fail-closed UNKNOWN handling governs.
-Synthetic-mode E2E fixtures script TRADABLE verdicts explicitly. Calendar coverage comes from the
-committed fixtures (`--calendar-fixture`, default `nyse_margin_window_v1.json` which covers the
-committed tbbo sample's 2026-06-09 dates); out-of-coverage dates fail closed via `UnknownSessionDate`.
+`TradabilityInputs` carry halt/LULD/SSR = UNKNOWN unless a status script is injected;
+tradability is calendar+NBBO-driven and the M2 decider's fail-closed UNKNOWN handling governs
+(UNKNOWN halt/luld BLOCKS opens at ladder stage 9 — `market_state.py:293,301`).
+**The status-injection seam is pinned (M5C-T4):** the orchestrator/feed ctor parameter
+`status_provider` (default `None` ⇒ UNKNOWN fail-closed) is consumed at §M.3 step 2 when building
+`TradabilityInputs`; tests build one via the §Q `exec_fixtures.status_script(...)` builder
+(per-symbol session windows ⇒ `StatusFlags(halt=HaltState.NONE, luld=LuldState.NORMAL, ssr=SsrState.INACTIVE)`), and the synthetic CLI
+accepts `--status-script <path>` — this is how the §R 14 E2E's opens pass stage 9. Calendar coverage
+comes from the committed fixtures (`--calendar-fixture`, default `nyse_margin_window_v1.json` which
+covers the committed tbbo sample's 2026-06-09 dates); out-of-coverage dates fail closed via
+`UnknownSessionDate`.
 
 ## O. Entry point, secrets layout, and the run-gates file
 
@@ -1229,7 +1411,7 @@ committed tbbo sample's 2026-06-09 dates); out-of-coverage dates fail closed via
 PYTHONPATH=scripts python3 -m agent observe   --events <events.jsonl> [--symbols A,B]
         [--journal-dir journal/] [--calendar-fixture <path>] [--report-out <path>] [--ticks N]
 PYTHONPATH=scripts python3 -m agent synthetic --events <events.jsonl> [--journal-dir journal/synthetic/]
-        [--script <path>] [--calendar-fixture <path>]
+        [--script <path>] [--calendar-fixture <path>] [--status-script <path>]
 PYTHONPATH=scripts python3 -m agent paper     [--overlay <local-overlay.json>] [--journal-dir journal/]
 ```
 
@@ -1237,7 +1419,12 @@ PYTHONPATH=scripts python3 -m agent paper     [--overlay <local-overlay.json>] [
   **constructs no broker object at all**, FD-M5-4); symbol set = events-file symbols ∩ `--symbols`
   (when given) ∩ `agent_rules.universe.symbols` (when non-empty; committed `[]` ⇒ file-driven —
   read-only, so safe). Runs ingest → bars → features → market-state → M3 probe → resolver →
-  calibration report. **Runnable TODAY** on any M1-recorded file or the committed tbbo fixture.
+  calibration report. **Runnable TODAY** on any M1-recorded `events.jsonl` or the §Q
+  COMMITTED recorder-shaped fixture `tests/fixtures/execution/observe_session_tbbo.jsonl`
+  (which has the journal envelope + ≥60 one-minute buckets the feature gate needs — M5C-5/M5C-T6).
+  The 2-row `tests/fixtures/databento/equs_mini_tbbo_sample.jsonl` is RAW vendor records with no
+  journal envelope and CANNOT feed `replay_stream`; it stays a parser/smoke input only (feed via
+  the M1 parser path parses, zero decisions expected, exit 0).
 - **`synthetic`:** builds the in-memory permissive fixture config (FD-M5-3 — gates identity-True,
   nonzero caps, one-symbol universe WITH sector/beta metadata; the M4 §L
   `permissive_fixture_config` mirror; NEVER written under `config/`), a `FakeBroker`, and
@@ -1245,9 +1432,12 @@ PYTHONPATH=scripts python3 -m agent paper     [--overlay <local-overlay.json>] [
   would consult the committed config or construct any non-fake broker. The first
   open→mark→close E2E, offline, today.
 - **`paper`:** committed config + optional tighten-only overlay + the §O.2 run-gates view +
-  `.secrets/alpaca_paper.json`. Until the live quote feed exists (M1-2b) every open preflight rejects
-  at the `quote` stage (`quote_missing`/`quote_stale`) — fail-closed and correct; account polling,
-  journaling, kill drill, and the reduce path are exercisable. REAL opens additionally require
+  `.secrets/alpaca_paper.json`. The broker is constructed whenever the credentials file exists —
+  gates govern OPENING only (M5C-S3): with gates False/absent the run is "paper, reduce-and-recover
+  only" (recovery, watcher, closes, kill drill, `retry_residual` all work; every open rejects at
+  `run_gates`). Until the live quote feed exists (M1-2b) every open preflight additionally rejects
+  at the `quote` stage (`quote_missing`/`quote_stale`) — fail-closed and correct; account polling
+  and journaling are exercisable. REAL opens additionally require
   Robin's reviewed caps/universe commit (FD-M5-3). `--mode`-style expectations: each subcommand
   asserts its derived mode and exits non-zero on mismatch; no flag can flip a gate.
 
@@ -1284,6 +1474,14 @@ PYTHONPATH=scripts python3 -m agent paper     [--overlay <local-overlay.json>] [
 6. Two-key arming is UNTOUCHED: this file is a paper-mode convenience analogous in posture to key B
    (runtime, never committed) but it arms NOTHING live — `live_trading.enabled` stays committed-False
    and `construct_live_broker` still requires both keys (M8).
+7. **The substitution never feeds `rules_hash` or the parsers (M5C-S4):** `rules_hash` and the three
+   config parsers consume the PRE-substitution assembled dict (§B); the gates view exists solely as
+   the `gates.opening_allowed` argument at the two rung-1 call sites. Same committed config ⇒ same
+   `rules_hash` on every row, file present-true or absent (§R 13 pins it).
+8. **Broker existence is independent of this file (M5C-S3):** credentials construct the broker; the
+   gates view only ever answers "may an OPEN proceed". Deleting the file after a gates-on session
+   re-closes opens on the next start while recovery/close/flatten still work (the uninstall story
+   without stranded positions).
 
 **`.secrets/` layout after M5 (git-ignored):**
 
@@ -1315,6 +1513,16 @@ class ExecLedger:
                  positions: EventWriter, rules_hash: str) -> None: ...
     # one kwarg-only record_* method per event type below (StatusLedger shape); each
     # validates vocabularies and field sets, and refuses _RESERVED collisions.
+    # MONEY-LINEAGE ENFORCEMENT (M5C-S10): every broker-lineage money field
+    # (delta_cost_usd, broker_cost_usd, broker_exit_notional_usd, cum_notional_usd,
+    # realized_broker_pnl, broker_account_pnl) passes serializer.as_broker_usd; every
+    # modeled-lineage slot (modeled_cost_usd, realized_modeled_pnl,
+    # execution_realistic_pnl) passes a LOCAL as_modeled_usd guard defined HERE
+    # (serializer.py is NOT edited — §3; the guard mirrors as_broker_usd: TypeError on
+    # a non-ModeledUSD, BrokerUSD included). Serialization erases the newtype, so this
+    # seam is the last place a lineage swap is catchable (§R 6 feeds a ModeledUSD into
+    # delta_cost_usd => TypeError, no row written).
+    # fill_id is COMPUTED HERE in record_broker_fill (the ONE home — M5C-T7).
 def replay_orders/replay_fills/replay_positions(path) -> list: ...
 def rehydrate_exec_state(order_rows, fill_rows, position_rows) -> dict: ...
     # pure fold by ascending seq -> {"open_orders": {order_id -> latest state row},
@@ -1347,9 +1555,9 @@ Frozen provenance sub-dict (every `quote_a`/`quote_b`/`quote` key below):
 
 | event_type | payload fields |
 |---|---|
-| `broker_fill` | `fill_id, broker_order_id, position_id\|null, symbol, side, delta_qty, delta_cost_usd (BrokerUSD, EXACT — drives the ledger), cum_filled_qty, filled_avg_price_after, liquidity_flag\|null, venue\|null, ts_broker_utc\|null, source ∈ FILL_SOURCES` (+`decision_id`, `order_id`) |
-| `modeled_execution_fill` | `modeled_fill_id, model ∈ MODELED_FILL_MODELS, realism_class ∈ REALISM_CLASSES, requested_qty, modeled_fillable_qty, modeled_vwap\|null (MID_QUANTUM), worst_price\|null, slippage_vs_mid_bps\|null (BPS_QUANTUM), modeled_cost_usd\|null (EXACT), fees_assumed {model_version, sec_usd, taf_usd, total_usd}, quote {provenance + book_hash\|null}, reasons[] (sorted)` (+`decision_id`, `order_id`) — **label only** |
-| `fill_divergence` | `broker_cost_usd, modeled_cost_usd\|null, divergence_usd\|null, divergence_bps\|null, flag ∈ DIVERGENCE_FLAGS` (+`order_id`) — FD-M5-20, flag ALWAYS |
+| `broker_fill` | `fill_id, broker_order_id, position_id\|null, symbol, side, delta_qty, delta_cost_usd (BrokerUSD, EXACT — drives the ledger), cum_filled_qty, filled_avg_price_after, cum_notional_after (EXACT — the §P.3 fill_id operand, replay-recoverable; M5C-T7), liquidity_flag\|null, venue\|null, ts_broker_utc\|null, source ∈ FILL_SOURCES` (+`decision_id`, `order_id`) |
+| `modeled_execution_fill` | `modeled_fill_id, model ∈ MODELED_FILL_MODELS, realism_class ∈ REALISM_CLASSES, requested_qty, modeled_fillable_qty, modeled_vwap\|null (MID_QUANTUM), worst_price\|null, touch_price\|null (EXACT — the FD-M5-20 re-integration operand; EX-2), levels_consumed\|null (EXACT (px,qty) list-of-pairs, depth model only — the walk-prefix operand), slippage_vs_mid_bps\|null (BPS_QUANTUM), modeled_cost_usd\|null (EXACT), fees_assumed {model_version, sec_usd, taf_usd, total_usd}, quote {provenance + book_hash\|null}, reasons[] (sorted)` (+`decision_id`, `order_id`) — **label only** |
+| `fill_divergence` | `side, broker_cost_usd, modeled_cost_usd\|null, divergence_usd\|null (EXACT), divergence_bps\|null, flag ∈ DIVERGENCE_FLAGS` (+`order_id`) — FD-M5-20, flag ALWAYS, side-aware mapping (EX-3) |
 | `divergence_alert` | `divergence_usd, divergence_bps, threshold_bps:"10"` (+`order_id`) — iff over `DIVERGENCE_ALERT_BPS` |
 
 **`journal/positions.jsonl`:**
@@ -1358,13 +1566,15 @@ Frozen provenance sub-dict (every `quote_a`/`quote_b`/`quote` key below):
 |---|---|
 | `position_open` | `position_id, symbol, instrument_id, side:"long", qty, broker_cost_usd (EXACT), modeled_cost_usd\|null (EXACT), fee_assumption {model_version, sec_usd, taf_usd, total_usd}, opening_order_id, strategy_id, opened_ts_utc` (+`decision_id`, `order_id`) — the OPEN row = immutable facts (parent §7 rehydrate contract) |
 | `mark` | `position_id, mark_price, mark_source ∈ {best_bid, best_ask}, quote{provenance}, unrealized_broker_usd, unrealized_modeled_usd\|null, bar_key` |
-| `pnl_snapshot` | `position_id, broker_account_pnl, execution_realistic_pnl\|null, realism_class ∈ DIVERGENCE_FLAGS, basis {broker:"broker_fills", modeled:"modeled_fill_plus_fees"}, used_for_strategy_evaluation:"execution_realistic_pnl", bar_key` — both classes, never one (S5) |
-| `position_close` | `position_id, closing_order_id, exit_qty, broker_exit_notional_usd (EXACT), realized_broker_pnl (EXACT), realized_modeled_pnl\|null (EXACT), fees_assessed {model_version, sec_usd, taf_usd, total_usd}, reason ∈ CLOSE_REASONS` (+`decision_id`, `order_id`) |
+| `pnl_snapshot` | `position_id, broker_account_pnl, execution_realistic_pnl\|null, divergence_flag ∈ DIVERGENCE_FLAGS (default "unassessed" before the first terminal fill_divergence — EX-11; renamed from realism_class so it can never validate against the REALISM_CLASSES vocabulary), basis {broker:"broker_fills", modeled:"modeled_fill_plus_fees"}, used_for_strategy_evaluation:"execution_realistic_pnl", bar_key` — both classes, never one (S5) |
+| `position_close` | `position_id, closing_order_id, exit_qty, broker_exit_notional_usd (EXACT), closed_slice_broker_cost_usd (EXACT), residual_broker_cost_usd (EXACT), closed_slice_modeled_cost_usd\|null (EXACT), residual_modeled_cost_usd\|null (EXACT) — the §K partial-close allocation outputs, journaled so rehydrate folds bytes (EX-4) — realized_broker_pnl (EXACT), realized_modeled_pnl\|null (EXACT), fees_assessed {model_version, sec_usd, taf_usd, total_usd}, reason ∈ CLOSE_REASONS` (+`decision_id`, `order_id`) |
 
 **Money-field discipline (the M4 LD-R5 rule, applied):** journaled EXACT/unquantized because
 rehydrate or replay-determinism reads them back: `delta_cost_usd`, `cum_filled_qty`,
-`filled_avg_price_after`, `cum_notional_usd`, `broker_cost_usd`, `modeled_cost_usd`,
-`broker_exit_notional_usd`, `realized_*_pnl`, every `qty`/`limit_price`/`capped_limit`, every
+`filled_avg_price_after`, `cum_notional_after`, `cum_notional_usd`, `broker_cost_usd`,
+`modeled_cost_usd`, `touch_price`, `divergence_usd` (EX-2), `broker_exit_notional_usd`,
+`closed_slice_*_cost_usd`/`residual_*_cost_usd` (EX-4), `realized_*_pnl`, every
+`qty`/`limit_price`/`capped_limit`, every
 `fees_*` component. Quantize-only provenance (nothing rehydrates from them): `modeled_vwap`/
 `worst_price` (`MID_QUANTUM`), `slippage_vs_mid_bps`/`divergence_bps`/`adverse_move_bps`
 (`BPS_QUANTUM`), `mark_price` (the quote's own grid), `unrealized_*` (recomputed live, fold-exempt).
@@ -1373,7 +1583,10 @@ rehydrate or replay-determinism reads them back: `delta_cost_usd`, `cum_filled_q
 
 - `decision_id = "d-" + row_hash({run_id, strategy_id, symbol, instrument_id, event_basis})` —
   strategy path; `event_basis` = the completed bar_key that triggered `scan` (M3 bar-key format), or
-  `"exit:" + position_id` on the close path. M3 probe ids are a different namespace and unchanged.
+  **`"exit:" + position_id + ":" + str(decision_seen_at_ms)` on the close path (M5C-S5: the per-tick
+  ms stamp makes every retried/re-emitted exit a NEW decision → new preflight-less chain → new
+  `order_id`/`client_order_id`; deterministic under ReplayClock, FD-M5-17/A8 uniqueness preserved)**.
+  M3 probe ids are a different namespace and unchanged.
 - `preflight_id = "pf-" + row_hash({run_id, decision_id, symbol, side, qty, reasons (sorted list; []
   on pass), quote_b_seen_at_ms|null, kill_generation})` — Decimal values as canonical serializer
   strings.
@@ -1381,14 +1594,25 @@ rehydrate or replay-determinism reads them back: `delta_cost_usd`, `cum_filled_q
   the prefix is `"synthetic-o-"` (FD-M5-28). **`client_order_id = order_id`** (FD-M5-7; ≤128 chars
   per A8: 66 / 76 chars). Never reused; a retry is a new decision → new preflight → new id.
 - `fill_id = "bf-" + row_hash({order_id, cum_filled_qty_after, cum_notional_after})` — stable under
-  polling re-reads (idempotent fill journaling).
+  polling re-reads (idempotent fill journaling). **`cum_notional_after` is FROZEN as
+  `cur.filled_qty × cur.filled_avg_price` (exact Decimal product — the FD-M5-18 telescoped total;
+  NOT Σ delta_cost, whose Decimal string scale can differ and change the hash bytes); the id is
+  computed in `exec_ledger.record_broker_fill` (the ONE home) and the operand is journaled on the
+  `broker_fill` row (M5C-T7).**
 - `modeled_fill_id = "mf-" + row_hash({order_id, model, quote_b_seen_at_ms, vendor_seq|null})`.
 - `position_id = "pos-" + row_hash({symbol, opening_order_id})` — **run-independent** (positions are
   account-level facts that survive restarts; the FD-M4-13 deficit-id rationale).
 - Correlation chain (S6 join tests): `decision_id → risk_verdict (risk.jsonl) → preflight_id →
   order_id/client_order_id → fill_id/modeled_fill_id → position_id`, each row carrying its upstream
-  id; the `risk_verdict` row's `seq` precedes the `order_submit_attempt` row's `seq` on the same
-  decision (journaled-before-mint, §R 6).
+  id, spanning the FOUR chain-bearing streams (risk/orders/fills/positions — M5C-B8/T9).
+  **Journaled-before-mint is witnessed STRUCTURALLY, never by cross-stream `seq` comparison
+  (M5C-T1: `seq` is per-stream — `journal.py:70-120` — and `risk.jsonl`'s counter runs ahead on
+  `account_snapshot` rows, so the two counters are causally unrelated):** §R 6 installs a write-order
+  spy over the two EventWriters and asserts the `risk_verdict` write precedes the
+  `order_submit_attempt` write per decision; the `order_submit_attempt` row's `risk_verdict_id`
+  binding plus FD-M5-30's row-hash re-verification make the ordering checkable at rest.
+  WITHIN-stream orderings (e.g. `strategy_decision.seq < order_submit_attempt.seq` on
+  `orders.jsonl`) may keep `seq` comparisons.
 
 Replaying identical fixtures with the same `run_id` reproduces every id and row byte-for-byte.
 
@@ -1405,10 +1629,16 @@ Replaying identical fixtures with the same `run_id` reproduces every id and row 
 | `tests/fixtures/alpaca/order_unknown_status.json` | a status string outside A4's 16 | FD-M5-16 fail-closed |
 | `tests/fixtures/alpaca/account_paper.json`, `positions_paper.json` | M4 §L wire-shape account/positions (Decimal-string money) | AlpacaAccountProvider → M4 parsers |
 | `tests/lib/alpaca_fixtures.py` | builders over the above (`order_payload(**overrides)` etc.) + `ScriptedOrderApi(script)` — scripted submit/get/cancel responses incl. timeout injection (`raise BrokerTimeout`) and submit-then-found / submit-then-not-found recovery scripts | adapter, recovery, orchestrator |
-| `tests/lib/exec_fixtures.py` | `permissive_paper_fixture_config()` (IN-MEMORY gates-True + nonzero caps + one-symbol universe with sector/beta — FD-M5-3, M4 §L mirror); quote A/B pair builders (clean pass / B-not-later / identical-provenance re-serve / epoch flip / adverse move / sub-$1 / crossed-locked-stale B); `depth_snapshot()` builder over `mbp10_depth_sample.jsonl`; artifact builders (valid triple, tampered hash, mismatched rules_hash/data_pin); run-gates-file builders (valid/malformed/hostile-extra-keys) | preflight, realism, backtest gate, §O.2 tests |
-| `tests/fixtures/execution/observe_session_tbbo.jsonl` | GENERATED by a `tests/lib/exec_fixtures.py` builder: schema-exact recorder rows, one symbol, ≥ 60 one-minute buckets (the 51-bar feature gate opens) + a variant with an epoch flip mid-session | observe E2E, S1 canary, watcher |
-| `tests/fixtures/execution/golden/` | byte-exact expected orders/fills/positions streams for the synthetic E2E + the observe-run decisions/report golden (M3 golden discipline) | S3/S6 determinism |
-| Reuse | `equs_mini_tbbo_sample.jsonl`, `mbp10_depth_sample.jsonl`, `sub_dollar_subpenny_sample.jsonl`, `nyse_margin_window_v1.json`, `nyse_2026_schedule.json`, M4 `risk_fixtures` builders | throughout |
+| `tests/lib/exec_fixtures.py` | `permissive_paper_fixture_config()` (IN-MEMORY gates-True + nonzero caps + one-symbol universe with sector/beta — FD-M5-3; **a FULL agent_rules shape: the committed `signal` block verbatim + `latency_budget_ms` + the §B `execution` block + universe, so §M.2 step 2's three parsers all parse green in synthetic mode — M5C-B7**); `RealStrategyStub` (**M5C-T3:** a non-`"synthetic."` `strategy_id`, `paper_eligible=True` Candidates from a scripted list — lives in tests/lib, NOT under `scripts/agent/strategies/`, so wall 3 is untouched; the §R 12 gates-consulting canary + §R 10 FSM cases use it); `status_script(...)` (**M5C-T4:** per-symbol session windows ⇒ `StatusFlags(halt=HaltState.NONE, luld=LuldState.NORMAL, ssr=SsrState.INACTIVE)`, consumed via the orchestrator's `status_provider` seam); quote A/B pair builders (clean pass / B-not-later / identical-provenance re-serve / epoch flip / adverse move / **the EX-1 quantization-boundary pair `ask_A=0.7999 → ask_B=0.8019`** / sub-$1 / crossed-locked-stale B); `depth_snapshot()` builder over `mbp10_depth_sample.jsonl`; artifact builders (valid triple, tampered hash, mismatched rules_hash/data_pin — **each takes a MANDATORY `artifacts_dir` argument, no default — M5C-S12**); run-gates-file builders (valid/malformed/hostile-extra-keys) | preflight, realism, backtest gate, §O.2 tests |
+| `tests/fixtures/execution/observe_session_tbbo.jsonl` | **COMMITTED**, generated by the reviewed `tests/lib/exec_fixtures.py` builder (regeneration = run the builder, copy bytes — fully deterministic field values): schema-exact recorder rows WITH the journal envelope (`event_type/run_id/seq/hash`, replay_stream-compatible — M5C-5), one symbol, ≥ 60 one-minute buckets (the 51-bar feature gate opens), **≥ 2 rows with whole-second `ts_recv_utc` (no fractional part — the M3 §K mixed-form precedent; EX-5)**, + a variant with an epoch flip mid-session | observe E2E, S1 canary, watcher |
+| `tests/fixtures/execution/golden/` | byte-exact expected orders/fills/positions streams for the synthetic E2E + the observe-run decisions/report golden. **Golden discipline pinned (M5C-T5, the M3 mechanism verbatim):** `exec_fixtures.run_synthetic_golden(journal_dir)` / `run_observe_golden(...)` helpers with FROZEN constants — `GOLDEN_RUN_ID = "run-m5-golden-v1"`, a deterministic injected row clock (fixed ISO sequence), pinned script/fixture inputs; regeneration = run the helper and copy bytes (the `tests/lib/signal_pipeline.py:35` precedent) | S3/S6 determinism |
+| Reuse | `equs_mini_tbbo_sample.jsonl` (RAW vendor shape — parser/smoke input ONLY, never fed to `replay_stream`; M5C-5), `mbp10_depth_sample.jsonl`, `sub_dollar_subpenny_sample.jsonl`, `nyse_margin_window_v1.json`, `nyse_2026_schedule.json`, M4 `risk_fixtures` builders | throughout |
+
+**Open-driving fixture density rule (frozen — EX-12):** every fixture that must drive a SUCCESSFUL
+open (synthetic E2E, FakeBroker lifecycle) guarantees ≥ 1 quote event in recorded time
+`(t0 + effective_latency_budget_ms, t0 + RISK_VERDICT_TTL_MS]` after each scripted decision bar
+(e.g. 1 s cadence around scripted opens) — under `ReplayClock`, sparser cadence makes every open
+reject `risk_verdict_stale` by construction.
 
 **M5-2a — credentialed verification (Robin-run; mirrors M1's 2a/2b split):** a read-only verifier
 `scripts/agent/verify_alpaca_entitlements.py` (lazy SDK import; `.secrets/alpaca_paper.json`; paper
@@ -1426,19 +1656,29 @@ tests never import or run the verifier path.
 1. **`test_execution_config.py`** — parser: committed JSON parses; ints must be JSON ints > 0 (bool/
    float/string ⇒ `ValueError`); unknown/missing keys raise; `max_open_orders != 1` raises;
    `account_refresh_interval_ms >= 5000` raises; `order_poll_interval_ms` ceiling-clamped at 1000;
-   `effective_latency_budget_ms == max(parsed, 250)` incl. a hostile `latency_budget_ms: 0` overlay
-   merging to 0 then FLOORED to 250 (the FD-M5-10 polarity trap, test-pinned); changing any execution
+   `effective_latency_budget_ms == max(parsed, 250)` — TWO pinned polarity-trap cases (M5C-T2):
+   a hostile `latency_budget_ms: 1` overlay merges to 1 (min() DOES take effect) and is FLOORED to
+   250; a hostile `latency_budget_ms: 0` overlay merges to 0 and the parser raises `ValueError` at
+   startup (fail-loud — the floor only applies to values that parse); changing any execution
    leaf changes `rules_hash`. [S1-config, FD-M5-29]
 2. **`test_order_pricing.py`** — `tick_for` boundaries ($1.00 ⇒ 0.01; $0.9999 ⇒ 0.0001);
    `on_tick_grid` exactness; BUY cap: directed ROUND_DOWN toward budget (hand-computed Decimals);
    SELL cap ROUND_UP; `min/max` with strategy_limit; marketable boundary-equal passes; sub-$1 4dp grid
-   (the 42210000 mirror); `latency_lost_edge` strict boundary at exactly `slippage_cap_bps`;
-   `reduce_cap` returns None on missing/nonpositive side; float injection raises. [S2, S4-economics]
-3. **`test_execution_preflight_m5.py`** — ONE test per §2.1 member (one-bad-input matrix over a
+   (the 42210000 mirror); `latency_lost_edge` strict boundary at exactly `slippage_cap_bps` ON THE
+   QUANTIZED-BPS FORM (the EX-1 boundary pair `0.7999 → 0.8019` @ 25 bps: raw fires, quantized does
+   NOT — the quantized behavior is asserted); `reduce_cap` returns None on missing/nonpositive side;
+   `reduce_cap` direction pinned (EX-7): sell, bid=1.02, bps=25 ⇒ 1.01 (ROUND_DOWN, away from the
+   touch — one tick past the budget, never an impeded reduce); float injection raises.
+   [S2, S4-economics]
+3. **`test_execution_preflight_m5.py`** — ONE test per phase-1/phase-2 member (37 members; the 2
+   consume-time members are owned by §R 4 and the 3 RESERVED members get a single negative test —
+   `require_reason` raises on reserved-in-M5 emission — M5C-T8) (one-bad-input matrix over a
    golden-good `PreflightInputs`); phase-1 terminal ordering (multi-fault input trips the EARLIEST
-   stage; `gate_stage` + `stages_skipped` byte-exact); phase-2 collect-all sorted union (e.g.
-   safe-default verdict ⇒ exactly `market_state_not_rth + market_state_not_tradable +
-   market_state_stale_default` from stage 9); `missing_decision_stamp` hard-rejects on EACH missing
+   stage; `gate_stage` + `stages_skipped` byte-exact); phase-2 collect-all sorted union — the REAL
+   safe-default verdict ⇒ exactly the FIVE stage-9 reasons `ca_blackout + halt_luld_auction +
+   market_state_not_rth + market_state_not_tradable + market_state_stale_default` (M5C-3), and a
+   healthy verdict (halt=NONE, luld=NORMAL, RTH, TRADABLE) ⇒ ZERO stage-9 reasons (M5C-2);
+   `missing_decision_stamp` hard-rejects on EACH missing
    stamp component; latency boundary (pass at exactly budget, reject at budget−1); `requote_not_later`
    incl. the identical-provenance re-serve; epoch flip A→B AND B→feed_now; quote-quality reasons
    embedded verbatim; risk binding: missing row / stale (strict at 2001) / verdict_id mismatch /
@@ -1456,28 +1696,49 @@ tests never import or run the verifier path.
    generation). [S4-TOCTOU, FD-M5-13]
 5. **`test_order_state.py`** — `ALPACA_STATUS_MAP` total over all 16 A4 strings; unmapped ⇒
    `unknown`; `unknown` never terminal (watcher keeps polling + `order_state_alert` + cancel attempt);
-   parse matrix (float-typed money / bool / non-finite / negative qty / missing keys ⇒ `OrderInvalid`,
-   never an exception or a constructed order); `fill_delta` exactness on the avg-drift fixture
-   (delta_cost ≠ delta_qty×avg, hand-computed); regression ⇒ `OrderInvalid`; idempotent re-read ⇒
-   `None` delta + stable `fill_id`. [S2, FD-M5-16/18]
+   parse matrix (float-typed money / bool / non-finite / negative qty / `filled_avg_price <= 0` /
+   missing keys ⇒ `OrderInvalid`, never an exception or a constructed order — EX-10); `fill_delta`
+   exactness on the avg-drift fixture (delta_cost ≠ delta_qty×avg, hand-computed); regression ⇒
+   `OrderInvalid`; `delta_qty > 0` with `delta_cost <= 0` ⇒ `OrderInvalid("nonpositive_delta_cost")`
+   (EX-10); prev-tracking (EX-6): a poll sequence with an avg-only correction between two qty
+   increases ⇒ Σ deltas still equals final `qty × avg` (prev = last-EMITTED snapshot, the avg-only
+   poll emits None and does not advance prev); terminal-consistency mismatch ⇒ alert + OrderInvalid;
+   idempotent re-read ⇒ `None` delta (the stable-`fill_id` assertion lives in §R 6 where the id is
+   minted — M5C-T7). [S2, FD-M5-16/18]
 6. **`test_exec_ledger.py`** — every `record_*` round-trips through `replay_stream` (hash-verified);
    field-set exactness per §P.2 (missing/extra ⇒ raise); out-of-vocab anything raises; reserved
-   collisions impossible; truncated-tail / corrupt-line semantics on all three streams (S3);
-   deterministic ids byte-stable on replay with the same `run_id`; **journal-before-mint ordering:**
-   the `risk_verdict` row `seq` < `order_submit_attempt` `seq` per decision; correlation chain joins
-   across all five streams (S6); `rehydrate_exec_state` fold == live state byte-exact. [S2, S3, S6]
+   collisions impossible; money-lineage wall (M5C-S10): a `ModeledUSD` fed into `delta_cost_usd` ⇒
+   `TypeError`, NO row written (and a `BrokerUSD` into `modeled_cost_usd` mirrors); truncated-tail /
+   corrupt-line semantics on all three streams (S3); deterministic ids byte-stable on replay with the
+   same `run_id`; `fill_id` stable under polling re-reads + its `cum_notional_after` operand equals
+   `cur.filled_qty × cur.filled_avg_price` byte-exact (M5C-T7); a canceled close followed by a
+   retried close ⇒ DISTINCT `decision_id`/`order_id` and no repeated `client_order_id` (M5C-S5);
+   **journal-before-mint ordering (M5C-T1):** a write-order spy over the risk/orders EventWriters
+   asserts the `risk_verdict` write precedes the `order_submit_attempt` write per decision (NO
+   cross-stream `seq` comparison — `seq` is per-stream and the counters are causally unrelated);
+   within-stream `strategy_decision.seq < order_submit_attempt.seq` on `orders.jsonl`; correlation
+   chain joins across the four chain-bearing streams risk/orders/fills/positions (S6 — M5C-B8/T9);
+   `rehydrate_exec_state` fold == live state byte-exact. [S2, S3, S5, S6]
 7. **`test_paper_book.py`** — exact-integrated-notional vs `qty×avg` divergence on the 3-partial
    fixture; `ModeledUSD` into a broker field ⇒ `TypeError` (`as_broker_usd`); hostile modeled inputs
    leave broker fields unchanged (white-box); `pnl_snapshot` carries BOTH classes + the verbatim
    `used_for_strategy_evaluation`; fees enter ONLY the realistic side (buy open: zero; sell close:
-   ceil-rounded SEC+TAF, cap boundary at exactly $8.30); mark refuses bare numbers/stale quotes (last
-   mark stands); close splits realized broker/modeled; rehydrate fold byte-exact incl. partial-close.
-   [S5, S2, S3]
+   ceil-rounded SEC+TAF over the MODELED exit proceeds — EX-9 — cap boundary at exactly $8.30); mark
+   refuses bare numbers/stale quotes (last mark stands); close splits realized broker/modeled;
+   partial-close allocation (EX-4): the non-terminating-division fixture (3-share position,
+   broker_cost 100.01, close 1 share) ⇒ `closed_slice = quantize(CENT, HALF_EVEN)`, residual exact
+   by subtraction, residue washes out at full close, journaled slice+residual fold byte-exact;
+   rehydrate fold byte-exact incl. partial-close. [S5, S2, S3]
 8. **`test_execution_realism.py`** — tob: full/partial/unfillable matrix incl. `min(qty, ask_sz)` and
    remainder-at-cap (FD-M5-19 hand-computed); depth: 3-level walk on the MBP-10 fixture, exact VWAP,
    `worst_price`, liquidity-short remainder; stale/epoch-mismatched depth ⇒ degrade to tob with
    reasons (never upgrade, never reject); identity/schema mismatch ⇒ `ExecError`; divergence flags +
-   alert threshold strict boundary (FD-M5-20); modeled money is `ModeledUSD` end-to-end. [S5, S2]
+   alert threshold strict boundary (FD-M5-20); partial-fill divergence by exact re-integration with
+   hand-computed Decimals (the EX-2 case: qty=100, ask=10.01, ask_sz=40, cap=10.03, broker fills 70 ⇒
+   modeled-over-filled = 40×10.01 + 30×10.03 = 701.30, NEVER vwap×70 = 701.54); a SELL close filling
+   above/below the modeled proceeds ⇒ the side-aware flag (broker proceeds above modeled ⇒
+   `broker_optimistic` — EX-3); `slippage_vs_mid_bps` formula + sign per §I (EX-8); modeled money is
+   `ModeledUSD` end-to-end. [S5, S2]
 9. **`test_alpaca_adapter.py`** — spy default byte-identical to M0 (existing assertions re-run);
    wall 2: a `"synthetic-"`-prefixed intent ⇒ `SyntheticConfinementError` in spy AND order_api modes,
    even with a valid forged-path token (white-box); wire payload byte-shape (frozen §G dict; qty as
@@ -1485,8 +1746,11 @@ tests never import or run the verifier path.
    rejection BEFORE any api call (FD-M5-1 structural); 403/422/rejected fixtures ⇒ `broker_reject`
    rows with codes; pdt fixture ⇒ latch forward observed; base_url ≠ paper host ⇒ `ValueError`;
    cancel/order_status pass-through + no-token assertion. [S1, S4-broker, FD-M5-8]
-10. **`test_orchestrator.py`** — **startup ordering (M4 §O):** rehydrate-seeds ALL FOUR risk
-    components BEFORE the first `AccountStore.put`/`can_open` (call-order spy; violation fails);
+10. **`test_orchestrator.py`** — **startup ordering (M4 §O + the rev-2 step order M5C-S2):**
+    rehydrate-seeds ALL FOUR risk components BEFORE the first `AccountStore.put`/`can_open`
+    (call-order spy; violation fails); step-6 exec rehydrate makes NO broker call (spy asserts) and
+    step-10 order recovery runs AFTER mode select — incl. with the gates view False (M5C-S3);
+    composition uses the ctor injection seam (`broker=`/`strategy=`/`status_provider=` — M5C-T3);
     `MarginObservation` after every buy fill; `portfolio_is_stale` used for `PortfolioRead.stale`;
     `record_account_snapshot` on every put (F4); HALTED journal ⇒ run starts halted, opens
     structurally impossible, `retry_residual` legal; **latency seam:** clock not advanced ⇒ task not
@@ -1494,24 +1758,40 @@ tests never import or run the verifier path.
     classes (AST scan); **FSM:** decide→requote→preflight→submit→watch→book over ScriptedOrderApi;
     one-in-flight discipline; session-edge cancel + `close_of_day`; **recovery:** timeout ⇒ no blind
     resubmit, by-client-order-id adopt, not-found ⇒ unconfirmed + open-deny; restart with dangling
-    order ⇒ FD-M5-24 adopt+cancel path. [S4, S6, M4 §O]
+    order ⇒ FD-M5-24 adopt+cancel path; degrade-to-observe restart (queued candidates, no
+    credentials) ⇒ `offline_orphan` rows + open-deny at step 10 (RC-3); **global in-flight close
+    guard (RC-1): ExitProvider re-emits every tick while close #1 is WATCHing ⇒ exactly ONE close
+    order submitted, no second `mint_reduce_only_token` call, the re-emitted exits dropped
+    unjournaled.** [S4, S6, M4 §O]
 11. **`test_no_network_no_creds.py` (extended)** — socket-block over every new module incl. a full
     orchestrator observe run; `alpaca` never in `sys.modules` after the suite; AST guard per §3
     (module list + forbidden imports/tokens + `importlib`/`__import__`), subprocess-isolated fresh
     imports; `.secrets/` never read (loaders only ever see injected tmp paths). [S1, R11-style]
 12. **`test_config_canary.py` (extended)** — committed gates still identity-False; execution block
-    values as committed; hostile overlay (gates true, slippage 10000, latency 0, max_open_orders 99)
-    merges back ineffective; **the full-orchestrator S1 canary:** committed config + ABSENT run-gates
-    file + hostile replay data (would_open-rich) + SpyBroker ⇒ `broker.calls == []` (zero submits of
-    ANY kind at the Protocol boundary), preflight registry empty afterwards, M3 decision rows > 0
-    (the probe ran), every refusal journaled; observe mode constructs NO broker (object-graph +
-    `sys.modules` assert). [S1]
+    values as committed; hostile overlay defanged per knob (gates true, slippage 10000, latency 1
+    floored / latency 0 ⇒ `ValueError`, max_open_orders 99 — M5C-T2); the committed
+    `artifacts/backtests/` contains NO entries besides `.gitkeep` (M5C-S12); **the full-orchestrator
+    S1 canary, TWO compositions (M5C-T3/S9):** (a) committed config + ABSENT run-gates file + hostile
+    replay data (would_open-rich) + injected SpyBroker ⇒ `broker.calls == []` (zero submits of ANY
+    kind at the Protocol boundary), preflight registry empty afterwards, M3 decision rows > 0 (the
+    probe ran); (b) the GATES-CONSULTING variant (RC-4 — it terminates at `can_open` rung 1, the
+    mint is NEVER reached in this composition; mint-level `run_gates` coverage is §R 3's direct
+    sweep): same config + injected `RealStrategyStub` + FakeBroker
+    ⇒ scan runs (no gates pre-check, M5C-S9), every decision journals a `can_open` refusal
+    terminating at `run_gates` (`reasons=("run_gates_off",)`), zero preflight mints, zero broker
+    calls, zero open-kind registry entries — a regression dropping any single gate layer moves
+    this canary; observe mode
+    constructs NO Broker-Protocol instance (object-graph walk) and `agent.broker.alpaca` never
+    enters `sys.modules` in an observe run (the lazy mode-select import — M5C-T10). [S1]
 13. **`test_run_gates_file.py` (NEW — the LD-M5-2 dedicated suite)** — absent ⇒ both False; malformed
     JSON ⇒ both False + status row; non-identity-True (1, "true", null) ⇒ False; hostile extra keys
     (caps/universe/latency) IGNORED — assembled view differs from committed ONLY at the two gate
     keys; valid file ⇒ `opening_allowed(view) is True` while the COMMITTED config alone stays False;
-    delete-file-re-closes (the uninstall story); observe/synthetic never call the loader (spy).
-    [S1, FD-M5-2]
+    delete-file-re-closes (the uninstall story); observe/synthetic never call the loader (spy);
+    `rules_hash` IDENTICAL on every journaled row with the file present-true vs absent (the
+    pre-substitution pin — M5C-S4); gates-absent paper run with a rehydrated position + credentials
+    can still cancel a dangling order and flatten the position while every open rejects at
+    `run_gates` (reduce-and-recover — M5C-S3). [S1, FD-M5-2]
 14. **`test_synthetic_isolation.py` + `test_synthetic_e2e.py`** — `__init_subclass__` rejects a bad
     `strategy_id`; wall 1: SyntheticStrategy + (spy) AlpacaPaperBroker pipeline ctor ⇒
     `SyntheticConfinementError`; wall 1 type-identity: a `FakeBroker`-subclass-of-`AlpacaPaperBroker`
@@ -1519,20 +1799,35 @@ tests never import or run the verifier path.
     real strategy + no artifact ⇒ `backtest_artifact_missing`; tampered/mismatched artifact fixtures
     ⇒ `artifact_hash_invalid`/`artifact_key_mismatch`; AST guard on `strategies/`; **E2E:** scripted
     open→mark→close offline (FakeBroker `partial_then_full`, in-memory fixture config, replay
-    fixture): all four streams journaled, golden byte-exact, rehydrate reproduces the book, S1
-    registry empty of open-kind entries at exit. [S9, S1, S3, S6]
+    fixture + the §Q `status_script` TRADABLE injection — M5C-T4): all four streams journaled,
+    golden byte-exact (the `run_synthetic_golden` helper — M5C-T5), rehydrate reproduces the book,
+    S1 registry empty of open-kind entries at exit; a GateFail tick (snapshot assembly fails) ⇒ no
+    scan call, nothing journaled on the strategy path, the script ordinal does not advance
+    (M5C-B2). [S9, S1, S3, S6]
 15. **`test_kill_flatten_driver.py`** — the S8 drill through `PriceCappedFlattenBroker`: every intent
     reaching the inner broker has `is_reducing=True` AND a tick-valid `limit_price` (no `limit=None`
-    passes through); STALE quote still prices (staleness never blocks a reduce); no-price symbol ⇒
+    passes through); **the SYNTHETIC composition drill (the M5C-1/M5C-S1 blocker pin): kill flatten
+    through `PriceCappedFlattenBroker` over a FakeBroker inner succeeds with ZERO `failed[]` — the
+    un-prefixed `flatten-<symbol>` intents pass the reverse wall because they are reducing**; STALE
+    quote still prices (staleness never blocks a reduce); no-price symbol ⇒
     `FlattenUnpriced` ⇒ `failed[]`/`residual` with `no_price_for_cap` ⇒ `retry_residual` succeeds
-    once quotable; cancel-opens-first ordering (kill_trip cancel rows precede the flatten submits);
-    generation bump kills an outstanding open token at consume; zero open-kind authorizations after
+    once quotable; an unmapped symbol resolves identically (M5C-S8); cancel-opens-first ordering
+    (kill_trip cancel rows precede the flatten submits); the trigger's journaled `stale_inputs`
+    reflects `AccountStore.get` freshness (M5C-B5); a canceled opening order filling late
+    post-kill ⇒ `order_state_alert{note:"late_fill_post_kill"}` (M5C-S11); generation bump kills an
+    outstanding open token at consume; zero open-kind authorizations after
     the drill; `close_position(reason="kill_flatten")` rows. [S8, S1, FD-M5-1/25]
 16. **`test_replay_feed.py` + `test_observe_e2e.py`** — field mapping events.jsonl → QuoteSnapshot
-    byte-exact; ReplayClock determinism; symbol intersection (FD-M5-4); depth rows → DepthSnapshot
+    byte-exact; ReplayClock determinism; a mixed-form stream (whole-second + .%f `ts_recv_utc`) ⇒
+    identical `now_ms`/`seen_at_ms` offsets as the all-.%f equivalent (the `bar_series._parse_utc`
+    chokepoint — EX-5); sparse-stream catch-up: a recorded gap spanning several cadence boundaries
+    fires on_tick ONCE with strictly-increasing `now_ms` across consecutive ticks (RC-5); symbol
+    intersection (FD-M5-4); depth rows → DepthSnapshot
     with recorded book_hash; bar preload == incremental resample (anti-lookahead preserved by as-of
-    reads); **observe E2E TODAY:** committed tbbo fixture + committed config ⇒ probe decisions +
-    scored rows + calibration report match goldens; no broker in the object graph. [S3, FD-M5-4]
+    reads); **observe E2E TODAY:** the §Q COMMITTED `observe_session_tbbo.jsonl` (recorder-shaped,
+    ≥60 buckets) + committed config ⇒ probe decisions + scored rows + calibration report match
+    goldens (M5C-5/T6 — the 2-row raw vendor sample is a parser smoke case only: parses via the M1
+    parser path, zero decisions, exit 0); no broker in the object graph. [S3, FD-M5-4]
 
 **Invariant map:**
 
@@ -1598,6 +1893,70 @@ tests never import or run the verifier path.
   M5-2a runbook asserts invariants — price ≤ cap, Σ deltas = filled_qty — never exact fills);
   borrow/maker-taker fees (FeeModel covers SEC+TAF only).
 
+## V. Critic findings applied (rev 2, 2026-06-10)
+
+All 48 findings from the 4-lens critic pass
+(`docs/superpowers/reviews/2026-06-10-M5-contract-critic-findings.json`) are applied. Resolution map
+(duplicates resolved once: M5C-1≡M5C-S1, M5C-B8≡M5C-T9; complementary pairs M5C-S6+EX-2, M5C-5+M5C-T6,
+M5C-S8+M5C-B3 resolved jointly):
+
+| Finding | Sev | Resolution (where) |
+|---|---|---|
+| M5C-1 / M5C-S1 | blocker | FakeBroker reverse wall exempts reducing intents (FD-M5-8 rev 2, §H.1); §R 15 synthetic-composition kill drill pins zero `failed[]` |
+| M5C-T1 | blocker | Cross-stream `seq` inequality DROPPED; write-order-spy witness + `risk_verdict_id` binding (§P.3, §R 6) |
+| M5C-2 | major | Stage 9 uses the real `LuldState` vocabulary (`luld ∈ {LIMIT,PAUSED,UNKNOWN}` fires); healthy-verdict zero-reason case (§2.2, §R 3) |
+| M5C-3 | major | Safe-default = FIVE stage-9 reasons, fail-closed checks kept, expectation fixed (§2.2, §R 3) |
+| M5C-4 | major | All THREE legacy mint call sites enumerated + rewrite duty (FD-M5-14, §3) |
+| M5C-5 / M5C-T6 | major | Observe-E2E input = the §Q committed recorder-shaped fixture; 2-row raw sample demoted to parser smoke (§O.1, §Q, §R 16) |
+| M5C-S2 | major | Startup split: step 6 pure fold, step 10 broker-touching recovery after mode select (§M.2, §R 10) |
+| M5C-S3 | major | Broker construction keyed on credentials ONLY; gates govern opens; "paper, reduce-and-recover only" posture (§M.2 step 9, §O.1, §O.2.8, §R 13) |
+| M5C-S4 | major | `rules_hash` + parsers consume the PRE-substitution dict; gates view only feeds `opening_allowed` (§B, §M.2 step 2, §O.2.7, §R 13) |
+| M5C-S5 | major | Close-path `event_basis` gains `decision_seen_at_ms`; retried close = new ids (§P.3, §M.7, §R 6) |
+| M5C-S6 / EX-2 | major | `modeled_cost_over_filled_qty` frozen as exact re-integration; `touch_price` journaled; `divergence_usd` in the EXACT list; vwap×qty forbidden (FD-M5-20, §I, §P.2, §R 8) |
+| EX-1 | major | Quantized-bps `latency_lost_edge` is THE form; raw-price phrasing removed; boundary pair fixture (§2.2 stage 10, §C, §Q, §R 2) |
+| EX-3 | major | Side-aware divergence flag mapping + `side` on the row (FD-M5-20, §I, §P.2, §R 8) |
+| EX-4 | major | Partial-close allocation frozen (CENT HALF_EVEN slice, exact residual, journaled both) (§K, §P.2, §R 7) |
+| EX-5 | major | `bar_series._parse_utc` chokepoint pinned for ReplayClock/field map; whole-second fixture rows; mixed-form case (§N, §Q, §R 16) |
+| EX-6 | major | `prev` = last-EMITTED FillDelta snapshot; terminal Σ-consistency check (FD-M5-18, §F, §R 5) |
+| M5C-B1 | major | Stage 4 reduced to the side check; order_type/tif/is_reducing = §M.4 structural constants asserted by §R 9 (§2.2) |
+| M5C-B2 | major | Snapshot assembly via `signal_snapshot.assemble` frozen in §M.3 step 7; GateFail-skip; script matching rule (§L.1, §R 14) |
+| M5C-T2 | major | `latency_budget_ms: 0` ⇒ parse `ValueError`; `: 1` ⇒ floored; "merges back ineffective" wording fixed (§B, §R 1, §R 12) |
+| M5C-T3 | major | `RealStrategyStub` + orchestrator ctor injection seam pinned (§Q, §M.2 step 9, §R 10/12) |
+| M5C-T4 | major | `status_provider` seam + `status_script` builder + `--status-script` (§N, §M.3 step 2, §O.1, §Q, §R 14) |
+| M5C-T5 | major | Golden discipline pinned: `GOLDEN_RUN_ID="run-m5-golden-v1"`, deterministic row clock, regeneration helpers (§Q) |
+| M5C-T7 | major | `cum_notional_after = cur.filled_qty × cur.filled_avg_price`; id home = `record_broker_fill`; operand journaled (§P.3, §P.1, §P.2, §F, §R 5/6) |
+| M5C-6 | minor | §0.1 re-pinned at `7e0a8ad` (M4 committed); citation range fixed; build precondition explicit (header, §0.1) |
+| M5C-S7 | minor | Proxy declared NOT a Broker-Protocol member; no `kind`; BROKER_KINDS unchanged (§H.2) |
+| M5C-S8 / M5C-B3 | minor | Injected `instrument_ids` map on proxy AND FakeBroker; unmapped ⇒ `no_price_for_cap` / never_fill (§H.1, §H.2, §M.6, §R 15) |
+| M5C-S9 | minor | Step-7 gates pre-check removed (refusals journaled at `can_open` rung 1); mint-reaching canary variant (§M.3, §R 12) |
+| M5C-S10 | minor | ExecLedger money-lineage walls (`as_broker_usd` + local `as_modeled_usd`) (§P.1, §R 6) |
+| M5C-S11 | minor | `late_fill_post_kill` alert row + §R 15 script (§M.5, §M.6) |
+| M5C-S12 | minor | `.gitkeep`-only assertion in §R 12; artifact builders take mandatory dir (§L.2, §Q) |
+| EX-7 | minor | Reduce-cap away-from-touch rationale frozen + direction test (§C, §R 2) |
+| EX-8 | minor | `slippage_vs_mid_bps` formula/sign/rounding pinned (§I) |
+| EX-9 | minor | Close fee notional = MODELED exit proceeds (§K, §R 7) |
+| EX-10 | minor | `OrderInvalid` gains `filled_avg_price <= 0` and `nonpositive_delta_cost` (§F, §R 5) |
+| EX-11 | minor | `pnl_snapshot.divergence_flag` rename + `"unassessed"` default (FD-M5-20, §K, §P.2) |
+| EX-12 | minor | Open-driving fixture density rule (§B note, §Q) |
+| M5C-B4 | minor | `FeatureView.refresh` keyword-only (§0.1) |
+| M5C-B5 | minor | `wrap()` eliminated — `AccountStore.get(now_ms=...)` (§M.6, §R 15) |
+| M5C-B6 | minor | `cap_bps` ctor param; import list intact (§H.2, §M.6) |
+| M5C-B7 | minor | Parser input shapes pinned; full-shape `permissive_paper_fixture_config` (§M.2 step 2, §Q) |
+| M5C-B8 / M5C-T9 | minor | "four chain-bearing streams" (§P.3, §R 6) |
+| M5C-T8 | minor | §R 3 sweep re-scoped to 37 + consume/RESERVED ownership (§R 3) |
+| M5C-T10 | minor | Lazy `agent.broker.alpaca/fake` imports in mode-select; assertion re-scoped (§3, §R 12) |
+
+**Independent re-critique (same date) — verdict on the 48: all resolved (M5C-6 had a stale §U
+residue, fixed). Five NEW revision-introduced defects found and applied:**
+
+| Finding | Sev | Resolution (where) |
+|---|---|---|
+| RC-1 | major | FD-M5-21 made GLOBAL: an ExitInstruction is processed only with NO order (open or close) in flight — rev 2's per-tick close ids removed the accidental duplicate-id backstop against double-sell/flip (§M.3 step 8, §M.7, §R 10) |
+| RC-2 | minor | `status_script` pins real enum members (`SsrState.INACTIVE`; SsrState has no `NO`) (§N, §Q) |
+| RC-3 | minor | Degrade-to-observe resolves step-6-queued orders as `offline_orphan` + open-deny at step 10 (§M.2, §R 10) |
+| RC-4 | minor | §R 12(b) relabeled GATES-CONSULTING (terminates at `can_open` rung 1; mint coverage is §R 3) |
+| RC-5 | minor | ReplayClock catch-up rule: ≤1 `on_tick` per delivered-event batch, strictly-increasing `now_ms` (§N, §R 16) |
+
 ## U. References
 
 - Parent design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md` §4 (paper-realism 1–11),
@@ -1612,5 +1971,5 @@ tests never import or run the verifier path.
   `docs/paper-trading`, `reference/postorder`, `docs/regulatory-fees`); FINRA Schedule A §1 TAF rates
   (verified 2026-06-10 — §0.2 F1); SEC Section 31 fee rate $27.80/million (FY2025 advisory; pinned
   with re-verify duty — §0.2 F2); `alpaca-py==0.43.4` (§0.2 F3).
-- Repo facts: §0.1 table (file:line verified at `f9ec7c6` by this synthesis).
+- Repo facts: §0.1 table (file:line re-verified at `7e0a8ad` — M4 committed — by the rev-2 pass).
 
