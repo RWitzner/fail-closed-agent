@@ -349,5 +349,438 @@ class TestM4RiskOfflinePurityAndImportGuard(unittest.TestCase):
                          f"stdout={completed.stdout!r} stderr={completed.stderr!r}")
 
 
+class TestM5ExecOfflinePurityAndImportGuard(unittest.TestCase):
+    """M5 §R test 11 (S1, R11): socket-blocked import of every M5 module + a
+    FULL orchestrator observe run; `alpaca` (the SDK, FD-M5-5) never in
+    sys.modules; the §3 per-module import whitelist (module scope) + the
+    pure-family forbidden-import/token rule (any scope); subprocess-isolated
+    fresh imports proving the lazy-broker discipline; `.secrets/` never read
+    (loaders take explicit injected paths only)."""
+
+    # The FULL §3 NEW-module list (repo-relative under scripts/agent/).
+    _M5_MODULES = (
+        "exec_reasons.py", "execution_config.py", "order_pricing.py",
+        "execution_realism.py", "fees.py", "paper_book.py", "exec_ledger.py",
+        "backtest_gate.py", "run_lock.py", "secrets_runtime.py",
+        "orchestrator.py", "__main__.py", "broker/order_state.py",
+        "broker/fake.py", "broker/flatten_proxy.py",
+        "marketdata/replay_feed.py", "strategies/synthetic.py",
+    )
+
+    # §3 per-module allowed agent.*/recorder.* imports AT MODULE SCOPE (the
+    # data-driven table; None = the orchestrator special row, tested apart).
+    # Documented errata honored: replay_feed imports agent.execution_realism
+    # for DepthSnapshot (whitelisted); execution_realism imports
+    # agent.execution_config for its §B-homed code constants
+    # (DIVERGENCE_ALERT_BPS / DEPTH_FRESHNESS_TTL_MS); fake.py's
+    # SyntheticConfinementError import from agent.broker.alpaca lives INSIDE
+    # `_place` (function scope), so the module-scope whitelist never sees it.
+    _ALLOWED_MODULE_SCOPE = {
+        "exec_reasons.py": frozenset(),
+        "execution_config.py": frozenset({"agent.serializer"}),
+        "order_pricing.py": frozenset(
+            {"agent.quote_quality", "agent.exec_reasons"}),
+        "execution_realism.py": frozenset(
+            {"agent.serializer", "agent.quote_quality", "agent.exec_reasons",
+             "agent.execution_config"}),
+        "fees.py": frozenset(),
+        "paper_book.py": frozenset(
+            {"agent.serializer", "agent.quote_quality", "agent.exec_reasons",
+             "agent.fees"}),
+        "exec_ledger.py": frozenset(
+            {"agent.exec_reasons", "agent.journal", "agent.serializer",
+             "recorder.persistence"}),
+        "backtest_gate.py": frozenset({"agent.serializer"}),
+        "run_lock.py": frozenset(),
+        "secrets_runtime.py": frozenset(),
+        "orchestrator.py": None,        # special row (broker-limited, below)
+        "__main__.py": frozenset(
+            {"agent.config", "agent.orchestrator", "agent.secrets_runtime"}),
+        "broker/order_state.py": frozenset(
+            {"agent.serializer", "agent.exec_reasons"}),
+        "broker/fake.py": frozenset(
+            {"agent.broker.base", "agent.broker.order_state",
+             "agent.exec_reasons"}),
+        "broker/flatten_proxy.py": frozenset(
+            {"agent.broker.base", "agent.order_pricing",
+             "agent.exec_reasons"}),
+        "marketdata/replay_feed.py": frozenset(
+            {"agent.quote_quality", "agent.bar_series",
+             "agent.execution_realism", "recorder.persistence",
+             "recorder.event_row", "recorder.book_state",
+             "recorder.book_hash"}),
+        "strategies/synthetic.py": frozenset(
+            {"agent.candidate", "agent.strategy"}),
+    }
+
+    # §3 bullet 1: the pure pricing/labeling/booking family — must not import
+    # the order-capable modules at ANY scope, nor reference the mint/submit
+    # tokens, nor importlib/__import__ at all.
+    _PURE_FAMILY = (
+        "exec_reasons.py", "execution_config.py", "order_pricing.py",
+        "execution_realism.py", "fees.py", "paper_book.py", "exec_ledger.py",
+        "backtest_gate.py", "run_lock.py", "secrets_runtime.py",
+        "marketdata/replay_feed.py",
+    )
+    _FORBIDDEN_MODULE_PREFIXES = (
+        "agent.broker", "agent.execution_preflight", "agent.kill_switch",
+        "agent.arming",
+    )
+    _FORBIDDEN_TOKENS = frozenset({
+        "submit_order", "mint_open_token", "mint_reduce_only_token",
+        "OrderIntent", "OpenPreflightToken", "ReduceOnlyPreflightToken",
+        "PreflightToken", "require_token", "consume", "importlib",
+        "__import__",
+    })
+
+    _BANNED_SYS_MODULES = ("alpaca", "databento", "exchange_calendars",
+                           "pandas", "numpy")
+
+    def _agent_dir(self) -> Path:
+        return Path(__file__).resolve().parents[2] / "scripts" / "agent"
+
+    @staticmethod
+    def _import_name(rel: str) -> str:
+        return "agent." + rel[:-3].replace("/", ".")
+
+    @staticmethod
+    def _module_scope_imports(tree) -> list:
+        """Module names imported at module scope (functions excluded; class
+        bodies count as module scope). `from agent import x` maps to agent.x."""
+        out = []
+
+        def walk(node, in_func):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    walk(child, True)
+                    continue
+                if not in_func and isinstance(child,
+                                              (ast.Import, ast.ImportFrom)):
+                    if isinstance(child, ast.Import):
+                        out.extend(alias.name for alias in child.names)
+                    else:
+                        module = child.module or ""
+                        if module == "agent":
+                            out.extend(f"agent.{alias.name}"
+                                       for alias in child.names)
+                        else:
+                            out.append(module)
+                walk(child, in_func)
+
+        walk(tree, False)
+        return out
+
+    # ---------------------------------------------------------- socket block
+
+    def test_m5_modules_import_under_socket_block_with_no_heavy_sdk(self):
+        import importlib as _importlib
+
+        with mock.patch("socket.socket",
+                        side_effect=AssertionError("M5 must not open sockets")):
+            for rel in self._M5_MODULES:
+                _importlib.import_module(self._import_name(rel))
+            # the GROWN broker modules ride the same guarantee.
+            _importlib.import_module("agent.broker.alpaca")
+            _importlib.import_module("agent.broker.base")
+            _importlib.import_module("agent.execution_preflight")
+        # FD-M5-5: `alpaca` (the SDK) is in the banned set — first, explicitly.
+        self.assertNotIn("alpaca", sys.modules)
+        for banned in self._BANNED_SYS_MODULES:
+            self.assertNotIn(banned, sys.modules)
+
+    def test_full_orchestrator_observe_run_opens_no_socket(self):
+        import shutil
+        import tempfile
+
+        from agent.execution_preflight import unbind_runtime
+        from tests.lib.exec_fixtures import (
+            ExecPipeline,
+            committed_assembled_config,
+        )
+
+        tmp = Path(tempfile.mkdtemp(prefix="m5-purity-observe-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        self.addCleanup(unbind_runtime)
+        pipeline = None
+        with mock.patch("socket.socket",
+                        side_effect=AssertionError("M5 must not open sockets")):
+            try:
+                pipeline = ExecPipeline(
+                    journal_dir=tmp, run_id="run-m5-purity-observe",
+                    config=committed_assembled_config())
+                for index in range(50, 56):
+                    pipeline.tick_on_bar(index)
+            finally:
+                if pipeline is not None:
+                    pipeline.close()
+        self.assertEqual(pipeline.orch.mode, "observe")
+        self.assertIsNone(pipeline.orch.broker)
+        self.assertGreater(len(pipeline.rows("decisions")), 0)
+        for banned in self._BANNED_SYS_MODULES:
+            self.assertNotIn(banned, sys.modules)
+
+    # ------------------------------------------------------------- AST guard
+
+    def test_section3_module_scope_import_whitelist(self):
+        for rel, allowed in sorted(self._ALLOWED_MODULE_SCOPE.items()):
+            if allowed is None:
+                continue  # the orchestrator special row has its own test
+            source_path = self._agent_dir() / rel
+            self.assertTrue(source_path.is_file(), rel)
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            offending = []
+            for name in self._module_scope_imports(tree):
+                if not (name.startswith("agent") or name.startswith("recorder")):
+                    continue  # stdlib is always allowed
+                if not any(name == ok or name.startswith(ok + ".")
+                           for ok in allowed):
+                    offending.append(name)
+            self.assertEqual(
+                offending, [],
+                f"{rel}: module-scope imports outside its §3 row: {offending}")
+
+    def test_orchestrator_module_scope_broker_imports_limited(self):
+        # §3/M5C-T10 special row: agent.broker.base + agent.broker.order_state
+        # ONLY at module scope; alpaca/fake/flatten_proxy stay lazy (function
+        # scope), so an observe run never imports them.
+        source_path = self._agent_dir() / "orchestrator.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        allowed = {"agent.broker.base", "agent.broker.order_state"}
+        offending = [
+            name for name in self._module_scope_imports(tree)
+            if (name == "agent.broker" or name.startswith("agent.broker."))
+            and name not in allowed
+        ]
+        self.assertEqual(offending, [])
+
+    def test_pure_family_forbidden_imports_and_tokens_any_scope(self):
+        for rel in self._PURE_FAMILY:
+            source_path = self._agent_dir() / rel
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            violations = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if self._prefix_forbidden(alias.name):
+                            violations.append(f"import {alias.name}")
+                        if alias.name == "importlib" or alias.name.startswith(
+                                "importlib."):
+                            violations.append(f"import {alias.name}")
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if self._prefix_forbidden(module):
+                        violations.append(f"from {module} import ...")
+                    if module == "importlib" or module.startswith("importlib."):
+                        violations.append(f"from {module} import ...")
+                    if module == "agent":
+                        for alias in node.names:
+                            if self._prefix_forbidden(f"agent.{alias.name}"):
+                                violations.append(
+                                    f"from agent import {alias.name}")
+                    for alias in node.names:
+                        if alias.name in self._FORBIDDEN_TOKENS:
+                            violations.append(f"imported token {alias.name}")
+                        if (alias.asname
+                                and alias.asname in self._FORBIDDEN_TOKENS):
+                            violations.append(f"alias token {alias.asname}")
+                elif isinstance(node, ast.Name):
+                    if node.id in self._FORBIDDEN_TOKENS:
+                        violations.append(f"name {node.id}")
+                elif isinstance(node, ast.Attribute):
+                    if node.attr in self._FORBIDDEN_TOKENS:
+                        violations.append(f"attribute .{node.attr}")
+            self.assertEqual(violations, [],
+                             f"{rel}: §3 pure-family violations: {violations}")
+
+    def _prefix_forbidden(self, module_name: str) -> bool:
+        if not module_name:
+            return False
+        return any(module_name == prefix
+                   or module_name.startswith(prefix + ".")
+                   for prefix in self._FORBIDDEN_MODULE_PREFIXES)
+
+    def test_strategies_and_preflight_keep_closed_import_set(self):
+        # strategies/ (synthetic AND calibration_probe) keep the M3 FD-12
+        # closed set at ANY scope; execution_preflight must not import
+        # agent.broker* at any scope (no cycle — the ladder consumes
+        # Candidate/Leg, never OrderIntent).
+        cases = (
+            ("strategies/synthetic.py", self._FORBIDDEN_MODULE_PREFIXES),
+            ("strategies/calibration_probe.py",
+             self._FORBIDDEN_MODULE_PREFIXES),
+            ("execution_preflight.py", ("agent.broker",)),
+        )
+        for rel, prefixes in cases:
+            tree = ast.parse(
+                (self._agent_dir() / rel).read_text(encoding="utf-8"))
+            offending = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if any(alias.name == p
+                               or alias.name.startswith(p + ".")
+                               for p in prefixes):
+                            offending.append(alias.name)
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if any(module == p or module.startswith(p + ".")
+                           for p in prefixes):
+                        offending.append(module)
+                    if module == "agent":
+                        for alias in node.names:
+                            name = f"agent.{alias.name}"
+                            if any(name == p or name.startswith(p + ".")
+                                   for p in prefixes):
+                                offending.append(name)
+            self.assertEqual(offending, [], rel)
+
+    def test_alpaca_sdk_import_only_inside_build_real_client(self):
+        # FD-M5-5/§3: `alpaca` (the SDK) appears in exactly ONE function body
+        # (broker/alpaca.py::_build_real_client) and never at module scope
+        # anywhere under scripts/agent/.
+        sites = []
+
+        def walk(node, func_name, rel):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    walk(child, child.name, rel)
+                    continue
+                if isinstance(child, (ast.Import, ast.ImportFrom)):
+                    names = ([alias.name for alias in child.names]
+                             if isinstance(child, ast.Import)
+                             else [child.module or ""])
+                    for name in names:
+                        if name == "alpaca" or name.startswith("alpaca."):
+                            sites.append((rel, func_name))
+                walk(child, func_name, rel)
+
+        agent_dir = self._agent_dir()
+        for source_path in sorted(agent_dir.rglob("*.py")):
+            if "__pycache__" in source_path.parts:
+                continue
+            rel = source_path.relative_to(agent_dir).as_posix()
+            walk(ast.parse(source_path.read_text(encoding="utf-8")), None, rel)
+        self.assertTrue(sites, "expected the lazy SDK import to exist")
+        self.assertEqual(
+            sorted(set(sites)), [("broker/alpaca.py", "_build_real_client")],
+            f"alpaca SDK import outside _build_real_client: {sites}")
+
+    # ---------------------------------------------- subprocess fresh imports
+
+    def _run_isolated(self, code: str) -> None:
+        import subprocess
+
+        scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
+        env = dict(os.environ)
+        env["PYTHONPATH"] = scripts_dir
+        argv = [sys.executable, "-c", code]   # fixed command array, no shell
+        completed = subprocess.run(argv, env=env, capture_output=True,
+                                   text=True)
+        self.assertEqual(completed.returncode, 0,
+                         f"stdout={completed.stdout!r} "
+                         f"stderr={completed.stderr!r}")
+
+    def test_subprocess_pure_family_pulls_no_order_capable_module(self):
+        imports = "".join(
+            f"import {self._import_name(rel)}\n" for rel in self._PURE_FAMILY)
+        code = (
+            "import sys\n"
+            + imports
+            + "banned = [k for k in sys.modules\n"
+            "          if k in ('agent.execution_preflight',\n"
+            "                   'agent.kill_switch', 'agent.arming',\n"
+            "                   'alpaca')\n"
+            "          or k == 'agent.broker'\n"
+            "          or k.startswith('agent.broker.')\n"
+            "          or k.startswith('alpaca.')]\n"
+            "assert not banned, f'order-capable modules imported: {banned}'\n"
+        )
+        self._run_isolated(code)
+
+    def test_subprocess_orchestrator_import_keeps_heavy_brokers_lazy(self):
+        # M5C-T10 at import time: a fresh `import agent.orchestrator` (and the
+        # CLI module) pulls base+order_state ONLY — never alpaca/fake/
+        # flatten_proxy, never the SDK.
+        code = (
+            "import sys\n"
+            "import agent.orchestrator\n"
+            "import agent.__main__\n"
+            "assert 'agent.broker.base' in sys.modules\n"
+            "assert 'agent.broker.order_state' in sys.modules\n"
+            "for banned in ('agent.broker.alpaca', 'agent.broker.fake',\n"
+            "               'agent.broker.flatten_proxy', 'alpaca'):\n"
+            "    assert banned not in sys.modules, banned\n"
+        )
+        self._run_isolated(code)
+
+    def test_subprocess_fake_broker_import_pulls_no_alpaca_module(self):
+        # The fake.py erratum: SyntheticConfinementError is imported from
+        # agent.broker.alpaca INSIDE _place — so importing fake.py alone must
+        # not pull agent.broker.alpaca.
+        code = (
+            "import sys\n"
+            "import agent.broker.fake\n"
+            "assert 'agent.broker.alpaca' not in sys.modules\n"
+            "assert 'alpaca' not in sys.modules\n"
+        )
+        self._run_isolated(code)
+
+    # -------------------------------------------------- .secrets/ never read
+
+    def test_secrets_loaders_take_explicit_paths_only(self):
+        import inspect
+
+        from agent.secrets_runtime import (
+            load_alpaca_paper_credentials,
+            load_run_gates,
+        )
+
+        for loader in (load_run_gates, load_alpaca_paper_credentials):
+            parameters = inspect.signature(loader).parameters
+            self.assertIn("path", parameters, loader.__name__)
+            self.assertIs(parameters["path"].default, inspect.Parameter.empty,
+                          f"{loader.__name__}: path must have NO default "
+                          "(R11: no implicit .secrets/ read)")
+
+    def test_secrets_loaders_touch_only_the_injected_tmp_paths(self):
+        import json
+        import shutil
+        import tempfile
+
+        from agent.secrets_runtime import (
+            load_alpaca_paper_credentials,
+            load_run_gates,
+        )
+
+        tmp = Path(tempfile.mkdtemp(prefix="m5-secrets-spy-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        gates_path = tmp / "run_gates.json"
+        gates_path.write_text(
+            json.dumps({"enabled": True, "paper_trading": {"enabled": True}}),
+            encoding="utf-8")
+        creds_path = tmp / "alpaca_paper.json"
+        creds_path.write_text(json.dumps({
+            "key_id": "k", "secret_key": "s",
+            "base_url": "https://paper-api.alpaca.markets"}), encoding="utf-8")
+
+        accessed = []
+        real_read_text = Path.read_text
+
+        def read_text_spy(self_path, *args, **kwargs):
+            accessed.append(Path(self_path))
+            return real_read_text(self_path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", read_text_spy):
+            reading = load_run_gates(gates_path)
+            credentials = load_alpaca_paper_credentials(creds_path)
+        self.assertTrue(reading["enabled"])
+        self.assertEqual(credentials["key_id"], "k")
+        self.assertTrue(accessed, "the spy must have observed the reads")
+        for path in accessed:
+            self.assertNotIn(".secrets", str(path))
+            self.assertEqual(Path(path).parent, tmp,
+                             f"loader read outside the injected dir: {path}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -169,5 +169,302 @@ class TestRiskRulesCanary(unittest.TestCase):
         self.assertIsNone(verdict.session_date_et)
 
 
+class TestExecutionConfigCanary(unittest.TestCase):
+    """M5 §R test 12 (S1, M5C-T2/S12): the committed execution block reads as
+    committed; a hostile overlay is DEFANGED per knob (the min()-merge DOES
+    take effect — the defense is the floor or the parse error, never the
+    merge); the committed artifacts/backtests/ dir holds ONLY .gitkeep."""
+
+    _COMMITTED_EXECUTION = {
+        "slippage_cap_bps": 25,
+        "order_poll_interval_ms": 500,
+        "account_refresh_interval_ms": 2500,
+        "max_open_orders": 1,
+    }
+
+    def test_committed_execution_block_reads_as_committed(self):
+        from agent.execution_config import ExecutionConfig
+
+        cfg = _committed_config()
+        self.assertEqual(cfg["agent_rules"]["execution"],
+                         self._COMMITTED_EXECUTION)
+        self.assertEqual(cfg["agent_rules"]["latency_budget_ms"], 250)
+        parsed = ExecutionConfig.from_config(cfg)
+        self.assertEqual(parsed.slippage_cap_bps, Decimal("25"))
+        self.assertEqual(parsed.order_poll_interval_ms, 500)
+        self.assertEqual(parsed.account_refresh_interval_ms, 2500)
+        self.assertEqual(parsed.max_open_orders, 1)
+        self.assertEqual(parsed.effective_latency_budget_ms, 250)
+
+    def test_hostile_execution_overlay_defanged_per_knob(self):
+        # M5C-T2 exact semantics: tighten_only_merge min()s non-bool numerics,
+        # so the lowering latency overlay DOES land in the merged dict; the
+        # floor (not the merge) defends. Raised knobs merge back via min();
+        # gates AND-merge back to False; injected keys are dropped.
+        from agent.execution_config import ExecutionConfig
+
+        committed = _committed_config()
+        overlay = {"agent_rules": {
+            "enabled": True,                            # gates true
+            "paper_trading": {"enabled": True},
+            "latency_budget_ms": 1,                     # lowering DOES merge
+            "execution": {
+                "slippage_cap_bps": 10000,              # raised: min() keeps 25
+                "max_open_orders": 99,                  # raised: min() keeps 1
+                "injected_knob": 1,                     # dropped by the merge
+            },
+        }}
+        merged = tighten_only_merge(committed, overlay)
+        # gates: AND-merge keeps identity-False.
+        self.assertIs(merged["agent_rules"]["enabled"], False)
+        self.assertIs(merged["agent_rules"]["paper_trading"]["enabled"], False)
+        self.assertFalse(opening_allowed(merged))
+        # raised knobs: min() keeps the committed values; injected key dropped.
+        self.assertEqual(merged["agent_rules"]["execution"],
+                         self._COMMITTED_EXECUTION)
+        # the polarity trap: latency 1 MERGES to 1 (min() took effect) ...
+        self.assertEqual(merged["agent_rules"]["latency_budget_ms"], 1)
+        # ... and the parser FLOORS it to 250 (the defense is the floor).
+        parsed = ExecutionConfig.from_config(merged)
+        self.assertEqual(parsed.effective_latency_budget_ms, 250)
+        self.assertEqual(parsed.slippage_cap_bps, Decimal("25"))
+        self.assertEqual(parsed.max_open_orders, 1)
+
+    def test_hostile_latency_zero_overlay_fails_loud_at_parse(self):
+        # M5C-T2: latency 0 merges to 0 and the parser raises ValueError at
+        # startup — the floor only applies to values that PARSE.
+        from agent.execution_config import ExecutionConfig
+
+        merged = tighten_only_merge(
+            _committed_config(), {"agent_rules": {"latency_budget_ms": 0}})
+        self.assertEqual(merged["agent_rules"]["latency_budget_ms"], 0)
+        with self.assertRaises(ValueError):
+            ExecutionConfig.from_config(merged)
+
+    def test_committed_artifacts_backtests_dir_is_gitkeep_only(self):
+        # M5C-S12/FD-M5-27: the S9 premise — NO committed artifact exists, so
+        # every real-strategy open rejects backtest_artifact_missing.
+        entries = sorted(p.name for p in (_ROOT / "artifacts" / "backtests").iterdir())
+        self.assertEqual(entries, [".gitkeep"])
+
+
+class TestFullOrchestratorS1Canary(unittest.TestCase):
+    """M5 §R test 12 — the full-orchestrator S1 canary, TWO compositions
+    (M5C-T3/S9) + the observe no-broker assertion (M5C-T10). All compositions
+    run the REAL orchestrator over the REAL committed config with the
+    run-gates file ABSENT."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+
+        from agent.execution_preflight import unbind_runtime
+        from tests.agent.test_execution_preflight_m5 import (
+            purge_open_authorizations,
+        )
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="m5-canary-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(unbind_runtime)          # teardown hygiene
+        purge_open_authorizations()              # start open-kind clean
+        self.addCleanup(purge_open_authorizations)
+
+    @staticmethod
+    def _registry():
+        from agent import execution_preflight
+        return execution_preflight._authorizations
+
+    @staticmethod
+    def _broker_instances(root, *, max_depth=8):
+        """Bounded object-graph walk: every Broker-Protocol instance reachable
+        from the orchestrator's attributes (M5C-T10)."""
+        import types
+
+        from agent.broker.base import Broker
+
+        seen, found = set(), []
+
+        def walk(obj, depth):
+            if depth > max_depth or id(obj) in seen:
+                return
+            seen.add(id(obj))
+            if isinstance(obj, (types.ModuleType, type)):
+                return
+            try:
+                if isinstance(obj, Broker):
+                    found.append(obj)
+            except TypeError:
+                pass
+            if isinstance(obj, dict):
+                for value in list(obj.values()):
+                    walk(value, depth + 1)
+            elif isinstance(obj, (list, tuple, set, frozenset)):
+                for value in obj:
+                    walk(value, depth + 1)
+            attrs = getattr(obj, "__dict__", None)
+            if isinstance(attrs, dict):
+                for value in list(attrs.values()):
+                    walk(value, depth + 1)
+
+        walk(root, 0)
+        return found
+
+    def test_s1_canary_a_committed_config_spybroker_never_reached(self):
+        # (a) committed config + ABSENT run-gates file + would_open-rich
+        # replay + injected SpyBroker => broker.calls == [] (zero submits of
+        # ANY kind at the Protocol boundary), preflight registry empty
+        # afterwards, M3 decision rows > 0 (the probe ran).
+        from tests.lib.exec_fixtures import (
+            ExecPipeline,
+            committed_assembled_config,
+        )
+
+        baseline = set(self._registry())
+        broker = SpyBroker()
+        pipeline = ExecPipeline(
+            journal_dir=self.tmp / "canary-a", run_id="run-s1-canary-a",
+            broker=broker, config=committed_assembled_config())
+        try:
+            for index in range(50, 59):
+                pipeline.tick_on_bar(index)
+        finally:
+            pipeline.close()
+        self.assertEqual(pipeline.orch.mode, "paper")
+        # the run-gates file was ABSENT: the provenance row says so.
+        gates_rows = pipeline.rows_of("status", "run_gates_file")
+        self.assertEqual(len(gates_rows), 1)
+        self.assertIs(gates_rows[0]["present"], False)
+        self.assertIs(gates_rows[0]["enabled"], False)
+        self.assertIs(gates_rows[0]["paper_enabled"], False)
+        # zero submits of ANY kind at the Broker Protocol boundary.
+        self.assertEqual(broker.calls, [])
+        self.assertEqual(broker.submitted, [])
+        self.assertEqual(broker.cancel_calls, [])
+        # the preflight registry is empty afterwards: nothing minted.
+        self.assertEqual(set(self._registry()) - baseline, set())
+        self.assertEqual(
+            [auth for auth in self._registry().values()
+             if auth.kind == "open"], [])
+        # the probe DID run: M3 decision rows > 0 on the committed config.
+        decisions = pipeline.rows_of("decisions", "decision")
+        self.assertGreater(len(decisions), 0)
+        # ... and the exec order path journaled nothing.
+        self.assertEqual(pipeline.rows_of("orders", "order_submit_attempt"), [])
+        self.assertEqual(pipeline.rows_of("orders", "order_submitted"), [])
+
+    def test_s1_canary_b_gates_consulting_variant_stops_at_run_gates(self):
+        # (b) the GATES-CONSULTING variant (RC-4): committed config + ABSENT
+        # run-gates file + RealStrategyStub + FakeBroker => the scan RUNS (no
+        # gates pre-check, M5C-S9) and EVERY decision journals a can_open
+        # refusal terminating at run_gates (reasons=("run_gates_off",)); zero
+        # preflight mints, zero broker calls, zero open-kind registry entries.
+        # A regression dropping any single gate layer moves this canary.
+        from unittest import mock
+
+        from agent import orchestrator as orch_mod
+        from agent.broker.fake import FakeBroker
+        from tests.lib.exec_fixtures import (
+            ExecPipeline,
+            RealStrategyStub,
+            committed_assembled_config,
+        )
+        from tests.lib.fakes import FakeClock
+
+        class _NoQuoteView:
+            def latest(self, symbol, instrument_id):
+                return None
+
+        broker = FakeBroker(quote_view=_NoQuoteView(), clock=FakeClock(0),
+                            instrument_ids={"AAPL": 1001})
+        submit_spy = mock.MagicMock(wraps=broker.submit_order)
+        cancel_spy = mock.MagicMock(wraps=broker.cancel_order)
+        broker.submit_order = submit_spy
+        broker.cancel_order = cancel_spy
+        stub = RealStrategyStub([{"on_bar": 1, "qty": "10"},
+                                 {"on_bar": 2, "qty": "10"},
+                                 {"on_bar": 3, "qty": "10"}])
+        mints = []
+        real_mint = orch_mod.mint_open_token
+
+        def mint_spy(inputs):
+            mints.append(inputs)
+            return real_mint(inputs)
+
+        with mock.patch.object(orch_mod, "mint_open_token", mint_spy):
+            pipeline = ExecPipeline(
+                journal_dir=self.tmp / "canary-b", run_id="run-s1-canary-b",
+                broker=broker, strategy=stub,
+                config=committed_assembled_config())
+            try:
+                for index in range(50, 56):
+                    pipeline.tick_on_bar(index)
+            finally:
+                pipeline.close()
+        # the scan RAN (M5C-S9: there is no gates pre-check before scan).
+        self.assertGreater(stub.scan_calls, 0)
+        decisions = pipeline.rows_of("orders", "strategy_decision")
+        self.assertEqual(len(decisions), 3)
+        self.assertEqual({row["action"] for row in decisions}, {"would_open"})
+        # EVERY decision journals a can_open refusal terminating at run_gates.
+        verdicts = pipeline.rows_of("risk", "risk_verdict")
+        self.assertEqual(len(verdicts), len(decisions))
+        for verdict in verdicts:
+            self.assertIs(verdict["allowed"], False)
+            self.assertEqual(verdict["gate_stage"], "run_gates")
+            self.assertEqual(verdict["reasons"], ["run_gates_off"])
+        self.assertEqual({row["decision_id"] for row in verdicts},
+                         {row["decision_id"] for row in decisions})
+        # the mint is NEVER reached (RC-4: can_open rung 1 terminates first).
+        self.assertEqual(mints, [])
+        # zero broker calls; zero write-ahead rows; zero open-kind entries.
+        self.assertEqual(submit_spy.call_count, 0)
+        self.assertEqual(cancel_spy.call_count, 0)
+        self.assertEqual(pipeline.rows_of("orders", "order_submit_attempt"), [])
+        self.assertEqual(
+            [auth for auth in self._registry().values()
+             if auth.kind == "open"], [])
+
+    def test_observe_mode_constructs_no_broker_object(self):
+        # M5C-T10: an in-process observe composition holds NO Broker-Protocol
+        # instance anywhere in its object graph, and never imports
+        # agent.broker.alpaca (popped first so the assertion stays honest even
+        # after earlier tests imported it; restored afterwards).
+        import sys
+
+        from tests.lib.exec_fixtures import (
+            ExecPipeline,
+            committed_assembled_config,
+        )
+
+        popped = sys.modules.pop("agent.broker.alpaca", None)
+        if popped is not None:
+            self.addCleanup(sys.modules.__setitem__,
+                            "agent.broker.alpaca", popped)
+        pipeline = ExecPipeline(
+            journal_dir=self.tmp / "observe", run_id="run-s1-canary-observe",
+            config=committed_assembled_config())
+        try:
+            pipeline.tick_on_bar(50)
+        finally:
+            pipeline.close()
+        self.assertEqual(pipeline.orch.mode, "observe")
+        self.assertIsNone(pipeline.orch.broker)
+        self.assertEqual(self._broker_instances(pipeline.orch), [])
+        self.assertNotIn("agent.broker.alpaca", sys.modules)
+
+        # positive control: the SAME walk finds an injected broker in a paper
+        # composition (proves the walk can see one at all).
+        control = ExecPipeline(
+            journal_dir=self.tmp / "observe-control",
+            run_id="run-s1-canary-observe-control",
+            broker=SpyBroker(), config=committed_assembled_config())
+        try:
+            found = self._broker_instances(control.orch)
+        finally:
+            control.close()
+        self.assertEqual([type(b).__name__ for b in found], ["SpyBroker"])
+        self.assertNotIn("agent.broker.alpaca", sys.modules)
+
+
 if __name__ == "__main__":
     unittest.main()

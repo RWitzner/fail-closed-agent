@@ -71,9 +71,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 GOLDEN_RUN_ID = "run-m5-golden-v1"
 FIXED_WRITER_TS = "2026-06-15T21:00:00+00:00"   # pinned row clock (M3 precedent)
+GOLDEN_GENERATED_TS = "2026-06-10T00:00:00.000000Z"  # pinned report ts (M3 mechanism)
 DATA_PIN_EXEC_V1 = "EQUS.MINI:tbbo:1m:fixture:exec-aapl-v1"
 
 _EVENTS_RUN_ID = "run-recorder-fixture-v1"
+
+# §Q committed-fixture pins (M5C-T5: regeneration = run the builder, copy bytes)
+OBSERVE_FIXTURE_PATH = (REPO_ROOT / "tests" / "fixtures" / "execution"
+                        / "observe_session_tbbo.jsonl")
+OBSERVE_FIXTURE_RUN_ID = "run-observe-fixture-v1"
+OBSERVE_FIXTURE_SYMBOL = "AAPL"
+OBSERVE_FIXTURE_SESSION_DATE = "2026-06-15"
+GOLDEN_DIR = REPO_ROOT / "tests" / "fixtures" / "execution" / "golden"
+CALENDAR_FIXTURE_PATH = (REPO_ROOT / "tests" / "fixtures" / "calendar"
+                         / "nyse_margin_window_v1.json")
 
 
 # --- config builders -----------------------------------------------------------------
@@ -387,6 +398,34 @@ def write_events_jsonl(path, rows, *, run_id=_EVENTS_RUN_ID) -> Path:
     return path
 
 
+def observe_session_rows(*, symbol=OBSERVE_FIXTURE_SYMBOL, instrument_id=1001,
+                         session_date=OBSERVE_FIXTURE_SESSION_DATE, minutes=75,
+                         epoch_flip_minute=55) -> list:
+    """The §Q observe-fixture rows (fully deterministic field values): one
+    valid tbbo row per minute (75 ≥ 60 one-minute buckets, so the 51-bar
+    feature gate opens with resolver room), one symbol; minutes 2 and 3 ride
+    the recorder's whole-second ``ts_recv_utc`` form (≥ 2 rows — the M3 §K
+    mixed-ISO precedent, EX-5); every row from ``epoch_flip_minute`` on
+    carries ``reconnect_epoch = 1`` (the §Q mid-session epoch-flip variant)."""
+    rows = quotes_session(symbol=symbol, instrument_id=instrument_id,
+                          session_date=session_date, minutes=minutes,
+                          include_special_rows=False)
+    for index, row in enumerate(rows):
+        if index >= epoch_flip_minute:
+            row["reconnect_epoch"] = 1
+    return rows
+
+
+def write_observe_session_fixture(path=None) -> Path:
+    """Write the COMMITTED §Q fixture ``observe_session_tbbo.jsonl``: recorder
+    rows WITH the journal envelope (``replay_stream``-verified hashes), pinned
+    ``run_id`` + pinned EventWriter row clock — byte-deterministic.
+    Regeneration = call this and copy bytes (M5C-T5)."""
+    target = Path(path) if path is not None else OBSERVE_FIXTURE_PATH
+    return write_events_jsonl(target, observe_session_rows(),
+                              run_id=OBSERVE_FIXTURE_RUN_ID)
+
+
 # --- the orchestrator harness ------------------------------------------------------------
 
 
@@ -559,14 +598,21 @@ def synthetic_golden_script() -> list:
 
 def run_synthetic_golden(journal_dir):
     """Deterministic synthetic open→mark→close run over the REAL orchestrator
-    (FakeBroker + ScriptedSyntheticStrategy + permissive fixture config) with
-    the GOLDEN_RUN_ID and the pinned row clock. Returns the ExecPipeline
-    (closed) for inspection; regeneration = run + copy bytes."""
+    (FakeBroker ``partial_then_full`` — the §R 14 lifecycle, exercising
+    broker_order_update + multi-slice fills; ScriptedSyntheticStrategy +
+    permissive fixture config + the §Q status_script TRADABLE injection via
+    ExecPipeline's full-day default windows; every open-driving script row
+    carries an explicit on-grid limit — FD-M4-16) with the GOLDEN_RUN_ID and
+    the pinned row clock. The tick cadence honors the EX-12 density rule: each
+    decision bar is followed by an in-window quote B. Returns the ExecPipeline
+    (closed) for inspection; regeneration = run + copy bytes (M5C-T5):
+    the committed byte goldens live under ``tests/fixtures/execution/golden/``
+    (orders.jsonl / fills.jsonl / positions.jsonl)."""
     strategy = ScriptedSyntheticStrategy(synthetic_golden_script())
     pipeline = ExecPipeline(
         journal_dir=journal_dir, run_id=GOLDEN_RUN_ID,
         strategy=strategy, exit_provider=strategy,
-        fill_policy="immediate_full")
+        fill_policy="partial_then_full")
     try:
         # bars 50..58: ordinal 1 fires at the first feature-complete bar.
         for index in range(50, 59):
@@ -578,15 +624,51 @@ def run_synthetic_golden(journal_dir):
     return pipeline
 
 
-def run_observe_golden(journal_dir):
-    """Deterministic observe-mode run (no broker, no strategy): probe rows +
-    resolver over the same recorded session; GOLDEN_RUN_ID + pinned row clock."""
-    pipeline = ExecPipeline(
+def run_observe_golden(journal_dir, *, events_path=None):
+    """Deterministic observe-mode run for the §R 16 E2E: the REAL orchestrator
+    driven by a ``ReplayQuoteFeed`` over the COMMITTED §Q fixture
+    ``observe_session_tbbo.jsonl`` + the REAL committed config (gates OFF; no
+    broker, no strategy — observe constructs no Broker-Protocol instance),
+    GOLDEN_RUN_ID + the pinned row clock + the pinned report timestamp.
+
+    Status windows ride the pinned M5C-T4 injection seam (EQUS.MINI has no
+    status schema — §N honesty note: without injection every probe tick
+    gate-fails ``market_state_not_tradable`` and the funnel never reaches a
+    forecast), so the golden exercises the FULL probe → resolver → report
+    funnel: decision rows, scored rows, calibration report.
+
+    Returns ``{"orchestrator": <closed Orchestrator>, "report": dict,
+    "report_path": Path}``; regeneration = run this helper and copy bytes
+    (M5C-T5): the committed goldens are ``golden/observe_decisions.jsonl``,
+    ``golden/observe_scored.jsonl`` and ``golden/observe_report.json``."""
+    from agent.orchestrator import (
+        build_replay_feed,
+        schedule_provider_from_fixture,
+    )
+
+    events = Path(events_path) if events_path is not None \
+        else OBSERVE_FIXTURE_PATH
+    journal_dir = Path(journal_dir)
+    feed = build_replay_feed(str(events))
+    orch = Orchestrator(
         journal_dir=journal_dir, run_id=GOLDEN_RUN_ID,
-        config=committed_assembled_config())
+        clock=feed.clock(), quote_view=feed.quote_view(),
+        bar_reader=feed.bar_reader(),
+        calendar_provider=schedule_provider_from_fixture(CALENDAR_FIXTURE_PATH),
+        config=committed_assembled_config(),
+        status_provider=status_script(full_day_windows(
+            OBSERVE_FIXTURE_SYMBOL, OBSERVE_FIXTURE_SESSION_DATE)),
+        row_clock=lambda: FIXED_WRITER_TS)
+    report_path = journal_dir / "observe_report.json"
     try:
-        for index in range(50, len(pipeline.bars)):
-            pipeline.tick_on_bar(index)
+        if orch.mode != "observe":
+            raise AssertionError(
+                f"run_observe_golden derived mode {orch.mode!r}, expected "
+                "'observe' (no broker / strategy / credentials were injected)")
+        orch.run_with_feed(feed)
+        report = orch.write_report(report_path,
+                                   generated_ts_utc=GOLDEN_GENERATED_TS)
     finally:
-        pipeline.close()
-    return pipeline
+        orch.close()
+    return {"orchestrator": orch, "report": report,
+            "report_path": report_path}
