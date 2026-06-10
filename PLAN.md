@@ -63,17 +63,21 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   → 4-lens adversarial review (13 agents, repro-gated: 8 confirmed defects — 2 majors in the freeze
   mechanics — all fixed TDD; see the contract's §R harden log). Committed `risk_rules.json` caps stay 0;
   every `can_open` on the committed config terminates at `run_gates` (S1 extended).
-- **M5 paper-exec: contract rev 2 READY-TO-BUILD (2026-06-10); TDD build IN PROGRESS.**
-  3-architect panel (Alpaca API facts verified against docs.alpaca.markets) → contract draft → FULL
-  4-lens critic pass (repo-facts 6, safety 12, execution-realism 12, buildability 18 = 48 findings,
-  2 of them the same blocker: the FakeBroker synthetic wall blocked kill-flatten reductions; 1 more
-  blocker: the cross-stream seq ordering assertion was unbuildable) → ALL 48 applied in
-  `docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md` rev 2 (§V resolution log) →
-  independent re-critique verified all 48 resolved + found 5 revision-introduced defects (RC-1 major:
-  per-tick close ids removed the accidental double-sell backstop ⇒ FD-M5-21 made global; RC-2…5
-  minor) — all applied. Findings archive:
-  `docs/superpowers/reviews/2026-06-10-M5-contract-critic-findings.json` (incl. the re-critique).
-  Next: TDD build per the M3/M4 discipline (build → adversarial review rounds → harden).
+- **M5 paper-exec: BUILT — all 16 §R test files green (1513 tests, 2026-06-10); adversarial review
+  rounds NOT yet run.** Contract path: 3-architect panel → draft → FULL 4-lens critic pass (48
+  findings incl. 2 blockers) → rev 2 with all 48 applied (§V log) → independent re-critique (all 48
+  verified + 5 RC defects, applied) → READY-TO-BUILD (`73d3e29`). Findings archive:
+  `docs/superpowers/reviews/2026-06-10-M5-contract-critic-findings.json`. Build in 6 TDD waves
+  (`72fc789`→`0616c3a`): wave 1 vocab/config/pricing/order-state (1040), wave 2 preflight ladder +
+  TOCTOU consume + realism/fees + synthetic/gate (1251), wave 3 exec_ledger + alpaca/fake/flatten
+  brokers (1358), wave 4 paper_book + replay_feed + run_lock/secrets (1446), wave 5 orchestrator +
+  CLI + exec_fixtures (1466), wave 6 E2Es + committed goldens + kill drill + canary/purity (1513).
+  S1 holds: committed config + absent run-gates file ⇒ zero submits over a full orchestrator run;
+  kill-flatten works in every composition (the M5C-1 blocker pin). Build errata logged in wave-5/6
+  commit messages (notable: M4 `leg_cap_notional` requires explicit strategy limits — M7 decision
+  item; 2 §3 import-row omissions whitelisted in the AST guard).
+  **Resume point: 4-lens adversarial code review (repro-gated, M3/M4 discipline) → fix TDD → harden
+  commit → M5 done.**
 
 ## Locked decisions
 
