@@ -1,0 +1,263 @@
+{
+ "artifact": "M5 contract critic findings (PARTIAL — buildability lens missing, died on session limit)",
+ "contract": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md (DRAFT FOR CRITIC PASS)",
+ "date": "2026-06-10",
+ "resume_instructions": "1) Re-run the buildability critic lens on the contract (the other three are below). 2) Apply ALL findings (incl. the M5C-1 BLOCKER: FakeBroker's synthetic wall must exempt is_reducing intents) + the buildability findings via a revision pass -> READY-TO-BUILD. 3) TDD build per the M3/M4 discipline. The M4 build is committed and is the real API.",
+ "lenses": {
+  "repo-facts": {
+   "findings": [
+    {
+     "id": "M5C-1",
+     "severity": "blocker",
+     "section": "FD-M5-8 / §H.1 / §M.6 / §0 ground rules (fail-closed asymmetry)",
+     "claim": "The FakeBroker reverse wall structurally blocks kill-switch flatten reductions in synthetic mode — an invariant contradiction with the contract's own 'no M5 code path may BLOCK a reduction' ground rule and S8.",
+     "evidence": "Contract FD-M5-8: 'FakeBroker._place refuses any intent whose intent_id does NOT [start with \"synthetic-\"]' and §H.1: '_place raises SyntheticConfinementError unless intent.intent_id.startswith(\"synthetic-\")'. But §M.6 wires the synthetic run's kill drill as risk_kill.trigger(cause, PriceCappedFlattenBroker(inner=broker=FakeBroker, ...)), and the REAL M4 build delegates to a fresh M0 actuator: scripts/agent/risk/risk_kill.py:141 'inner = KillSwitch()   # FRESH M0 actuator per pass (FD-M4-4)' (also :186 in retry_residual), whose intents are hardcoded at scripts/agent/kill_switch.py:39 'intent_id=f\"flatten-{position.symbol}\"' — kill_switch.py is frozen unedited (FD-M4-4/FD-M5-1). Every flatten intent therefore lacks the 'synthetic-' prefix, FakeBroker._place raises, the M0 isolation loop puts ALL positions into failed[]/residual, and §R test 15's expectations ('retry_residual succeeds once quotable', 'close_position(reason=\"kill_flatten\") rows') are unbuildable in the synthetic composition (§M.2 step 9: synthetic ⇒ FakeBroker). This violates §0: 'no M5 code path may BLOCK a reduction. The reduce path gains zero new gates'.",
+     "proposed_fix": "Scope wall 2's reverse refusal to non-reducing intents only: FakeBroker._place raises SyntheticConfinementError iff intent.is_reducing is False AND intent_id does not start with 'synthetic-' (reductions are never namespace-gated, consistent with FD-M4-3's asymmetry). Alternatively have PriceCappedFlattenBroker re-namespace the rebuilt intent_id when inner.kind == 'fake'. Add a §R test: kill flatten through PriceCappedFlattenBroker over a FakeBroker inner succeeds (zero failed[]) in the synthetic composition."
+    },
+    {
+     "id": "M5C-2",
+     "severity": "major",
+     "section": "§2.2 stage 9 (market_state) frozen check",
+     "claim": "The frozen halt/LULD check references a LuldState member that does not exist: 'luld != NONE'. LuldState has no NONE — its non-restrictive member is NORMAL.",
+     "evidence": "Contract §2.2 stage 9: '`halt != NONE` or `luld != NONE` or `session_state == AUCTION` ⇒ `halt_luld_auction`'. Actual vocabulary at scripts/agent/market_state.py:48-52: LuldState = {NORMAL, LIMIT, PAUSED, UNKNOWN} (HaltState.NONE exists at market_state.py:41, LuldState.NONE does not). A literal build either fails (AttributeError on LuldState.NONE) or, if string-compared against \"none\", fires halt_luld_auction on EVERY verdict including healthy LuldState.NORMAL — blocking all opens and corrupting funnel attribution.",
+     "proposed_fix": "Amend stage 9 to '`halt != HaltState.NONE` or `luld not in {LuldState.NORMAL}` (i.e. luld in {LIMIT, PAUSED, UNKNOWN}) or `session_state == AUCTION` ⇒ halt_luld_auction', and add a stage-9 test case for a healthy verdict (halt=NONE, luld=NORMAL, RTH) producing zero market_state reasons."
+    },
+    {
+     "id": "M5C-3",
+     "severity": "major",
+     "section": "§2.2 stage 9 parenthetical + §R test 3",
+     "claim": "The pinned safe-default expectation ('exactly market_state_not_rth + market_state_not_tradable + market_state_stale_default') contradicts the frozen stage-9 checks applied to the REAL safe_default_verdict, which also fires halt_luld_auction and ca_blackout.",
+     "evidence": "Contract §2.2 stage 9: '(The safe-default verdict fires not_tradable + stale_default + not_rth together — collect-all.)' and §R test 3: 'safe-default verdict ⇒ exactly `market_state_not_rth + market_state_not_tradable + market_state_stale_default` from stage 9'. Actual safe default at scripts/agent/market_state_cache.py:112-124: halt=HaltState.UNKNOWN (line 117), luld=LuldState.UNKNOWN (line 118), ca_blackout=True (line 123). Under stage 9's own frozen checks ('halt != NONE ... ⇒ halt_luld_auction'; 'verdict.ca_blackout ⇒ ca_blackout'), the safe default yields FIVE reasons (ca_blackout, halt_luld_auction, market_state_not_rth, market_state_not_tradable, market_state_stale_default), not three. The builder must guess which of the two frozen statements wins.",
+     "proposed_fix": "Pin the full five-reason sorted set for the safe-default input in both §2.2's parenthetical and §R test 3 (fail-closed: keep the checks, fix the expectation). If three reasons are genuinely intended, the stage-9 checks must instead carve out UNKNOWN halt/luld and ca_blackout for the cache_stale_safe_default case — which would loosen fail-closed semantics and should be rejected."
+    },
+    {
+     "id": "M5C-4",
+     "severity": "major",
+     "section": "FD-M5-14 + §3 module map ('Existing files that GROW')",
+     "claim": "The claim that the legacy 2-positional mint_open_token's 'only legitimate caller was the reject-all test' (and that 'every existing test stays green unmodified except the M0 reject-all mint test') is false — two additional test files call the legacy signature and break under the replacement.",
+     "evidence": "Contract FD-M5-14: 'The legacy `mint_open_token(config, intent)` 2-positional signature is REPLACED (its only legitimate caller was the reject-all test, which is rewritten to the new signature...)'. Actual call sites: tests/agent/test_preflight_token.py:81,86 (the acknowledged reject-all tests), PLUS tests/agent/test_config_canary.py:48 'token = mint_open_token(cfg, intent)' inside try/except PreflightRejected (a TypeError from the new 1-arg signature escapes the except and ERRORS the S1 canary), and tests/agent/test_alpaca_spy.py:58 'mint_open_token(COMMITTED, OrderIntent(...))' under assertRaises(PreflightRejected) (TypeError fails the assertion). (tests/agent/test_risk_kill.py:205 mock.patches it and survives.)",
+     "proposed_fix": "Amend FD-M5-14/§3 to enumerate ALL three legacy call sites that must be rewritten to the new PreflightInputs signature (test_preflight_token.py:79-86, test_config_canary.py:48, test_alpaca_spy.py:56-58), each rewritten to assert the new byte-exact run_gates terminal reject shape so S1 coverage is preserved, not weakened."
+    },
+    {
+     "id": "M5C-5",
+     "severity": "major",
+     "section": "§O.1 observe mode ('Runnable TODAY ... or the committed tbbo fixture') + §R test 16 vs §N ReplayQuoteFeed",
+     "claim": "The committed tbbo fixture cannot be consumed by ReplayQuoteFeed as specified: §N freezes the input as 'an M1 recorder events.jsonl via replay_stream (hash-verified)', but equs_mini_tbbo_sample.jsonl is raw vendor records with no journal envelope and different field names — replay_stream raises JournalCorruption on its first complete line.",
+     "evidence": "Contract §N: 'Reads an M1 recorder events.jsonl via replay_stream (hash-verified, truncated-tail rule inherited). Quote rows ... provenance verbatim'; §O.1: 'Runnable TODAY on any M1-recorded file or the committed tbbo fixture'; §R 16: 'observe E2E TODAY: committed tbbo fixture + committed config ⇒ probe decisions + scored rows + calibration report match goldens'. Actual fixture rows at tests/fixtures/databento/equs_mini_tbbo_sample.jsonl:1 carry ts_event/ts_recv (not ts_event_utc/ts_recv_utc), no reconnect_epoch, and no event_type/run_id/seq/hash journal envelope; journal.replay (scripts/agent/journal.py:44-57) raises JournalCorruption on any complete line missing 'hash'. Existing consumers route it through the parser first: tests/recorder/test_persistence.py:63,105 (_parse_record + EventWriter.write_event). §Q's GENERATED observe_session_tbbo.jsonl is the shape that works, but §O.1/§R16 name the raw fixture as a direct input.",
+     "proposed_fix": "Either (a) change §O.1/§R 16 to reference the §Q generated recorder-shaped fixture (tests/fixtures/execution/observe_session_tbbo.jsonl) as the runnable-today input, or (b) pin an explicit conversion step in §Q (a tests/lib builder that runs the raw databento fixture through the M1 parser + EventWriter to produce a hash-stamped events.jsonl) and have §O.1's 'committed tbbo fixture' claim go through it. Do NOT loosen ReplayQuoteFeed to accept unhashed raw rows (that would bypass S3 hash verification)."
+    },
+    {
+     "id": "M5C-6",
+     "severity": "minor",
+     "section": "§0.1 verified-facts table (revision attribution)",
+     "claim": "Two §0.1 rows attribute uncommitted working-tree state to the pinned commit f9ec7c6/HEAD, and one line-range citation is off by one.",
+     "evidence": "(a) §0.1 row: '`risk_rules.json` already carries the committed M4 additions: 7 integer-0 caps + `risk.short_selling.enabled:false` + `risk.universe:{}` ... | `config/risk_rules.json:1-19`' under the header '(file:line at `f9ec7c6`)' — but `git show f9ec7c6:config/risk_rules.json` has only 3 caps and no `risk` block (10 lines); the additions exist only as an uncommitted working-tree modification (git status: 'M config/risk_rules.json'), so they are not 'committed' at the cited revision. (b) §0.1 row: 'M4 build IN FLIGHT under `scripts/agent/risk/` (`reasons.py`, `account_state.py` exist at HEAD)' — scripts/agent/risk/ is untracked ('?? scripts/agent/risk/'), i.e. not at HEAD; the full 12-file build now exists in the working tree. (c) §0.1 cites `config/agent_rules.json:2-10,24-27` for `signal.spread_bps_max=\"50\"`, which is at config/agent_rules.json:23 (all cited VALUES are correct).",
+     "proposed_fix": "Reword the §0.1 header/rows to distinguish 'at f9ec7c6' facts from 'in the M4 working-tree build (to be committed before M5 starts)' facts, make the M5 build precondition explicit (M4 build + risk_rules.json additions landed/committed), and correct the agent_rules.json range to 2-10,23-27."
+    }
+   ],
+   "overall_verdict": "ready_after_fixes"
+  },
+  "safety": {
+   "findings": [
+    {
+     "id": "M5C-S1",
+     "severity": "blocker",
+     "section": "§H.1 FakeBroker reverse wall (FD-M5-8/28) vs §0 fail-closed asymmetry + §M.6 kill sequence",
+     "claim": "The FakeBroker reverse wall structurally blocks ALL kill-flatten reductions in synthetic mode — an invariant contradiction between two frozen rules. FD-M5-8 (line 152): 'FakeBroker._place refuses any intent whose intent_id does NOT [start with \"synthetic-\"]'; §H.1 (lines 784-786): '_place raises SyntheticConfinementError unless intent.intent_id.startswith(\"synthetic-\")'. But §M.6 (lines 1169-1177) runs the kill sequence in every mode by handing PriceCappedFlattenBroker(inner=<the mode's broker>) to RiskKillSwitch.trigger, and the M4 switch delegates to a FRESH M0 KillSwitch (scripts/agent/risk/risk_kill.py:141 and :186, 'inner = KillSwitch()'), whose flatten intents are built at scripts/agent/kill_switch.py:39 with intent_id=f\"flatten-{position.symbol}\" — which does not start with 'synthetic-'. kill_switch.py is frozen unedited (FD-M4-4, §3 'kill_switch.py ... NOT edited'). So in synthetic mode every flatten intent is refused by the reverse wall, every position lands in failed[] forever, and retry_residual can never succeed — violating the §0 ground rule (line 48: 'no M5 code path may BLOCK a reduction'; lines 51-53: 'The single accepted reduce-side failure mode is FD-M5-1's pricing rule ... never a gate') and making §M.6's specified PaperBook.close_position(reason=\"kill_flatten\") unreachable in the synthetic composition. The §R 15 drill (inner broker unspecified) and §R 14 E2E (strategy-close only) would not catch it.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:48-54,152,784-786,1169-1177; scripts/agent/kill_switch.py:34-40 (intent_id=f\"flatten-{position.symbol}\" at line 39); scripts/agent/risk/risk_kill.py:141,143,186 (flatten delegated to fresh M0 KillSwitch with the wrapped broker).",
+     "proposed_fix": "Scope the reverse wall to opening flow only: FakeBroker._place refuses an intent iff `intent.is_reducing is not True AND not intent.intent_id.startswith(\"synthetic-\")` (reductions of fake-held positions are exactly what the wall must never block; the open direction keeps full namespace enforcement). Pin this in FD-M5-8 + §H.1, and add a §R 15 variant: kill trip in the synthetic composition (FakeBroker inner) flattens successfully, zero failed[]. Alternatively have PriceCappedFlattenBroker re-prefix intent_id when inner.kind=='fake', but the is_reducing exemption is simpler and keeps the proxy mode-agnostic."
+    },
+    {
+     "id": "M5C-S2",
+     "severity": "major",
+     "section": "§M.2 startup sequence (frozen ORDER), steps 6 vs 9",
+     "claim": "The frozen startup order is internally contradictory: step 6 'Exec rehydrate' performs FD-M5-24 recovery requiring live broker calls ('paper: query-by-client_order_id, adopt, one best-effort cancel restart_unknown_state, resume polling', lines 1069-1072), but the broker object is only constructed at step 9 'Mode select' (lines 1078-1082: 'observe ⇒ NO broker object constructed; ... paper ⇒ AlpacaPaperBroker(credentials_loader=...)'). As written, the paper-mode crash-recovery cancel/adopt path cannot run at step 6; a builder must guess whether to reorder steps (recovery after construction) or hoist construction — and the choice interacts with step 7's HALTED latch and step 8's bind_runtime.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:1069-1082 (step 6 broker queries precede step 9 broker construction in a sequence labeled 'frozen ORDER; any step failing ⇒ fail-loud exit').",
+     "proposed_fix": "Split step 6 into 6a 'fold journals + classify non-terminal orders (pure)' and move the FD-M5-24 broker-touching resolution to a new step after mode select (e.g., 9b 'order recovery'), keeping the open-deny enrollment and offline_orphan branch in 6a for the no-broker modes. Re-freeze the order and update §R 10's call-order spy accordingly."
+    },
+    {
+     "id": "M5C-S3",
+     "severity": "major",
+     "section": "§M.2 step 9 paper-mode broker construction condition vs §0 fail-closed asymmetry, §O.1, §M.2 step 7, FD-M5-24",
+     "claim": "Conditioning paper-broker construction on the run-gates view being identity-True (line 1080-1081: 'paper ⇒ AlpacaPaperBroker(credentials_loader=...) iff the §O.2 gates view is identity-True AND .secrets/alpaca_paper.json exists — else the run degrades to observe') turns the OPEN gates into a gate on the REDUCE side: with gates off (the committed default, and the documented uninstall story §O.2.5c 'rm .secrets/run_gates.json'), the run has NO broker, so (a) FD-M5-24 restart recovery cannot query/cancel a dangling broker order even though credentials exist — it mis-journals 'offline_orphan' while a real paper order may be live at Alpaca; (b) held broker positions cannot be closed, kill-flattened, or retry_residual'ed — contradicting line 48 ('no M5 code path may BLOCK a reduction') and step 7 (lines 1073-1075: after a rehydrated HALTED state 'the operator-attended retry_residual is the only trade action' — impossible without a broker); (c) §O.1's paper-mode promise (lines 1248-1250: 'account polling, journaling, kill drill, and the reduce path are exercisable') is false whenever gates read False. Concrete plausible sequence: gates-on session opens a position → operator deletes run_gates.json after an incident → restart → degrade-to-observe → position stranded, dangling order presumed-dead.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:48-54,1073-1075,1078-1082,1247-1252,1282-1283; FD-M5-24 (line 168) requires paper-mode query/adopt/cancel that the degraded run cannot perform.",
+     "proposed_fix": "Decouple broker existence from the open gates: in paper mode construct AlpacaPaperBroker whenever .secrets/alpaca_paper.json exists (credentials are the construction key); the run-gates view governs ONLY opening (ladder rung 1 / can_open rung 1 / the step-7 scan condition). With gates False the run is 'paper, reduce-and-recover only': recovery cancels, watcher, closes, kill flatten and retry_residual all work; opens still reject at run_gates. Add a §R 13 test: gates-absent paper run with a rehydrated position can still flatten/cancel and never opens."
+    },
+    {
+     "id": "M5C-S4",
+     "severity": "major",
+     "section": "§O.2.2/§O.2.4 gates-view substitution vs §B/§M.2 rules_hash vs §L.2 artifact binding",
+     "claim": "The contract is ambiguous about WHICH dict feeds rules_hash and the parsers once the run-gates file substitutes the two gate keys. §O.2.2 builds 'the assembled gates view = the committed(+overlay) config with ONLY those two keys replaced'; §O.2.4 (line 1277-1278) requires 'the ladder's rung 1 and can_open's rung 1 ... answer identically' — which forces the M4 RiskEngine to hold the substituted view; §B line 427 pins ExecutionConfig.rules_hash as 'of the WHOLE assembled config' and §M.2 step 2 (line 1051) computes 'rules_hash over the assembled dict' immediately after assembling the gates view. If the substituted view is hashed, rules_hash becomes run-gates-file-dependent: identical committed config yields different hashes in observe vs gates-on paper runs (breaking cross-stream funnel joins keyed on rules_hash), and the S9 artifact gate re-closes spuriously — FD-M5-27 (line 171): 'any rules_hash/data_pin drift re-closes the gate' — for any artifact whose rules_hash was computed from the committed config, since the gates file is git-ignored and cannot be part of a reviewed artifact's reproducible inputs. If instead the pre-substitution dict is hashed, the contract never says so, and the builder must guess which dict each consumer (SignalConfig/RiskConfig/ExecutionConfig/verify_artifact/journal rows) receives.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:171,427,1049-1051,1267-1278; scripts/agent/config.py:17 (rules_hash over the effective config dict).",
+     "proposed_fix": "Pin explicitly: rules_hash (and all three parsers) are computed over the committed(+overlay) assembled dict BEFORE gate substitution; the substituted gates view exists solely as the argument to gates.opening_allowed at the two rung-1 call sites and the §M.3 step-7 scan condition. State this in §O.2 (new point) and §B, and add a §R 13 case: same committed config, run-gates file present-true vs absent ⇒ identical rules_hash on every journaled row."
+    },
+    {
+     "id": "M5C-S5",
+     "severity": "major",
+     "section": "§P.3 deterministic ids (close path) vs FD-M5-17/FD-M5-26/§M.5",
+     "claim": "Close-path id derivation has no attempt discriminator, so a retried close REUSES client_order_id, contradicting FD-M5-17 (line 161: 'client_order_id is never reused; a retry is a NEW decision → NEW preflight → NEW id') and A8 uniqueness (the broker rejects a duplicate client_order_id, leaving the position un-closable through the normal path). Derivation (lines 1374-1382): decision_id = row_hash({run_id, strategy_id, symbol, instrument_id, event_basis}) with event_basis = '\"exit:\" + position_id' on the close path (no bar/tick/qty component), and order_id = row_hash({run_id, decision_id, preflight_id|null}) with preflight_id null on the reduce path. Plausible sequences: (1) a close order is watcher-canceled (FD-M5-23 trigger, e.g. epoch_changed) → position still held → ExitProvider re-emits next tick (§M.3 step 8 polls exits every tick) → identical decision_id ⇒ identical order_id ⇒ duplicate client_order_id; (2) FD-M5-26's own frozen retry ('No usable quote this tick ⇒ reject{stage:\"reduce_pricing\"} + retry next tick', line 170) journals a second strategy_decision row under the SAME decision_id, degrading the S6 one-decision-one-id chain even before any submit.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:161,170,1105-1106,1155-1165,1374-1382.",
+     "proposed_fix": "Add a per-attempt discriminator to the close-path event_basis — e.g. event_basis = '\"exit:\" + position_id + \":\" + bar_key' (or decision_seen_at_ms) — so each tick's exit attempt is a new decision_id and therefore a new order_id/client_order_id. Freeze it in §P.3 and add a §R 6/10 case: canceled close followed by a retried close produces distinct decision_id/order_id and the broker double-submit fixture never sees a repeated client_order_id."
+    },
+    {
+     "id": "M5C-S6",
+     "severity": "major",
+     "section": "FD-M5-20 / §I assess_divergence — partial-fill terminal basis",
+     "claim": "The frozen divergence formula has an undefined operand for partially-filled terminal orders. FD-M5-20 (line 164): divergence is computed 'on every order that reaches filled (and on partially_filled terminal states, over the filled qty): divergence_usd = broker_cost_usd − modeled_cost_over_filled_qty'. But ModeledFill carries only a FULL-requested-qty basis (line 846: 'modeled_cost_usd ... FULL-qty integrated cost (FD-M5-19)') plus modeled_fillable_qty / quantized modeled_vwap / worst_price; no rule says how to derive the modeled cost over a filled_qty < requested_qty (fillable-first at the touch then cap? pro-rata vwap?). The journaled quote provenance sub-dict (lines 1327-1329) carries NO prices, so the value also cannot be recomputed from rows. assess_divergence is the ONE sanctioned BrokerUSD/ModeledUSD comparison seam (S5), and its §R 8 test ('divergence flags + alert threshold strict boundary') cannot be written without the builder inventing this rule.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:163-164,846,855-859,1327-1329.",
+     "proposed_fix": "Freeze the derivation in FD-M5-20/§I: modeled_cost_over_filled_qty = min(filled_qty, modeled_fillable_qty) × touch_price + max(0, filled_qty − modeled_fillable_qty) × capped_limit for tob_l1_v1 (and the same walk-prefix rule for depth_vwap_l2_v2), computed inside assess_divergence from the in-memory ModeledFill — and add the unquantized touch price (e.g. quote_b ask/bid) to the ModeledFill dataclass + modeled_execution_fill row so the value is replay-recomputable (LD-R5 money discipline)."
+    },
+    {
+     "id": "M5C-S7",
+     "severity": "minor",
+     "section": "§H.2 PriceCappedFlattenBroker vs §2.4 BROKER_KINDS / §E Broker Protocol",
+     "claim": "PriceCappedFlattenBroker declares kind=\"flatten_proxy\" (line 791) but BROKER_KINDS is frozen as {spy, fake, alpaca_paper, alpaca_live} (line 276) with 'Out-of-vocab anywhere ⇒ ExecError' (line 282), and the grown Broker Protocol annotates 'kind: str # ∈ BROKER_KINDS' (line 625) plus cancel_order/order_status, which the proxy does not implement (lines 790-805). The contract's own vocabulary rule and its own class contradict; a builder must guess whether to add the member, exempt the proxy from the Protocol, or drop its kind attribute.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:276,282,623-630,790-805.",
+     "proposed_fix": "Either add \"flatten_proxy\" to BROKER_KINDS (marking it never-journaled-as-fill-source), or state in §H.2 that the proxy is deliberately NOT a Broker Protocol member (it is a submit-only shim handed exclusively to RiskKillSwitch, which calls submit_order/positions only) and remove its kind claim from the vocabulary's scope."
+    },
+    {
+     "id": "M5C-S8",
+     "severity": "minor",
+     "section": "§H.2 flatten proxy quote lookup signature",
+     "claim": "The proxy pseudocode calls `quote_view.latest(intent.symbol, ...)` (line 797), but the M3 QuoteView Protocol is latest(symbol, instrument_id) (scripts/agent/strategies/calibration_probe.py:95-96) and OrderIntent carries no instrument_id (scripts/agent/broker/base.py:17-26) — the M0 kill_switch builds intents from positions with symbol only. The builder must guess where instrument_id comes from (injected symbol→instrument map, position metadata, or a relaxed lookup).",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:792-797; scripts/agent/strategies/calibration_probe.py:95-96; scripts/agent/broker/base.py:17-26; scripts/agent/kill_switch.py:34-40.",
+     "proposed_fix": "Pin the mechanism in §H.2: PriceCappedFlattenBroker ctor takes an injected `instrument_ids: Mapping[str, int]` (built by the orchestrator from the universe/held-positions view); a symbol absent from the map resolves like an unpriceable quote → FlattenUnpriced(\"no_price_for_cap\") into failed[]/residual (never a gate)."
+    },
+    {
+     "id": "M5C-S9",
+     "severity": "minor",
+     "section": "§M.3 step 7 scan condition vs §R 12 full-orchestrator S1 canary",
+     "claim": "The full-run S1 canary is weaker than advertised: step 7 gates scan on 'gates view is identity-True AND a non-spy broker is bound' (lines 1102-1104), and the §R 12 canary binds a SpyBroker (lines 1504-1506) — so the decide→can_open→mint path is short-circuited by TWO conditions before the run-gates check ever matters, `broker.calls == []` is trivially satisfied, and a regression that dropped the gates consultation from scan or from the mint would not move the canary. The canary's companion assertion 'every refusal journaled' is also unsatisfiable on the order path since no order-path refusal occurs. Mitigated by §R 3's direct mint-level committed-config sweep, but the orchestrator-level tripwire as specified does not exercise what its invariant-map row claims ('mint terminates at run_gates', line 1541).",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:1102-1104,1502-1508,1541.",
+     "proposed_fix": "Add a §R 12 variant that reaches the mint under the committed config: same composition but with the scan's broker-kind condition removed for the test (or a FakeBroker + real strategy bound), asserting the journaled reject rows show gate_stage=\"run_gates\", reasons=(\"run_gates_off\",), zero broker.calls, and empty open-kind registry — so the canary detects a future loss of any single layer rather than relying on the stack of three."
+    },
+    {
+     "id": "M5C-S10",
+     "severity": "minor",
+     "section": "§P.1 ExecLedger validation vs §K typing wall (S5)",
+     "claim": "The S5 newtype wall is specified only at PaperBook ('every broker-basis assignment passes as_broker_usd()', lines 966-967) — the ExecLedger record_* seam lists vocabulary/field-set/Decimal-exact checks (lines 1303-1310) but no BrokerUSD/ModeledUSD instance enforcement on money fields. Since serialization erases the newtype (serializer.py:39-44 renders any Decimal as a string) and rehydrate folds journaled strings back into the book, a ModeledUSD journaled into broker_fill.delta_cost_usd or position_open.broker_cost_usd by an orchestrator bug would survive replay undetected; the §R 7 white-box test covers PaperBook only.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:966-970,1303-1310,1350,1359; scripts/agent/serializer.py:15-25,39-44,58-64.",
+     "proposed_fix": "Require in §P.1 that ExecLedger record methods pass broker-lineage money fields through as_broker_usd (and reject a BrokerUSD instance in modeled_cost_usd slots via an as_modeled_usd mirror), with a §R 6 case feeding a ModeledUSD into delta_cost_usd ⇒ TypeError, no row written."
+    },
+    {
+     "id": "M5C-S11",
+     "severity": "minor",
+     "section": "§M.5/§M.6 — post-kill late fill on a canceled opening order",
+     "claim": "A latent exposure gap: §M.6 computes the flatten set at trigger time (risk_kill.py:115-117 at_trigger; residual = at_trigger − flattened, risk_kill.py:149), while §M.5 keeps late fills authoritative ('late fills that land anyway remain authoritative broker_fill rows', lines 1162-1164). An opening order best-effort-canceled at kill step 1 that fills late creates/increases a position AFTER at_trigger was snapshotted: it is in neither failed[] nor residual[], the switch is HALTED and never re-arms (FD-M4-19), and no M5 row flags the symbol for the operator runbook — the exposure persists until M6 reconcile. Price-bounded by capped_limit, so bounded harm, but silently outside the kill bookkeeping.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:1155-1177; scripts/agent/risk/risk_kill.py:115-117,148-150 (residual derived only from at_trigger symbols).",
+     "proposed_fix": "Add to §M.5/§M.6: when an order reaches a terminal state with filled_qty > 0 while kill_state != \"monitoring\", journal a dedicated alert row (e.g. order_state_alert note=\"late_fill_post_kill\" or a kill-residual supplement) naming the symbol as an operator retry_residual/manual-flatten item, and assert it in §R 15 (cancel-then-late-fill script)."
+    },
+    {
+     "id": "M5C-S12",
+     "severity": "minor",
+     "section": "§L.2 / FD-M5-8 — S9 empty-artifact-dir premise has no tripwire",
+     "claim": "S9's M5 constant ('M5 ships ... an EMPTY dir (.gitkeep) ⇒ every real strategy rejects', lines 1034-1035; FD-M5-8 line 152) rests on artifacts/backtests/ staying empty, but no §R test asserts the committed dir contains only .gitkeep. verify_artifact defaults artifacts_dir=ARTIFACTS_DIR (line 1015,1024) — a test or tool that writes a *.json into the real dir (rather than the §Q tmp-dir builders) would silently open the strategy_gate for that strategy_id in local runs, with no canary to catch the drift before review.",
+     "evidence": "docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md:1015-1035,152; §R 1-16 contains no committed-dir-emptiness assertion (lines 1421-1535).",
+     "proposed_fix": "Add to §R 12 (config canary family): assert the repo's artifacts/backtests/ contains no entries besides .gitkeep, and require every §Q artifact builder to take a mandatory tmp-dir argument (no default pointing at ARTIFACTS_DIR) so tests structurally cannot write into the committed dir."
+    }
+   ],
+   "overall_verdict": "ready_after_fixes"
+  },
+  "execution-realism": {
+   "findings": [
+    {
+     "id": "EX-1",
+     "severity": "major",
+     "section": "§2.2 stage 10 (line 246) vs §C (lines 507-509) — latency_lost_edge boundary",
+     "claim": "The two frozen latency_lost_edge formulas contradict each other at the boundary: §2.2 pins a raw-price comparison ('buy: ask_B > ask_A × (1 + bps/10000)') while §C pins a quantized-bps comparison ('adverse_move_bps ... quantized BPS_QUANTUM ROUND_HALF_EVEN; latency_lost_edge iff adverse_move_bps > slippage_cap_bps (strict)'). They disagree for adverse moves inside the quantization width, reachable with on-grid prices.",
+     "evidence": "Contract line 246: 'adverse move A→B beyond `slippage_cap_bps` (buy: `ask_B > ask_A × (1 + bps/10000)`) ⇒ `latency_lost_edge`'. Lines 507-509: '`adverse_move_bps`: buy = `(ask_B − ask_A)/ask_A × 10000` quantized `BPS_QUANTUM` ROUND_HALF_EVEN ... `latency_lost_edge` iff `adverse_move_bps > slippage_cap_bps` (strict)'. Verified counterexample (scratch python, pinned ctx prec=28 HALF_EVEN): ask_A=0.7999, ask_B=0.8019 (both on the sub-$1 0.0001 grid, slippage_cap_bps=25): raw form fires (0.8019 > 0.80189975 = True); quantized form does not (raw 25.0031 bps quantizes to 25.00, not > 25). Test §R 2 pins 'latency_lost_edge strict boundary at exactly slippage_cap_bps' without saying which formula is authoritative — the builder must guess.",
+     "proposed_fix": "Pick ONE frozen form. Recommend the §C quantized-bps comparison (it is the journaled CapResult.adverse_move_bps, so the reject reason and the journaled number can never disagree), and rewrite the §2.2 stage-10 parenthetical to '(buy: adverse_move_bps > slippage_cap_bps per §C)'. Add the 0.7999→0.8019 boundary pair to the §Q quote-pair builders and a §R 2/3 case asserting the chosen behavior."
+    },
+    {
+     "id": "EX-2",
+     "severity": "major",
+     "section": "FD-M5-20 (line 164) + §I assess_divergence (lines 855-859) + §P.2 money discipline (lines 1364-1370)",
+     "claim": "`modeled_cost_over_filled_qty` is named but never defined for a partially-filled order: the FD-M5-19 modeled basis is full-qty (fillable at touch + remainder at cap), and the contract gives no rule for restricting it to filled_qty. The two plausible readings (quantized modeled_vwap × filled_qty vs re-integration through the model's price ladder) differ by more than DIVERGENCE_ALERT_BPS on realistic inputs, so the ambiguity can flip both the flag and the alert. divergence_usd is also absent from BOTH §P.2 money lists (journaled-EXACT vs quantize-only), leaving its precision unpinned.",
+     "evidence": "Line 164: 'divergence_usd = broker_cost_usd − modeled_cost_over_filled_qty (plain Decimal ...)' — no restriction formula anywhere; §I line 858 says only 'FD-M5-20 formulas verbatim'. Verified numerically: qty=100, ask_B=10.01, ask_sz=40, cap=10.03 ⇒ full modeled cost 1002.20, vwap quantized MID_QUANTUM = 10.022000; broker fills 70: re-integration gives 40×10.01+30×10.03 = 701.30, vwap×70 = 701.540000 — a 0.24 USD gap ≈ 34 bps of the 70-share notional, > DIVERGENCE_ALERT_BPS=10. §P.2 lines 1364-1370 list divergence_bps under quantize-only but divergence_usd appears in neither list.",
+     "proposed_fix": "Freeze re-integration (exact, no quantization): tob_l1_v1: modeled_cost_over_filled_qty = min(filled_qty, modeled_fillable_qty)×ask_B + max(0, filled_qty − modeled_fillable_qty)×capped_limit; depth_vwap_l2_v2: integrate the FIRST filled_qty shares of the recorded level walk. Explicitly forbid modeled_vwap×filled_qty (modeled_vwap is MID_QUANTUM-quantized provenance). Add divergence_usd to the §P.2 journaled-EXACT list. Add a §R 8 partial-fill divergence case with hand-computed Decimals."
+    },
+    {
+     "id": "EX-3",
+     "severity": "major",
+     "section": "FD-M5-20 (line 164) + §P.2 fill_divergence row (line 1352) — sell-side flag mapping",
+     "claim": "The divergence flag mapping is frozen for BUYS only, but fill_divergence fires 'on every order that reaches filled' — which includes the M.7 strategy-close and M.6 kill-flatten SELL orders. For a sell, broker_cost_usd is sale PROCEEDS, so the natural reuse of the buy rule inverts the semantics: broker proceeds ABOVE the modeled proceeds (paper filling flatteringly — the parent PR-8 condition) yields divergence_usd > 0, which the buy mapping labels broker_conservative. pnl_snapshot.realism_class ('the position's latest flag') then inherits the wrong-signed label on every closed position.",
+     "evidence": "Line 164 defines only: 'buys: broker cheaper than model ⇒ broker_optimistic ..., dearer ⇒ broker_conservative, equal ⇒ aligned' and simultaneously requires the row 'on every order that reaches filled'. §M.7 (lines 1181-1187) and §M.6 (lines 1169-1177) route sells through the same WATCH/terminal path. The §P.2 fill_divergence row (line 1352: 'broker_cost_usd, modeled_cost_usd|null, divergence_usd|null, divergence_bps|null, flag') carries no `side` field, so the sign cannot even be disambiguated downstream.",
+     "proposed_fix": "Freeze the sell mapping and add `side` to the fill_divergence payload: flag = broker_optimistic iff the broker number is more favorable to us than the model (buy: divergence_usd < 0; sell: divergence_usd > 0), broker_conservative for the opposite sign, aligned iff 0, unassessed iff modeled is null. Add a sell-order divergence case to §R 8 (close fill above/below the modeled proceeds)."
+    },
+    {
+     "id": "EX-4",
+     "severity": "major",
+     "section": "§K PaperBook (lines 926, 953-957) + §L.1 ExitInstruction (line 1001) + §R 7 (line 1474) — partial-close cost allocation",
+     "claim": "Partial closes are in-scope (PaperPosition.qty 'shrinks on partial closes'; ExitInstruction.qty '> 0, <= held'; test 7 requires 'rehydrate fold byte-exact incl. partial-close'), but close_position's 'realized_broker_pnl = exit_notional − cost (EXACT)' never defines which cost a PARTIAL exit consumes, nor the surviving position's broker_cost_usd / modeled_cost_usd / fees after the slice. Exact proportional allocation is mathematically impossible without a pinned rounding rule (e.g. broker_cost 100.01 over 3 shares, close 1 ⇒ 33.336666... non-terminating), so the EXACT claim is unsatisfiable as written and S3 byte-exact rehydrate has nothing deterministic to fold.",
+     "evidence": "Line 926: 'qty: Decimal  # open qty (shrinks on partial closes)'. Lines 955-957: 'realized_broker_pnl = exit_notional − cost (EXACT); realized_modeled_pnl = modeled exit − modeled cost − fees_for(sell)'. Line 1001: 'qty: Decimal  # > 0, <= held'. Line 1474: 'rehydrate fold byte-exact incl. partial-close'. Scratch python: Decimal('100.01')×1/3 = 33.33666666666666666666666667 under prec=28 — no exact slice exists. The position_close row (line 1362) journals realized_*_pnl '(EXACT)' but no residual-cost field for the surviving position.",
+     "proposed_fix": "Freeze an allocation rule that keeps the SUM exact: closed_slice_cost = (broker_cost_usd × exit_qty / qty).quantize(CENT, ROUND_HALF_EVEN); residual broker_cost_usd = broker_cost_usd − closed_slice_cost (exact by construction; the rounding residue stays on the open slice and washes out at full close). Apply the identical rule to modeled_cost_usd. Journal closed_slice_cost AND the residual cost on position_close so rehydrate folds bytes, and extend §R 7's partial-close case with a non-terminating-division fixture (3-share position, 1-share close)."
+    },
+    {
+     "id": "EX-5",
+     "severity": "major",
+     "section": "§N ReplayClock/ReplayQuoteFeed (lines 1192-1205) + §Q observe fixture (line 1409) + §R 16 — SAFETY-F2 mixed ISO forms",
+     "claim": "ReplayClock ('now_ms = ms offset of the LAST DELIVERED event's ts_recv_utc from stream start') and the QuoteSnapshot field map ('seen_at_ms = ReplayClock offset of ts_recv_utc') introduce a NEW timestamp-parse surface over recorder rows, but the contract never binds it to the M3 SAFETY-F2 parse-then-compare chokepoint, and neither the §Q generated fixture nor any §R 16 case requires whole-second ts_recv_utc forms. The repo provably mixes whole-second and .%f forms (the M3 rev2 finding; M3-02 was a real shipped bug of exactly this class), so a builder using strptime('%Y-%m-%dT%H:%M:%S.%fZ') passes every listed test and breaks on real M1 recordings — the very files observe mode is 'runnable TODAY' on; all downstream staleness/latency/requote ms arithmetic keys off these offsets.",
+     "evidence": "Contract lines 1192-1205 give the ms-offset semantics with no parse rule. M3 contract 2026-06-09-M3-signal-calibration-contract.md line 31: 'Timestamp comparison discipline (S3-load-bearing; critic SAFETY-F2): the repo provably mixes two [forms]... seconds at whole seconds'; line 826 requires 'At least two rows carry a ts_recv_utc WITHOUT fractional seconds... to pin the §0 mixed-form discipline'; line 1004 records M3-02 (major) as a shipped whole-second-form bug. The shared chokepoint exists at scripts/agent/bar_series.py:65-78 (_parse_utc, 'SAFETY-F2 parse-then-compare chokepoint') and replay_feed.py already imports agent.bar_series (§3 line 324), but §N/§Q/§R 16 never reference it or the mixed-form case.",
+     "proposed_fix": "Add a frozen sentence to §N: ReplayClock and the events.jsonl→QuoteSnapshot field map parse ALL timestamps via bar_series._parse_utc (no local strptime/fromisoformat). Require the §Q observe_session_tbbo.jsonl builder to emit ≥2 whole-second ts_recv_utc rows (the M3 §K precedent verbatim), and add a §R 16 case: mixed-form stream ⇒ identical now_ms/seen_at_ms offsets as the all-.%f equivalent."
+    },
+    {
+     "id": "EX-6",
+     "severity": "major",
+     "section": "FD-M5-18 (line 162) + §F fill_delta (lines 692-693) + §M.4 WATCH — the `prev` tracking rule",
+     "claim": "Σ delta_cost = final filled_qty×filled_avg_price holds ONLY by telescoping against the prev snapshot of the last EMITTED delta, but the contract never pins which prev the watcher holds. 'None when filled_qty unchanged' means an avg-only correction between polls (broker re-report/rounding correction at unchanged filled_qty) produces no row; if the orchestrator then advances prev to the current poll (the equally natural implementation), that cost change is silently dropped and Σ journaled delta_cost — the position's broker_cost_usd — permanently drifts from the broker's qty×avg, violating the 'Position broker_cost_usd = Σ delta_cost exact' pin and the order_terminal cum_notional_usd EXACT claim.",
+     "evidence": "Line 162: 'delta_cost = cur.filled_qty×cur.filled_avg_price − prev.filled_qty×prev.filled_avg_price (exact Decimal ...). Position broker_cost_usd = Σ delta_cost exact'. Line 693: '# None when filled_qty unchanged; FD-M5-18 formula; regression / avg-without-fill ⇒ OrderInvalid.' — silent on avg-changed-qty-unchanged and on prev semantics. §M.4 lines 1143-1146 (WATCH) say only 'parse -> state transitions -> ... fill_delta -> broker_fill rows'. Verified by construction: telescoping is exact iff prev = last-emitted snapshot; with prev = last-poll, an absorbed avg-only step of qty×(avg_cur − avg_prev) never reaches the journal.",
+     "proposed_fix": "Freeze: prev = the BrokerOrder snapshot of the last EMITTED FillDelta (None before the first); an avg-only change at unchanged filled_qty emits nothing and does NOT advance prev. Additionally pin a terminal consistency check: at order_terminal, assert Σ emitted delta_cost_usd == final filled_qty×filled_avg_price; mismatch ⇒ order_state_alert + OrderInvalid handling (fail-closed, no silent drift). Add a §R 5 case: poll sequence with an avg-only correction between two qty increases ⇒ Σ deltas still equals final qty×avg."
+    },
+    {
+     "id": "EX-7",
+     "severity": "minor",
+     "section": "§C reduce_cap (lines 490-493) vs §C SELL cap (lines 504-505) — opposite rounding directions, rationale unstated",
+     "claim": "reduce_cap rounds AWAY from the touch (sell ROUND_DOWN, buy-to-cover ROUND_UP — up to one tick PAST the bps budget, i.e. more permissive), while marketable_limit_cap's SELL branch rounds ROUND_UP 'toward the budget, never past it'. Each direction is individually defensible (reduce path favors fill-certainty per FD-M4-3; open path respects the budget), but the contract freezes both without stating the asymmetry's rationale, inviting a builder or a later harden pass to 'harmonize' the reduce path the wrong way (tightening a flatten cap is the dangerous direction).",
+     "evidence": "Lines 490-493: 'sell -> bid×(1−bps/1e4) quantized ROUND_DOWN to grid; buy-to-cover -> ask×(1+bps/1e4) quantized ROUND_UP'. Lines 504-505: 'SELL ...: raw = bid_B × (1 − slippage_cap_bps/10000); cap = raw.quantize(tick_for(raw), ROUND_UP)'. Verified example: bid=1.02, bps=25 ⇒ raw=1.017450 ⇒ reduce_cap 1.01 (one tick below the budget floor) vs marketable_limit_cap 1.02. No test in §R 2 pins reduce_cap's direction (only 'reduce_cap returns None on missing/nonpositive side').",
+     "proposed_fix": "Add one frozen sentence: reduce-path caps round AWAY from the touch so quantization can never under-price (and thus never impede) a reduce — the deliberate inverse of the open-cap budget-respect rule; add a §R 2/15 case pinning reduce_cap sell ROUND_DOWN (bid=1.02, bps=25 ⇒ 1.01)."
+    },
+    {
+     "id": "EX-8",
+     "severity": "minor",
+     "section": "§I ModeledFill.slippage_vs_mid_bps (line 845)",
+     "claim": "The field's formula and sign convention are never given — only 'vs quote_b QuoteVerdict.mid, BPS_QUANTUM'. The builder must guess the numerator basis (modeled_vwap vs worst_price), the sign for sells, and the rounding. It is quantize-only provenance, so no ledger invariant is at risk, but golden-file byte-exactness (§Q golden/) makes any guess load-bearing for tests.",
+     "evidence": "Line 845: 'slippage_vs_mid_bps: Optional[Decimal]  # vs quote_b QuoteVerdict.mid, BPS_QUANTUM' — the only specification anywhere; §P.2 line 1369 lists it as quantize-only without a formula either.",
+     "proposed_fix": "Pin: slippage_vs_mid_bps = (modeled_vwap − mid)/mid × 10000 for buys and (mid − modeled_vwap)/mid × 10000 for sells (adverse positive, matching the adverse_move_bps sign convention), quantized BPS_QUANTUM under the pinned context; None iff modeled_vwap or mid is None."
+    },
+    {
+     "id": "EX-9",
+     "severity": "minor",
+     "section": "§K close_position (line 956) + §J fees_for (lines 903-911) — fee notional basis on close",
+     "claim": "fees_for takes a caller-supplied `notional`, but the close path never pins which notional the sell-side fee uses: the modeled exit proceeds or the broker exit notional. The SEC component differs at the cents level between the two, and since the fee enters ONLY execution_realistic_pnl, mixing in the broker notional would also be a soft S5 lineage leak.",
+     "evidence": "Line 956: 'realized_modeled_pnl = modeled exit − modeled cost − fees_for(sell) — or None'. §J line 903: 'def fees_for(*, side, qty, notional)' with no statement of the close-path argument. The position_close row (line 1362) journals fees_assessed without naming the basis.",
+     "proposed_fix": "Pin: on close, fees_for(side=\"sell\", qty=exit_qty, notional=the MODELED exit proceeds over exit_qty) — the realistic-side label stays entirely on the modeled lineage; when the modeled exit is None the realistic side is unassessed and no fee is computed. State it in §K and in the fees_assessed field doc."
+    },
+    {
+     "id": "EX-10",
+     "severity": "minor",
+     "section": "§F fill_delta / parse_order_payload (lines 679-693) — incomplete value guards",
+     "claim": "The OrderInvalid trigger set covers filled_qty regression and avg-without-fill, but not nonpositive filled_avg_price, nor a nonpositive delta_cost with delta_qty > 0 (reachable when broker avg-price rounding error exceeds a tiny delta's true cost at large prev_qty). An unguarded negative-cost buy fill would journal a negative delta_cost_usd broker_fill and feed PaperBook/MarginObservation with a negative notional.",
+     "evidence": "Line 684: 'money via Decimal(str(v)); float instance / bool in a money slot / non-finite / negative qty ⇒ OrderInvalid' — price positivity unchecked. Line 162 pins only 'filled_qty regression or filled_avg_price present with filled_qty == 0 ⇒ OrderInvalid'. delta_cost = cur.q×cur.avg − prev.q×prev.avg can be ≤ 0 with delta_qty > 0 whenever the reported avg drops enough (broker rounding/correction), and no clause handles it.",
+     "proposed_fix": "Add to the §F OrderInvalid triggers: filled_avg_price <= 0, and delta_qty > 0 with delta_cost <= 0 (reason 'nonpositive_delta_cost') ⇒ alert, fail-closed, no fill row — same posture as the regression case. One §R 5 matrix row each."
+    },
+    {
+     "id": "EX-11",
+     "severity": "minor",
+     "section": "§I (line 840) vs §P.2 pnl_snapshot (line 1361) + FD-M5-20 (line 164) — realism_class name collision and initial value",
+     "claim": "Two different frozen vocabularies share the field name realism_class: ModeledFill.realism_class ∈ REALISM_CLASSES (modeled fillability) and pnl_snapshot.realism_class ∈ DIVERGENCE_FLAGS (broker-vs-model divergence). Additionally, pnl_snapshot.realism_class = 'the position's latest flag' is undefined between the first fill (which opens the position and starts per-bar marks/snapshots) and the order-TERMINAL fill_divergence row that first produces a flag.",
+     "evidence": "Line 840: 'realism_class: str  # ∈ REALISM_CLASSES (FD-M5-19)'; line 1361: 'pnl_snapshot ... realism_class ∈ DIVERGENCE_FLAGS'; line 164: 'pnl_snapshot.realism_class = the position's latest flag'; §M.4 lines 1148-1151 place fill_divergence at TERMINAL while position_open happens at the first fill and marks run per completed bar (§M.3 step 9) — a partially-filled order spanning bars yields pnl_snapshot rows before any flag exists.",
+     "proposed_fix": "Rename the pnl_snapshot field divergence_flag (or fillability_class vs divergence_flag pair) and pin the pre-terminal default = \"unassessed\". One-line change in §P.2 + FD-M5-20; keeps require_member from ever validating against the wrong vocabulary."
+    },
+    {
+     "id": "EX-12",
+     "severity": "minor",
+     "section": "§B RISK_VERDICT_TTL_MS (line 408) × §M.4 timing × §Q fixtures — recorded-time TTL interplay unpinned for the E2E fixtures",
+     "claim": "The open pipeline computes the risk verdict at t0 and preflights at t1 with now_ms − risk_verdict_now_ms > 2000 ⇒ risk_verdict_stale. Under ReplayClock, t1 jumps to the NEXT recorded event at/after t0+250, so any replay fixture whose quote cadence exceeds ~2 s of recorded time around a scripted open makes EVERY open reject risk_verdict_stale (and the synthetic E2E can never submit). The fixture specs (§Q) never pin the required sub-2 s event density window (a quote must land in recorded (t0+250, t0+2000]); a builder discovers this only by debugging a dead E2E.",
+     "evidence": "Line 408: 'RISK_VERDICT_TTL_MS = 2000'; §M.4 line 1120 passes now_ms=t0 to can_open and line 1131 mints with now_ms=t1; §2.2 stage 11 (line 247): 'now_ms − risk_verdict_now_ms > RISK_VERDICT_TTL_MS (strict) ⇒ risk_verdict_stale'; §N line 1193 pins now_ms to recorded ts_recv_utc offsets; §Q line 1409 specifies the generated fixture only as '≥ 60 one-minute buckets' with no intra-bucket quote density requirement.",
+     "proposed_fix": "Add one sentence to §Q: every fixture that must drive a successful open (synthetic E2E, FakeBroker lifecycle) guarantees ≥1 quote event in recorded-time (t0+effective_latency_budget_ms, t0+RISK_VERDICT_TTL_MS] after each scripted decision bar (e.g. 1 s cadence around scripted opens), and note the constraint beside RISK_VERDICT_TTL_MS in §B."
+    }
+   ],
+   "overall_verdict": "ready_after_fixes"
+  }
+ }
+}
