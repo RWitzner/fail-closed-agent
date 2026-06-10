@@ -95,17 +95,37 @@ class FakeClock:
 
 
 class SpyBroker:
-    """Records every `submit_order` attempt at entry (for the S1 canary)."""
+    """Records every `submit_order` attempt at entry (for the S1 canary).
+
+    M5 growth (contract §3 table, §E Broker Protocol): `kind="spy"` plus
+    `cancel_order`/`order_status` recorders mirroring the entry-recording
+    semantics — record the client_order_id at entry, then return a raw (empty)
+    payload dict. `self.calls` keeps its M0 meaning: SUBMIT attempts only
+    (the S1 canary asserts `calls == []` for zero submits of any kind);
+    cancel/status queries land in their own lists.
+    """
+
+    kind = "spy"  # ∈ exec_reasons.BROKER_KINDS
 
     def __init__(self):
-        self.calls = []  # every attempt, before token validation
+        self.calls = []  # every submit attempt, before token validation
         self.submitted = []  # accepted submissions
+        self.cancel_calls = []  # every cancel_order(client_order_id), at entry
+        self.status_calls = []  # every order_status(client_order_id), at entry
 
     def submit_order(self, intent, token):
         self.calls.append(intent)
         require_token(intent, token)
         self.submitted.append(intent)
         return {"order_id": getattr(intent, "intent_id", ""), "status": "accepted_spy"}
+
+    def cancel_order(self, order_id):
+        self.cancel_calls.append(order_id)
+        return {}
+
+    def order_status(self, order_id):
+        self.status_calls.append(order_id)
+        return {}
 
     def positions(self):
         return {}
