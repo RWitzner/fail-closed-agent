@@ -83,7 +83,9 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   EC-1 (dead §J/EX-9 sell-fee path → close now feeds a sell-side modeled fill; goldens
   regenerated), SF-2 (FlattenUnpriced token leak → injected void_token), CC-1 (live-path
   `secret`→`secret_key`), DJ (fill_delta pinned-context hardening). M5 DONE.**
-  Next: M6 (SOD/EOD reconcile) — or merge-to-main decision (nothing merged yet; branches stack
+  **Plan confirmed (2026-06-10): finish the remaining milestones M6→M7, then a full autonomous paper
+  edge-validation phase before any M8 step** (see "Edge before live" under Locked decisions). Next build
+  step: M6 (SOD/EOD reconcile). Merge-to-main decision still open (nothing merged yet; branches stack
   m2-market-state→m3-signal).
 
 ## Locked decisions
@@ -97,6 +99,12 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 - **Universe:** curated single-name US large-cap (~20–50), bounded.
 - **First strategy:** observe-only calibration probe → historical anti-lookahead backtest gate → directional.
 - **Live posture:** live-capable from day one, live-money gate OFF behind two-key arming + M8 checklist.
+- **Edge before live (locked 2026-06-10):** after M7, run a **full autonomous paper phase**; M8 is considered
+  only if that phase shows realized edge against success criteria **pinned in advance** (to be fixed in the M7
+  contract — e.g. positive modeled PnL after realistic costs over a minimum number of trading days, a
+  realism-gap ceiling between broker fills and the Databento-depth label, a drawdown bound). The paper phase is
+  the evidence gate — no go-live on vibes. Spine construction ends with M6/M7: full contract/review depth stays
+  mandatory on anything touching orders or money; no further infrastructure extensions beyond the roadmap.
 
 ## Roadmap (each milestone: its own spec → plan → review → verify; see spec §10)
 
@@ -118,7 +126,10 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   ✓ **done on `m3-signal`** (`ad14cf6`, 1520 tests) — contract rev 2 (48+5 findings) → 6 TDD waves →
   5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF; nothing merged to main.
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation). ← next
-- **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy.
+- **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. The M7 contract must pin
+  the paper-phase success criteria (see "Edge before live" locked decision).
+- **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned
+  criteria — this run produces the "realized edge" evidence M8 requires.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).
 
 ## Open tracks / risks
