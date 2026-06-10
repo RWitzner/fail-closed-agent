@@ -54,8 +54,23 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   review (22 agents, repro-gated: 17 confirmed findings = 9 unique defects, incl. 1 blocker
   climatology double-ingest) → all fixed TDD. S1 holds: the probe opens nothing, imports no order-capable
   module (AST + subprocess guards), and journals `paper_eligible=false` on every row.
-- **Next step: M4 (risk core)** — 3-architect design panel complete; contract synthesis → critic pass →
-  TDD build. `IntradayMarginModel` (FINRA 26-10) + `can_open()` chokepoint + drawdown kill switch.
+- **M4 risk core DONE on branch `m3-signal` (896 tests green):** contract synthesized from a 3-architect
+  panel around 8 locked decisions → 4-lens critic pass (50 findings, 2 blockers — all applied, READY-TO-BUILD
+  rev 2) → TDD build (`scripts/agent/risk/`: 34-reason vocabulary, 13-rung two-phase `can_open` ladder,
+  `IntradayMarginModel` per FINRA 26-10 incl. bd5/bd15 windows + max-merged per-date deficits + minor latch +
+  90-day freeze, mirror-only `LegacyPdtCompatMode`, exposure caps with poisoned aggregates, loss limits,
+  `RiskKillSwitch` delegating flatten to the M0 actuator, `journal/risk.jsonl` ledger + byte-exact rehydrate)
+  → 4-lens adversarial review (13 agents, repro-gated: 8 confirmed defects — 2 majors in the freeze
+  mechanics — all fixed TDD; see the contract's §R harden log). Committed `risk_rules.json` caps stay 0;
+  every `can_open` on the committed config terminates at `run_gates` (S1 extended).
+- **M5 paper-exec: DESIGN ARTIFACTS READY, build NOT started (stopped here on Robin's instruction).**
+  3-architect panel done (incl. Alpaca API facts verified against docs.alpaca.markets) → contract draft
+  `docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md` (1616 lines, DRAFT FOR CRITIC PASS) →
+  critic pass PARTIAL: repo-facts lens complete (6 findings incl. 1 blocker: the FakeBroker synthetic wall
+  must exempt reducing intents), safety + execution-realism lenses complete (findings in the session's
+  workflow outputs), buildability lens MISSING (died on session limit). **Resume point:** re-run the
+  buildability critic, apply all findings (the saved findings JSONs land in the next session's context via
+  the M5 contract + this note), revise → READY-TO-BUILD → TDD build per the M3/M4 discipline.
 
 ## Locked decisions
 
@@ -82,8 +97,11 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   fail-closed CA validation; no module-scope `exchange_calendars`; gates OFF.
 - **M3** Signal + observe-only calibration probe. ✓ **done on `m3-signal`** — 700 tests; observe-only
   (`paper_eligible=false` ledger-enforced); S1/S2/S3/S4/S6 test-mapped; calibration report + golden.
-- **M4** Risk core (`IntradayMarginModel` + locate/SSR + exposure caps + drawdown kill switch). ← next
+- **M4** Risk core (`IntradayMarginModel` + locate/SSR + exposure caps + drawdown kill switch).
+  ✓ **done on `m3-signal`** — 896 tests; long-only (locate = deny-all stub per spec §14); broker buying
+  power = ground truth; committed caps 0; S1/S8/S10 + R9 byte-exact rehydrate test-mapped.
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).
+  ← next (contract DRAFT + partial critique ready — see "Current status" above for the exact resume point)
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation).
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).

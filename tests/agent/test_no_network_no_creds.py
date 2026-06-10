@@ -4,6 +4,7 @@ The agent modules import no broker/data SDK, the M0 flows open no socket, and th
 suite is green with `.secrets/` absent.
 """
 import ast
+import os
 import socket
 import sys
 import types
@@ -207,6 +208,145 @@ class TestM3OfflinePurity(unittest.TestCase):
         self.assertEqual(len(decisions), 2)
         self.assertGreaterEqual(stats.scored, 1)
         self.assertEqual(report["funnel"]["forecasts"], 2)
+
+
+class TestM4RiskOfflinePurityAndImportGuard(unittest.TestCase):
+    """M4 §M test 11 (S1, R11): socket-blocked import of every risk/ module, no
+    heavy SDK in sys.modules, the FD-M4-24 AST import/token guard with the SOLE
+    risk_kill.py exemption (agent.kill_switch only), and a subprocess-isolated
+    fresh-import check proving no order-capable module lands in sys.modules."""
+
+    _RISK_MODULES = (
+        "reasons", "account_state", "risk_config", "exposure", "risk_ledger",
+        "loss_limits", "intraday_margin", "pdt_compat", "locate", "risk_kill",
+        "can_open",
+    )
+    _FORBIDDEN_MODULE_PREFIXES = (
+        "agent.broker", "agent.execution_preflight", "agent.kill_switch",
+        "agent.arming",
+    )
+    _FORBIDDEN_TOKENS = frozenset({
+        "submit_order", "mint_open_token", "mint_reduce_only_token", "OrderIntent",
+        "OpenPreflightToken", "ReduceOnlyPreflightToken", "PreflightToken",
+        "require_token", "consume", "importlib", "__import__",
+    })
+
+    def _risk_dir(self):
+        return Path(__file__).resolve().parents[2] / "scripts" / "agent" / "risk"
+
+    def _module_forbidden(self, module_name: str, source_file: str) -> bool:
+        if module_name is None:
+            return False
+        # SOLE exemption (FD-M4-24): risk_kill.py may import agent.kill_switch.
+        if source_file == "risk_kill.py" and module_name == "agent.kill_switch":
+            return False
+        return any(module_name == prefix or module_name.startswith(prefix + ".")
+                   for prefix in self._FORBIDDEN_MODULE_PREFIXES)
+
+    def test_risk_modules_import_under_socket_block_with_no_heavy_sdk(self):
+        import importlib as _importlib
+
+        with mock.patch("socket.socket",
+                        side_effect=AssertionError("M4 must not open sockets")):
+            for name in self._RISK_MODULES:
+                _importlib.import_module(f"agent.risk.{name}")
+        for banned in ("alpaca", "databento", "exchange_calendars",
+                       "pandas", "numpy"):
+            self.assertNotIn(banned, sys.modules)
+
+    def test_fd_m4_24_ast_import_and_token_guard(self):
+        source_files = sorted(self._risk_dir().glob("*.py"))
+        self.assertEqual(
+            sorted(p.name for p in source_files),
+            sorted(["__init__.py"] + [f"{m}.py" for m in self._RISK_MODULES]))
+        for source_path in source_files:
+            source_file = source_path.name
+            violations = []
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if self._module_forbidden(alias.name, source_file):
+                            violations.append(f"import {alias.name}")
+                        if alias.name == "importlib" or alias.name.startswith(
+                                "importlib."):
+                            violations.append(f"import {alias.name}")
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if self._module_forbidden(module, source_file):
+                        violations.append(f"from {module} import ...")
+                    if module == "importlib" or module.startswith("importlib."):
+                        violations.append(f"from {module} import ...")
+                    if module == "agent":
+                        for alias in node.names:
+                            if self._module_forbidden(f"agent.{alias.name}",
+                                                      source_file):
+                                violations.append(f"from agent import {alias.name}")
+                    for alias in node.names:
+                        if alias.name in self._FORBIDDEN_TOKENS:
+                            violations.append(f"imported token {alias.name}")
+                        if alias.asname and alias.asname in self._FORBIDDEN_TOKENS:
+                            violations.append(f"alias token {alias.asname}")
+                elif isinstance(node, ast.Name):
+                    if node.id in self._FORBIDDEN_TOKENS:
+                        violations.append(f"name {node.id}")
+                elif isinstance(node, ast.Attribute):
+                    if node.attr in self._FORBIDDEN_TOKENS:
+                        violations.append(f"attribute .{node.attr}")
+            self.assertEqual(violations, [],
+                             f"{source_file}: FD-M4-24 violations: {violations}")
+
+    def test_risk_kill_imports_only_killswitch_from_the_actuator(self):
+        # The exemption is NARROW: agent.kill_switch, and only the KillSwitch name.
+        source_path = self._risk_dir() / "risk_kill.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        actuator_imports = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "agent.kill_switch":
+                actuator_imports.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "agent.kill_switch":
+                        actuator_imports.append(alias.name)
+        self.assertEqual(actuator_imports, ["KillSwitch"])
+
+    def test_subprocess_isolated_fresh_import_pulls_no_order_capable_module(self):
+        import subprocess
+
+        modules = [m for m in self._RISK_MODULES if m != "risk_kill"]
+        code = (
+            "import sys\n"
+            + "".join(f"import agent.risk.{m}\n" for m in modules)
+            + "banned = [k for k in sys.modules\n"
+            "          if k in ('agent.execution_preflight', 'agent.arming',\n"
+            "                   'agent.kill_switch')\n"
+            "          or k == 'agent.broker' or k.startswith('agent.broker.')]\n"
+            "assert not banned, f'order-capable modules imported: {banned}'\n"
+        )
+        scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
+        env = dict(os.environ)
+        env["PYTHONPATH"] = scripts_dir
+        argv = [sys.executable, "-c", code]   # fixed command array, no shell
+        completed = subprocess.run(argv, env=env, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0,
+                         f"stdout={completed.stdout!r} stderr={completed.stderr!r}")
+
+    def test_risk_kill_subprocess_pulls_actuator_but_never_arming(self):
+        import subprocess
+
+        code = (
+            "import sys\n"
+            "import agent.risk.risk_kill\n"
+            "assert 'agent.kill_switch' in sys.modules\n"  # the sanctioned delegation
+            "assert 'agent.arming' not in sys.modules\n"
+        )
+        scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
+        env = dict(os.environ)
+        env["PYTHONPATH"] = scripts_dir
+        argv = [sys.executable, "-c", code]
+        completed = subprocess.run(argv, env=env, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0,
+                         f"stdout={completed.stdout!r} stderr={completed.stderr!r}")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,14 @@
   "caps": {
     "max_position_usd": 0,
     "max_gross_exposure_usd": 0,
-    "max_daily_loss_usd": 0
+    "max_net_exposure_usd": 0,
+    "max_daily_loss_usd": 0,
+    "max_drawdown_usd": 0,
+    "max_sector_exposure_usd": 0,
+    "max_abs_beta_notional_usd": 0
+  },
+  "risk": {
+    "short_selling": { "enabled": false },
+    "universe": {}
   }
 }

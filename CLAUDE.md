@@ -10,7 +10,7 @@ live`, fail-closed, "nothing opens by default") but is otherwise live-like, so t
 interfaces and code path — *not* a rebuild, though live is still a separately-validated step. Authoritative
 design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`. Build is staged M0→M8; see `PLAN.md`.
 
-**State:** M3 (signal + observe-only calibration probe) built + hardened + green (700 tests, gates OFF; branch `m3-signal`, stacked on `m2-market-state`). M0/M1/M2 are done; M1 tier-2 (2b live-verified) remains deferred — blocked on unprovisioned paid live realtime subscription. M4 (risk core) is next — see `PLAN.md`.
+**State:** M4 (risk core) built + hardened + green (896 tests, gates OFF, committed caps 0; branch `m3-signal`, stacked on `m2-market-state`; nothing merged to `main`). M0–M3 are done; M1 tier-2 (2b live-verified) remains deferred — blocked on unprovisioned paid live realtime subscription. M5 (paper-exec hybrid) is next: its contract DRAFT + partial critic findings are ready — see `PLAN.md` "Current status" for the exact resume point.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -31,7 +31,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 
 ## Commands
 
-M3 has landed. The **offline acceptance suite** (700 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+M4 has landed. The **offline acceptance suite** (896 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)
