@@ -1,0 +1,70 @@
+{
+  "artifact": "M5 paper-exec — post-build adversarial CODE review (5 repro-gated read-only lenses)",
+  "target": "the M5 build at HEAD f15c3ec (1513 tests); fixes committed at ad14cf6 (1520 tests)",
+  "date": "2026-06-10",
+  "method": "5 independent read-only lenses (safety, execution-correctness, determinism/journal, contract-conformance, lifecycle/edge). Every finding repro-gated: a ran python snippet or an exact step sequence with file:line. Determinism + execution-math lenses returned ZERO defects. All 6 defects below fixed TEST-FIRST.",
+  "outcome": "6 defects fixed (1 high, 1 major, 4 minor/low/hardening). Verdict after fixes: M5 DONE.",
+  "findings": [
+    {
+      "id": "LC-2",
+      "lens": "lifecycle",
+      "severity": "high",
+      "title": "Kill trip while a strategy CLOSE order is in flight: loop crash + double-sell risk",
+      "claim": "When RiskKillSwitch trips with a non-terminal close OrderTask: _kill_sequence cancels the task but never clears self._task, and _book_flatten_closes closes the very position the close targets; the close task's next terminal poll calls PaperBook.close_position on an already-closed position -> ExecError propagates to on_tick step 6 and crashes the loop. Deeper: the kill submits flatten-<symbol> while the strategy close (o-/synthetic-o-) sell is also live -> a genuine concurrent broker double-sell / 'may flatten, never flip' violation.",
+      "evidence": "orchestrator.py _kill_sequence (~1003-1047), _book_flatten_closes (~1049-1087), _terminal (~1538-1543); paper_book.py:350-353 (the raise). Repro: synthetic ExecPipeline, open 10 AAPL, install a close _OrderTask in 'watch' for that position_id, trigger_kill('drill') -> position closed but close task survives -> feed it a terminal filled BrokerOrder -> ExecError: position pos-... is closed (terminal).",
+      "fix": "Kill sequence retires a non-terminal CLOSE task (the cancel makes the kill the single flatten of record; never two concurrent sells on one position; an OPEN task is kept for the M5C-S11 late-fill tripwire). _terminal's close path guards with a position-still-open check -> a superseded close logs order_state_alert{note:'close_superseded_position_closed'} instead of crashing. Pinned in test_kill_flatten_driver.py: kill with a CLOSE in flight -> position ends flat, loop survives, no double-sell."
+    },
+    {
+      "id": "LC-1/SF-1",
+      "lens": "lifecycle + safety",
+      "severity": "major",
+      "title": "Over-qty ExitInstruction crashed the tick loop permanently",
+      "claim": "_start_close calls mint_reduce_only_token(position, intent) UNGUARDED; an ExitInstruction with qty > held raises PreflightRejected ('reduce-only qty must be >0 and <= held size') that escapes _start_close -> _exits -> on_tick and crashes the loop; a re-emitting ExitProvider re-crashes every subsequent tick (loop permanently wedged).",
+      "evidence": "orchestrator.py:~1757 (the unguarded mint). Repro: paper ExecPipeline, RealStrategyStub opens 10, ReEmittingExitProvider qty=20 -> 'CRASH in on_tick: PreflightRejected'; every later tick re-crashes. The mint correctly REFUSES the oversized sell (fail-closed direction intact), but the crash stalls all subsequent reductions.",
+      "fix": "Wrapped the mint in try/except PreflightRejected; on raise journal order_state_alert{raw_status:'reduce_only_mint_rejected', note:'reduce_qty_exceeds_held'} and return (self._task still None). Loop survives, no submit, position intact. Chose order_state_alert (free-form note, §P.2) over a fabricated reject reason — EXTRA_REJECT_REASONS has no member apt for qty>held and exec_reasons stays unedited."
+    },
+    {
+      "id": "EC-1",
+      "lens": "execution / conformance",
+      "severity": "low (frozen path dead)",
+      "title": "Close path never fed a modeled fill -> §J/EX-9 sell fees + close fill_divergence were dead in integrated runs",
+      "claim": "_terminal and _book_flatten_closes called close_position(modeled=None); _start_close never computed a sell-side model_fill. So FeeModel sell path + close_position EX-9 fee math + close fill_divergence flag were reachable only by unit tests; every integrated/E2E close had zero sell fees and a hardcoded unassessed flag.",
+      "evidence": "orchestrator.py:1539-1543, 1084-1087 (modeled=None), 1551 (model_fill/assess on the open only). paper_book.close_position EX-9 fee path is correct + unit-tested in isolation (test_paper_book.py:479-481, 584-587) but never exercised end-to-end.",
+      "fix": "Close path computes a sell-side ModeledFill from the SAME quote_b/cap the close priced (no hindsight), binds the id, journals modeled_execution_fill, carries it on the close _OrderTask.modeled, passes it to close_position -> realized_modeled_pnl reflects the EX-9 sell fee (notional = modeled exit proceeds) and fill_divergence gets a real side-aware flag (EX-3). Kill-flatten keeps modeled=None (forced liquidation per §M.6/FD-M5-1, not a realism-scored decision). Synthetic goldens regenerated (fills.jsonl 5610->6753 B, positions.jsonl 7279->7285 B; orders unchanged; observe untouched; byte-stable double-run)."
+    },
+    {
+      "id": "SF-2",
+      "lens": "safety",
+      "severity": "minor",
+      "title": "FlattenUnpriced leaked the minted reduce-only token (registry hygiene)",
+      "claim": "PriceCappedFlattenBroker.submit_order raises FlattenUnpriced (unmapped symbol / no quote / unpriceable cap) WITHOUT voiding the already-minted reduce-only authorization; the M0 kill loop catches the exception and discards the token object, leaving the _authorizations entry resident for the process lifetime -> a slow leak across retry_residual passes. Harmless (reduce-only kind, unreachable after GC) but a leak.",
+      "evidence": "flatten_proxy.py:57-66 (raises before inner.submit_order consumes the token); kill_switch.py:41 already issued the authorization. The proxy may NOT import agent.execution_preflight (§3 import row).",
+      "fix": "Dependency injection: PriceCappedFlattenBroker ctor takes an optional void_token callable (default None -> no-op, existing construction/tests unaffected); before each raise FlattenUnpriced it calls self._void_token(token, 'no_price_for_cap') when provided. The orchestrator (which legitimately imports execution_preflight) passes execution_preflight.void_token when it builds the proxy in §M.6. 'no_price_for_cap' is a legal void reason (EXTRA_REJECT_REASONS). §3 import discipline respected (no execution_preflight import added to the proxy)."
+    },
+    {
+      "id": "CC-1",
+      "lens": "conformance",
+      "severity": "minor",
+      "title": "Live-path credential key mismatch: read creds['secret'] but the frozen key is 'secret_key'",
+      "claim": "_build_real_client does TradingClient(secret_key=creds['secret'], ...) but the §O.2 / secrets_runtime frozen credential key set is exactly {key_id, secret_key, base_url}; load_alpaca_paper_credentials returns 'secret_key' and rejects extra keys, so creds['secret'] raises KeyError. Not exercised by the offline suite (the AST guard proves _build_real_client is the sole import-alpaca site, never reached offline), so 1513 tests stayed green; the credentialed path is M5-2a (deferred/unprovisioned).",
+      "evidence": "alpaca.py:196 (creds['secret']) vs secrets_runtime.py:53,134 (returns {key_id, secret_key, base_url}). key_id and base_url match; only secret_key->secret diverges.",
+      "fix": "alpaca.py:196 -> creds['secret_key']. Added a test_alpaca_adapter.py test that stubs the alpaca SDK (fake sys.modules, cleaned up so the purity test stays honest), feeds the frozen {key_id, secret_key, base_url} shape, and asserts the broker constructs without KeyError and secret_key flows through."
+    },
+    {
+      "id": "DJ",
+      "lens": "determinism (hardening)",
+      "severity": "hardening",
+      "title": "fill_delta computed delta_cost under the ambient Decimal context (M4-DET-1 precedent not followed)",
+      "claim": "order_state.fill_delta computed the integrated-notional product under the ambient context while exec_ledger pins prec=28 for cum_notional_after. For all realistic equity qty x price they coincide and nothing in scripts/agent mutates the global context, so the telescoping invariant Sum delta_cost == final qty x avg holds and NO divergence is reproducible. Only a separate global-context corruption could surface it -> not a determinism defect, but it didn't follow the M4-DET-1 ambient-immunity precedent the contract cites.",
+      "evidence": "order_state.py fill_delta (delta_cost product under ambient context) vs exec_ledger.py:761-767 (pinned Context(prec=28)).",
+      "fix": "Wrapped the prev_cost/delta_cost products in localcontext(Context(prec=28, ROUND_HALF_EVEN)). Test: under a hostile ambient prec=3 context the product 70x100.18 stays exact at 4009.60 (would otherwise round to 7.01E+3)."
+    }
+  ],
+  "clean_lenses_evidence": {
+    "determinism": "ZERO defects. Repro-confirmed: all 6 id families hash the exact §P.3 key sets; fill_id uses cur.filled_qty x cur.filled_avg_price (exact product, NOT Sum delta_cost) and is replay-recoverable; M5C-S5 close-retry distinct-ids works; synthetic + observe goldens byte-stable across two regenerations and match committed bytes (no clock/host/pid leakage); money-lineage walls enforced both directions (ModeledUSD->broker field and BrokerUSD->modeled field each TypeError, no row written); field-set exactness; replay truncated-tail tolerated + corrupt-line JournalCorruption on all three streams; rehydrate==live byte-exact incl. partial-close; open_deny rebuilt from THIS run only; EX-5 mixed-form _parse_utc; RC-5 catch-up; §P.2 EXACT-vs-quantize discipline. (The DJ hardening above was the only follow-up.)",
+    "execution": "ZERO numerical defects (EC-1 above is a wiring/completeness gap, not wrong math). Repro-confirmed: fill_delta exact integrated notional + telescoping + EX-6 prev semantics + EX-10 guards; marketable_limit_cap BUY ROUND_DOWN/SELL ROUND_UP + boundary-equal marketable + $1.00 tick_for(raw) + EX-1 quantized latency boundary (0.7999->0.8019@25 does NOT fire); assess_divergence EX-2 exact re-integration (701.30 not 701.54) + EX-3 side-aware flags; model_fill tob+depth walk + degrade-never-upgrade + ModeledUSD lineage; fees_for ceil-against-us + 8.30 cap exact + buy zero + EX-9 modeled-proceeds basis; PaperBook fee-free broker pnl + EX-4 partial-close allocation telescopes + conservative mark.",
+    "safety": "No blocker/major fail-closed violations. Repro-confirmed: submit chokepoint (only BrokerBase.submit_order calls _place; open-branch binds symbol+side+qty+limit_price; consume() runs §2.3 re-checks for kind=='open' only; reduce consume byte-identical); S1 (committed config -> run_gates terminal for every input; assemble_gates_view substitutes only the two gate keys via deepcopy and never feeds rules_hash; absent/malformed run-gates file -> both-False); both synthetic walls + the rev-2 reverse wall (reductions pass); kill cancel-opens-then-flatten ordering + generation bump + no-bare-market-order; TOCTOU revocation; S9 backtest gate fail-closed + .gitkeep-only dir; the reduce-never-blocked asymmetry. (SF-1, SF-2 above were the only findings.)",
+    "conformance": "Resolutions verified faithful (repro-gated spot-check of the blockers + majors: M5C-1 FakeBroker reduce exemption, M5C-T1 write-order witness not seq, M5C-2/3 stage-9 LULD + five-reason safe-default, M5C-S3 broker-keyed-on-credentials, M5C-S4 pre-substitution rules_hash, M5C-B1 stage-4 side-only, RC-1 global in-flight close guard, EX-1/2/3/4/8). PREFLIGHT_REASONS exactly 42; BROKER_KINDS unchanged (no flatten_proxy — M5C-S7); all §P.2 record_* field sets match incl. rev-2 fields; CLI three subcommands + derived mode + observe-no-broker + --status-script. ERRATA VERIFIED HONEST: (a) M4 leg_cap_notional/explicit-limit is a faithful TIGHTENING (a None-limit open is denied at can_open, fails ladder stage 11), §C's strategy_limit=None cap-derivation still works in isolation; (b) the two §3 import-row omissions (execution_realism->execution_config, replay_feed->execution_realism, fake->exec_reasons) import only pure-family/vocabulary modules, none of the §3-forbidden order-capable set; (c) PaperBook seeding gap honestly documented, no safety pin weakened. (CC-1 above was the only divergence.)",
+    "lifecycle": "Beyond LC-1/LC-2 above: clean. Repro-confirmed: AWAIT_LATENCY due at exactly t0+budget (>= boundary, a clock read not sleep); no wall-clock/sleep outside the row-stamp seam (grep); RC-3 degrade-to-observe resolves queued orders as offline_orphan + open-deny; open_deny run_id-filtered; all four risk components rehydrated before first put/can_open; HALTED latch (opens impossible, retry_residual legal); watcher cancel suppressed per-cause + late fills stay authoritative + late_fill_post_kill; step-7 GateFail skip (no journal, ordinal not advanced) + no gates pre-check (refusal at can_open rung 1); run_lock live-refuse + stale-PID reclaim reported; RC-5 catch-up (<=1 on_tick per batch, strictly-increasing now_ms)."
+  }
+}

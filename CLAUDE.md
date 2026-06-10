@@ -10,7 +10,7 @@ live`, fail-closed, "nothing opens by default") but is otherwise live-like, so t
 interfaces and code path — *not* a rebuild, though live is still a separately-validated step. Authoritative
 design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`. Build is staged M0→M8; see `PLAN.md`.
 
-**State:** M4 (risk core) built + hardened + green (896 tests, gates OFF, committed caps 0; branch `m3-signal`, stacked on `m2-market-state`; nothing merged to `main`). M0–M3 are done; M1 tier-2 (2b live-verified) remains deferred — blocked on unprovisioned paid live realtime subscription. M5 (paper-exec hybrid) is next: its contract DRAFT + partial critic findings are ready — see `PLAN.md` "Current status" for the exact resume point.
+**State:** M5 (paper-exec hybrid) built + hardened + green (1520 tests, gates OFF, committed caps 0; branch `m3-signal`, stacked on `m2-market-state`; nothing merged to `main`). M0–M5 are done; M1 tier-2 (2b live-verified) remains deferred — blocked on unprovisioned paid live realtime subscription. M5 landed via contract rev 2 (48+5 findings) → 6 TDD waves → a 5-lens repro-gated adversarial review (6 defects fixed); see `PLAN.md` + `docs/superpowers/reviews/`. **Next: M6 (SOD/EOD reconcile) — or a merge-to-main decision (four milestones M2–M5 stack unmerged).**
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
