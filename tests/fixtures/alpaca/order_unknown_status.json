@@ -1,0 +1,19 @@
+{
+  "id": "7b4c2d1a-6e8f-4a5b-9c0d-1f2e3a4b5006",
+  "client_order_id": "o-20260610-AAPL-0006",
+  "created_at": "2026-06-10T14:33:00.000000Z",
+  "updated_at": "2026-06-10T14:33:00.700000Z",
+  "filled_at": null,
+  "canceled_at": null,
+  "asset_class": "us_equity",
+  "symbol": "AAPL",
+  "qty": "100",
+  "filled_qty": "0",
+  "filled_avg_price": null,
+  "type": "limit",
+  "side": "buy",
+  "time_in_force": "day",
+  "limit_price": "100.25",
+  "status": "held",
+  "extended_hours": false
+}

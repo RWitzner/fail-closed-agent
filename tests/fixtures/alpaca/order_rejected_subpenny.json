@@ -1,0 +1,5 @@
+{
+  "status_code": 422,
+  "code": 42210000,
+  "message": "sub-penny increment does not fulfill minimum pricing criteria"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "f3c4f6e2-90a1-4f0b-bd6e-aa0c2d9e7001",
+  "account_number": "PA3EXAMPLE1",
+  "status": "ACTIVE",
+  "currency": "USD",
+  "equity": "100000.00",
+  "last_equity": "100000.00",
+  "cash": "40000.00",
+  "buying_power": "200000.00",
+  "maintenance_margin": "30000.00",
+  "initial_margin": "30000.00",
+  "multiplier": "2",
+  "daytrading_buying_power": "400000.00",
+  "pattern_day_trader": false,
+  "daytrade_count": 0,
+  "shorting_enabled": false,
+  "trading_blocked": false,
+  "account_blocked": false,
+  "created_at": "2026-06-01T00:00:00.000000Z"
+}

@@ -1,0 +1,5 @@
+{
+  "status_code": 403,
+  "code": 40310100,
+  "message": "trade denied due to pattern day trading protection"
+}

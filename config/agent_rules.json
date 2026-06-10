@@ -12,6 +12,12 @@
     "calendar_pin": "4.13.2",
     "calendar_mic": "XNYS"
   },
+  "execution": {
+    "slippage_cap_bps": 25,
+    "order_poll_interval_ms": 500,
+    "account_refresh_interval_ms": 2500,
+    "max_open_orders": 1
+  },
   "signal": {
     "interval": "1m",
     "feature_windows": ["9", "21", "50"],
