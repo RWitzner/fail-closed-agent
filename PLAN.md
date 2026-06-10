@@ -76,8 +76,15 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   kill-flatten works in every composition (the M5C-1 blocker pin). Build errata logged in wave-5/6
   commit messages (notable: M4 `leg_cap_notional` requires explicit strategy limits — M7 decision
   item; 2 §3 import-row omissions whitelisted in the AST guard).
-  **Resume point: 4-lens adversarial code review (repro-gated, M3/M4 discipline) → fix TDD → harden
-  commit → M5 done.**
+  **HARDENED (`ad14cf6`, 1520 tests): 5-lens repro-gated adversarial review (safety/execution/
+  determinism/conformance/lifecycle) — determinism + execution math clean; 6 defects fixed TDD:
+  LC-2 (high — kill-with-close-in-flight crash + double-sell risk → retire close task, single
+  flatten of record), LC-1/SF-1 (major — over-qty exit crashed the loop → journaled refusal),
+  EC-1 (dead §J/EX-9 sell-fee path → close now feeds a sell-side modeled fill; goldens
+  regenerated), SF-2 (FlattenUnpriced token leak → injected void_token), CC-1 (live-path
+  `secret`→`secret_key`), DJ (fill_delta pinned-context hardening). M5 DONE.**
+  Next: M6 (SOD/EOD reconcile) — or merge-to-main decision (nothing merged yet; branches stack
+  m2-market-state→m3-signal).
 
 ## Locked decisions
 
@@ -108,8 +115,9 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   ✓ **done on `m3-signal`** — 896 tests; long-only (locate = deny-all stub per spec §14); broker buying
   power = ground truth; committed caps 0; S1/S8/S10 + R9 byte-exact rehydrate test-mapped.
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).
-  ← next (contract DRAFT + partial critique ready — see "Current status" above for the exact resume point)
-- **M6** Reconcile hardening (SOD/EOD broker reconciliation).
+  ✓ **done on `m3-signal`** (`ad14cf6`, 1520 tests) — contract rev 2 (48+5 findings) → 6 TDD waves →
+  5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF; nothing merged to main.
+- **M6** Reconcile hardening (SOD/EOD broker reconciliation). ← next
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).
 
