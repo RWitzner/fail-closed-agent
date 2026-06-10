@@ -54,8 +54,18 @@ class TestAcceptedSubmission(unittest.TestCase):
 
 class TestNoOpeningInM0(unittest.TestCase):
     def test_cannot_open_on_committed_config(self):
-        with self.assertRaises(PreflightRejected):
-            mint_open_token(COMMITTED, OrderIntent(symbol="AAPL", side="buy", qty=Decimal("1")))
+        # FD-M5-14: the mint takes PreflightInputs; on committed gates the reject
+        # is the byte-exact run_gates terminal (S1 coverage preserved).
+        from agent.exec_reasons import PREFLIGHT_STAGES
+        from tests.agent.test_execution_preflight_m5 import golden_inputs
+
+        with self.assertRaises(PreflightRejected) as caught:
+            mint_open_token(golden_inputs(gates_config=COMMITTED))
+        reject = caught.exception.reject
+        self.assertEqual(reject.reasons, ("run_gates_off",))
+        self.assertEqual(reject.gate_stage, "run_gates")
+        self.assertEqual(reject.stages_skipped, PREFLIGHT_STAGES[1:])
+        self.assertIsNone(reject.capped_limit)
 
 
 class TestNoSdkImport(unittest.TestCase):

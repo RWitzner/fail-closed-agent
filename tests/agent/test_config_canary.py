@@ -40,13 +40,28 @@ class TestCommittedConfigCanary(unittest.TestCase):
         self.assertFalse(live_allowed(cfg))
 
     def test_no_opening_submit_and_zero_total_on_committed_config(self):
+        # FD-M5-14: the mint takes PreflightInputs; on the committed config every
+        # preflight terminates at run_gates with the byte-exact terminal shape (S1).
+        from agent.exec_reasons import PREFLIGHT_STAGES
+        from tests.agent.test_execution_preflight_m5 import (
+            golden_candidate,
+            golden_inputs,
+        )
+
         cfg = _committed_config()
         broker = SpyBroker()
         for sym in ["AAPL", "MSFT", "NVDA"]:
             intent = OrderIntent(symbol=sym, side="buy", qty=Decimal("1"), intent_id=f"o-{sym}")
             try:
-                token = mint_open_token(cfg, intent)
-            except PreflightRejected:
+                token, _ = mint_open_token(golden_inputs(
+                    gates_config=cfg,
+                    candidate=golden_candidate(symbol=sym, qty="1")))
+            except PreflightRejected as caught:
+                reject = caught.reject
+                self.assertEqual(reject.reasons, ("run_gates_off",))
+                self.assertEqual(reject.gate_stage, "run_gates")
+                self.assertEqual(reject.stages_skipped, PREFLIGHT_STAGES[1:])
+                self.assertIsNone(reject.capped_limit)
                 continue  # cannot open -> the broker is never reached
             broker.submit_order(intent, token)  # unreachable on committed config
         self.assertEqual(broker.calls, [])
