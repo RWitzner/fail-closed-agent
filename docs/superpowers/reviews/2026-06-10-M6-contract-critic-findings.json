@@ -1,0 +1,632 @@
+{
+ "milestone": "M6",
+ "date": "2026-06-10",
+ "source": "5-lens contract critic pass",
+ "note": "Round 1: 48 raw findings (repo-facts 5, safety 10, correctness 10, build-1 14, build-2 9) deduplicated to 34 canonical findings, blockers first. All applied to rev 2 of docs/superpowers/specs/2026-06-10-M6-reconcile-contract.md; zero rejected. Two conflicts resolved toward fail-closed and logged (M6C-10, M6C-15). Round 2 (re-critique, applied to rev 3): 5 findings RC-1\u2026RC-5 (2 major, 3 minor), majors first; all applied, zero rejected. RC-5's optional loosening arm (telescope consuming terminal-resolution deltas) explicitly not taken \u2014 resolved toward fail-closed. Dispositions mirrored in the contract's \u00a7V.2. Round 3 (independent re-critique of rev 3, applied to rev 4 on 2026-06-11): 6 findings RC-6\u2026RC-11 (4 major, 2 minor), majors first; all applied, zero rejected. RC-8 resolved via the fail-closed carried-residue re-journal arm (the broader unconditional cash_evaluated alternative not taken \u2014 it would block clears unrelated to any known residue); M6C-13's resolution detail amended in place per RC-7 (history retained inside the entry). Dispositions mirrored in the contract's \u00a7V.3. Round 4 (independent re-critique of rev 4, applied to rev 5 on 2026-06-11): 2 findings RC-12\u2026RC-13 (1 major, 1 minor), majors first; all applied, zero rejected. RC-12 re-pins the file-5 patch target to agent.broker.alpaca.AlpacaPaperBroker \u2014 the source-module attribute the orchestrator's function-local lazy import (orchestrator.py:560) resolves at call time; the orchestrator module holds no AlpacaPaperBroker attribute, so the RC-7-era 'orchestrator module's symbol' target was never consultable. RC-7's and M6C-13's resolution details are amended in place a second time (history retained inside both entries). RC-13 pins the completed=false \u21d2 exit-3-over-1 precedence in FD-M6-11/\u00a7E (fail-closed both ways: both codes alert per M6C-25). Dispositions mirrored in the contract's \u00a7V.4. Round 5 (2026-06-11): the independent re-critique verified all 47 prior resolutions (unverified=[]) and found exactly one minor (RC-14, type-shape pin) \u2014 applied in rev 6; contract READY-TO-BUILD.",
+ "findings": [
+  {
+   "id": "M6C-1",
+   "lens": "safety+build-1 (merges 3 raw: safety blocker; build-1 'immediate-phase semantics unproducible'; build-1 'trigger_durable_key unfillable')",
+   "severity": "blocker",
+   "title": "Immediate (FreezeSignal) pass: trigger context cannot reach run_reconcile; a clean immediate pass actively clears the latch leaving a CA-frozen symbol open-able; 'never adjusts' enforced only by a comment",
+   "section": "FD-M6-8 / FD-M6-12 / \u00a7C / \u00a7D step 7 / \u00a71 row 15 / D18",
+   "problem": "run_reconcile(*, phase, ts_utc, now_ms) had no parameter for the FreezeSignal, so the mandated ca_silent_adjust finding and the summary's trigger_durable_key were unproducible; deriving immediate-pass findings from the re-read meant a broker race (qty re-agrees) yielded findings==(), completed=true, and the phase-blind clear rule then CLEARED any pre-existing latch \u2014 leaving a detector-frozen symbol with zero open-blockers (can_open has no frozen rung; \u00a71 row 15's premise broken). 'Immediate never adjusts' lived in a comment on an unconditional loop, and diff_positions had no phase input, so coincident non-frozen drift produced action='adjusted' findings whose plans had to be either dropped (violating the \u00a7A.1 adjusted-implies-plan pin) or applied (violating FD-M6-8).",
+   "evidence": "rev1 :191 (FD-M6-8), :573/:606 (signature), :445-448 (trigger_durable_key), :685-686 (phase-blind clear), :171 (row 15), :672 (comment-only gate), :338-349 (no phase param), :409-411 (\u00a7A.1 pin); repo scripts/agent/corporate_actions.py:535-549 (FreezeSignal carries prev/curr qty), scripts/agent/risk/can_open.py:124-142 (no frozen rung).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "run_reconcile gains trigger: Optional[FreezeSignal]=None (FD-M6-12, \u00a7D); the orchestrator SYNTHESIZES ca_silent_adjust unconditionally from the signal's prev/curr qty so an immediate pass always has >=1 finding and can never be clean (FD-M6-8, \u00a7D step 1b, D29); latch clears restricted to phases {sod,eod,cli} AND zero drift rows in the window AND no frozen symbol, in both the fold and in-process (FD-M6-6, \u00a7B.1); frozen durables also hold the latch across restarts via step 6.5; diff_positions gains adjusts_allowed: bool and deferred findings carry the new action 'adjust_deferred' (zero plans \u2014 the \u00a7A.1 pin stays total); the plan-write loop is gated phase != 'immediate' normatively in the pseudocode; tests 1.26, 2.8, 4.16/4.30/4.32, D29 added."
+   }
+  },
+  {
+   "id": "M6C-2",
+   "lens": "safety+correctness+build-1 (merges 3 raw: safety 'in-flight set misses presumed-live'; correctness blocker same; build-1 'FD-M6-13 vs FD-M6-21/D12 contradiction')",
+   "severity": "blocker",
+   "title": "In-flight definition was task-only: presumed-live unconfirmed orders could be adjusted over, a later-booked fill then permanently bricks rehydrate via the position_adjust prev-check; D12 vs D23 differentiator was never fed in",
+   "section": "\u00a7D step 5 + pseudocode / FD-M6-13 / \u00a7B.2 soundness / \u00a71 row 19",
+   "problem": "FD-M6-13's fold-soundness rests on 'no in-flight order on the symbol', but the contract operationalized in-flight as self._task only. The FD-M5-17 presumed-live class (recovery 404x3 => unconfirmed + open-deny, NO task \u2014 orchestrator.py:702-719) was invisible: the pass would auto-adjust the symbol and run the cash lens over a torn read; when the order is later adopted and its incremental fill booked (orchestrator.py:761-768), the fill folds BEFORE the adjust (paper_book.py:631-685) and the prev-value check raises ExecError on every restart \u2014 an unrehydratable append-only journal. Separately, D12 (broker-terminal => adjust same pass) and D23 (broker-live => defer) could not diverge because the probe result never fed the in-flight computation.",
+   "evidence": "rev1 :592-594 ('in-flight from self._task'), :660 ('elif self._task is not None'), :196 (FD-M6-13), :524-527 (\u00a7B.2), :204/:814/:825/:904-905 (FD-M6-21/D12/D23/test 4.14); repo scripts/agent/orchestrator.py:702-723 (verified: parsed None => unconfirmed+open_deny, no task), scripts/agent/exec_ledger.py:1089-1104, scripts/agent/paper_book.py:631-685.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Pinned a single DEFERRAL SET (FD-M6-13, \u00a7D steps 4b/5): symbols of every order still in open_orders after the sweep (NOT resolved terminal by this pass's probe \u2014 incl. presumed-live unconfirmed) \u222a live task symbol \u222a _open_deny \u222a flatten-probe defer_symbols. The same set drives adjust deferral, the cash-lens skip, the baseline-refresh guard (M6C-5) and detector seeding (M6C-9). Orders resolved terminal this pass leave the set, so D12 adjusts same-pass and D23/D28 defer. New matrix row D28 + regression test 4.31 (later-booked fill after a deferred adjust does NOT brick rehydrate)."
+   }
+  },
+  {
+   "id": "M6C-3",
+   "lens": "safety+correctness+build-1+build-2 (merges 4 raw probe-table findings)",
+   "severity": "blocker",
+   "title": "The 'closed' order-probe resolution table was not closed: broker-active states (accepted/partially_filled), confirmed-open x NOT_FOUND, and the flatten-probe local_row=None input all had no cell \u2014 the first could un-track a live order",
+   "section": "\u00a73 order-state resolution table / FD-M6-9 / \u00a7D step 4 / \u00a7H D17",
+   "problem": "The table's not-found rows were scoped to 'unconfirmed' only, so a confirmed (previously ACKed) open order returning 404 had no cell \u2014 generalizing the nearest rule un-tracks a live order as expired on a transient 404. ORDER_STATES members accepted/partially_filled (the MOST COMMON probe results \u2014 exec_reasons.py:79-81, verified) matched no row: a faithful builder of a frozen closed table either raises mid-pass or invents a cell. Flatten probes pass local_row=None (flatten ids never appear in open_orders \u2014 orchestrator.py:40-46, V6) with no row at all; record_order_terminal is unreachable for them (no journaled o- ids). Row 7 (terminal-locally/open-at-broker) is unreachable through the sweep.",
+   "evidence": "rev1 :250-262 (table), :640-648 (open_orders.get(probe_id) None for flatten ids), :192 (FD-M6-9), :819 (D17); repo scripts/agent/exec_reasons.py:79-81 (verified ORDER_STATES), scripts/agent/broker/order_state.py:43-44, scripts/agent/orchestrator.py:40-46, :1065-1103.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Table extended to 14 closed rows: broker-live agreement => no row + deferral set; live partially_filled ahead of watermark => fills_missed alert-only, stays deferred; confirmed-open x NOT_FOUND => corruption-grade order_state + latched_operator, order STAYS tracked (never resolved_terminal from a 404 on an ACKed order); row 7 marked resolver-unit-only; three explicit flatten (local=\u2205) rows \u2014 terminal/not-found => note flatten_probe_result only (position lens owns the economics, never a terminal resolution), live => defer_symbols, failed => order_probe_failed + completed=false. New note token flatten_probe_result; resolve_order_probe takes local_row: Optional[Mapping] + flatten_symbol; tests 1.19/4.15 updated."
+   }
+  },
+  {
+   "id": "M6C-4",
+   "lens": "repo-facts",
+   "severity": "major",
+   "title": "BrokerAdjustDetector was never constructed anywhere and agent.corporate_actions was missing from the orchestrator's frozen import budget; an unpinned construction site loses the in-memory frozen set",
+   "section": "\u00a74 module map / \u00a7D step 6.5 / FD-M6-14",
+   "problem": "The contract wired seed_baseline/observe_broker_qty/is_frozen into the orchestrator but never said where the detector instance comes from; the repo has no production instantiation (verified: class def only at corporate_actions.py:489; instantiated only in tests) and the \u00a74 orchestrator import delta omitted agent.corporate_actions (needed for BrokerAdjustDetector and the DurableId ctor-seam type). A rebuild-per-refresh construction would silently lose the in-memory _frozen set and un-freeze CA-frozen symbols; the same loss occurs across restarts.",
+   "evidence": "rev1 \u00a74 orchestrator row, \u00a7D step 6.5, FD-M6-14; repo grep BrokerAdjustDetector => scripts/agent/corporate_actions.py:489 only (verified this session); detector._frozen is a plain in-memory set (corporate_actions.py:505-507, verified); status_ledger.rehydrate_state folds broker_adjust_freeze (status_ledger.py:356, V24).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a74 orchestrator imports += agent.corporate_actions (BrokerAdjustDetector, DurableId). \u00a7D step 6.5 pins: self._detector = BrokerAdjustDetector() constructed ONCE, never rebuilt; frozen state survives restarts via self._frozen_durables from the status-stream broker_adjust_freeze fold (V24, pure file replay \u2014 no corporate_actions.py edit needed), _frozen_symbols() = detector-frozen \u222a rehydrated; the rehydrated frozen set also holds the startup latch (with M6C-1). Test 4.37 added."
+   }
+  },
+  {
+   "id": "M6C-5",
+   "lens": "safety+correctness (merges 2 raw: 'cash drift self-absolves'; 'unconditional baseline refresh absorbs unadjudicated cash / anchors torn pairs')",
+   "severity": "major",
+   "title": "Unconditional every-pass baseline refresh let unexplained cash drift self-absolve in one pass interval, and anchored torn (cash, watermark) pairs when the lens was skipped",
+   "section": "FD-M6-17 / FD-M6-4(c) / \u00a71 rows 3+19 / \u00a70.3 A1+A6 / \u00a7H D6",
+   "problem": "FD-M6-17 refreshed the cash baseline at the end of EVERY completed pass \u2014 including the pass that found an unexplained residue (the next pass starts at the drifted value, comes back clean, FD-M6-6 auto-clears: money appearing/vanishing self-absolves with no human in the loop, contradicting A1, the latched_operator vocabulary, and \u00a71 row 3) \u2014 and including passes where the lens was skipped in-flight (the torn read becomes the next telescope's baseline paired with a watermark that cannot cover broker-executed-but-unbooked fills: false drift one way, silent absorption the other).",
+   "evidence": "rev1 :128-132 (A1), :200 (FD-M6-17), :231-232 (vocab), :808 (D6), :159 (row 3), :145-149 (A6), :679-680 + :660-661 (pseudocode), :685-686 (auto-clear).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "FD-M6-17 rewritten: the (cash_usd, fills_seq_watermark) pair refreshes ONLY when the cash lens evaluated this pass AND found zero residue (or first-ever seed, itself requiring an empty deferral set); skipped or residue-bearing passes carry the previous pair forward byte-identical, so the residue re-detects every pass and the latch genuinely holds for the operator. New operator path: agent reconcile --rebaseline-cash (\u00a7E) is the ONLY producer of action 'rebaselined'. A1/A6/\u00a71 row 19/D6/D32 updated; tests 4.33/4.34, 5.16/5.17 added."
+   }
+  },
+  {
+   "id": "M6C-6",
+   "lens": "safety",
+   "severity": "major",
+   "title": "FD-M6-1's 'job blast radius is exactly zero mutations' was false: the mandated _cmd_reconcile composition runs step-10 recovery, which issues a broker cancel on any adopted dangling order; test 5.13 contradicted pinned M5 behavior",
+   "section": "FD-M6-1 / FD-M6-22 / \u00a70 ground rules / \u00a7I test 5.13",
+   "problem": "The contract claimed the JOB cancels nothing while FD-M6-22 pinned _cmd_reconcile to the same composition as _cmd_paper, whose startup step 10 _recover_dangling_orders issues a best-effort broker.cancel_order('restart_unknown_state') on any adopted dangling order (verified: orchestrator.py:721-723 adopt-then-_attempt_cancel; :1468 broker.cancel_order). Test 5.13 ('zero submits/cancels/mints during every exit path') was unwritable against any journal with a recoverable dangling order, forcing the builder to silently fork the composition.",
+   "evidence": "rev1 :38-39, :184, :205, :950; repo scripts/agent/orchestrator.py:626-632, :702-723, :1460-1481 (all verified this session).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Zero-mutation claim scoped to the PASS (\u00a70 ground rule, FD-M6-1 rationale); FD-M6-22 explicitly owns the inherited, journaled step-10 recovery cancel as the job's only possible broker mutation (reduce-direction-safe, FD-M5-23) and forbids forking step 10 out. Test 5.13 rewritten (zero submits/mints; zero cancels EXCEPT the journaled restart_unknown_state recovery cancel when a dangling order is seeded) + new test 5.14 pinning exactly the seeded-dangling-order CLI case."
+   }
+  },
+  {
+   "id": "M6C-7",
+   "lens": "safety",
+   "severity": "major",
+   "title": "flatten-never-flip and position-existence were pinned only in the PURE planner \u2014 record_position_adjust and the PaperBook fold had no adjusted_qty >= 0 or unknown-position_id pins, so a bad adjust row folds a flipped/manufactured position silently",
+   "section": "\u00a7A PlannedAdjust / \u00a7A.1 / \u00a7B.2 fold rule / \u00a7I files 1+3",
+   "problem": "The clamp lived in the planner and a dataclass comment; neither the row validation nor the fold pinned adjusted_qty >= 0 or unknown-id behavior. A negative-qty adjust row (future planner bug, facade caller bug, or V26-pattern seeded fixture) passes the prev check and folds a SHORT position with status 'open' on every restart \u2014 in direct contrast to the adjacent close-fold precedent which raises on new_qty < 0 and unknown position_id (verified paper_book.py:663-674); create-on-miss could manufacture a position the broker never reported.",
+   "evidence": "rev1 :323, :512-527, :849, :883-897, :781-784; repo scripts/agent/paper_book.py:663-674 (verified).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7B.2 pins BOTH layers: record_position_adjust raises unless prev_qty >= 0, adjusted_qty >= 0, finite Decimals (bool/float rejected); the fold raises ExecError on (a) unknown position_id (never create), (b) adjusted_qty < 0, (c) adjust targeting a position already folded closed. Tests 3.1 extended + 3.11-3.13 added (seeded negative row => rehydrate raises; unknown id => raises; adjust-of-closed => raises)."
+   }
+  },
+  {
+   "id": "M6C-8",
+   "lens": "correctness",
+   "severity": "major",
+   "title": "LIFO cost re-anchoring rode the LAST planned adjust, which can be a position flattened to qty 0 (closed) \u2014 the open-sum constraint becomes unsatisfiable and the FD-M6-2 fixpoint breaks",
+   "section": "\u00a7A.1 / FD-M6-13 / FD-M6-2 / D20",
+   "problem": "When the negative-delta cascade exhausts exactly at a position boundary, the last planned adjust closes that position, excluding it from the open sum its adjusted_broker_cost_usd was supposed to satisfy; untouched older lots keep drifted cost, the next pass re-detects position_avg_cost, and 'running a pass twice is structurally idempotent' / D20's empty second pass are violated \u2014 the latch can never clear autonomously on machine-explainable drift. The position choice for the sole cost-only adjust was also unspecified, breaking adjust_id determinism.",
+   "evidence": "rev1 :400-404, :323, :393-398, :185, :822, :847.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7A.1 re-anchors on the NEWEST position remaining OPEN post-plan; when no touched position stays open but untouched open lots remain, one additional cost-only adjust on the newest open lot; the sole cost-only adjust (qty agreeing) pinned to the newest open position. Boundary-exhaustion test 1.24 added (fixpoint preserved)."
+   }
+  },
+  {
+   "id": "M6C-9",
+   "lens": "correctness",
+   "severity": "major",
+   "title": "Pass-end detector seeding contradicted the 'reconciled point' requirement: frozen, deferred, broker-only and immediate-phase symbols were seeded at unreconciled points",
+   "section": "FD-M6-14 / \u00a7D step 7 / invariant map S7",
+   "problem": "The seeding loop ran at the end of EVERY completed pass for EVERY held mapped symbol with no exclusions \u2014 for a CA-frozen durable the seed overwrites the baseline with the post-CA drifted qty (precisely the absorption S7-2 forbids; seed_baseline has no frozen guard \u2014 verified corporate_actions.py:515-519), and immediate passes (which adjust nothing) re-seeded the frozen symbol in the same tick. The pinned S7 test 'baselines seeded only at reconciled points' could not pass against the pseudocode.",
+   "evidence": "rev1 :197, :687-692, :191, :982; repo scripts/agent/corporate_actions.py:505-519 (verified: no frozen guard, _frozen never cleared by seed).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "FD-M6-14 + \u00a7D step 7 restrict seeding to {sod,eod,cli} completed passes and to symbols where post-pass local folded qty == broker qty; frozen, deferral-set and broker-only symbols skipped; immediate passes seed nothing; a frozen durable is never re-seeded until the M7 operator unfreeze. Invariant map S7 updated; test 4.36 added."
+   }
+  },
+  {
+   "id": "M6C-10",
+   "lens": "correctness+build-1+build-2 (merges 3 raw D6-action findings)",
+   "severity": "major",
+   "title": "D6 assigned two closed-vocab actions (latched_operator AND rebaselined) to one single-valued cash drift row",
+   "section": "\u00a7H D6 vs \u00a73 RECONCILE_ACTIONS / \u00a7A diff_cash",
+   "problem": "A reconcile row carries exactly one action; D6 named both tokens, so diff_cash could not be written and the byte-pinned D6 test could not be authored \u2014 two builders would pin different goldens. The build lenses proposed action='rebaselined' (matching rev 1's auto-rebaseline); the safety lens (M6C-5) demanded latched_operator + operator-gated rebaselined. Direct conflict.",
+   "evidence": "rev1 :231, :808, :901-903, :351-357.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Resolved toward fail-closed per the revision rules (conflict logged): D6 carries the single token latched_operator; 'rebaselined' is redefined as operator-only (the --rebaseline-cash path, M6C-5). The build lenses' core complaint (one token per row) is satisfied; their proposed token was rejected as the fail-open arm. \u00a7H D6, \u00a73 vocab, \u00a7E updated."
+   }
+  },
+  {
+   "id": "M6C-11",
+   "lens": "build-1",
+   "severity": "major",
+   "title": "diff_positions' input type (Mapping[str, PaperPosition]) could not express the multi-position book or the LIFO ordering the planner must use",
+   "section": "\u00a7A diff_positions vs \u00a7A.1 / FD-M6-13",
+   "problem": "One position per key collapses multiple open positions per symbol before the engine sees them (making the LIFO cascade and tests 1.5/1.6 unimplementable); keyed by position_id instead, the PURE engine has no ordering input because PaperPosition carries no journal seq field (verified: paper_book.py PaperPosition fields) and opened_ts_utc ties under fixed test clocks.",
+   "evidence": "rev1 :338, :381-382, :653; repo scripts/agent/paper_book.py:296-307.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Signature changed to Mapping[str, Tuple[PaperPosition, ...]] keyed by symbol, each tuple PRE-SORTED newest-first by position_open journal seq by the orchestrator (which owns the replay); pinned in the \u00a7A docstring and the \u00a7D pseudocode comment."
+   }
+  },
+  {
+   "id": "M6C-12",
+   "lens": "build-1+build-2 (merges 2 raw occurrence findings)",
+   "severity": "major",
+   "title": "occurrence/pass_count counting rule contradicted itself in three places; repeated incomplete immediate passes minted colliding reconcile_id/drift_id, breaking S6",
+   "section": "\u00a7C / \u00a7B rehydrate / \u00a7D step 7 / test 2.8 / open item 2",
+   "problem": "\u00a7C's head definition (count of prior reconcile_run rows) disagreed with its own gloss (completed passes only) and with the pseudocode (increment only if completed), while the fold counted all summaries. Two same-run incomplete immediate passes shared one occurrence => identical reconcile_id and drift_id across distinct passes \u2014 uncorrelatable rows (S6).",
+   "evidence": "rev1 :546, :457, :687-688, :877-879, :1024-1027.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "One authoritative rule: occurrence = count of ALL prior reconcile_run rows (rehydrated + this run, completed or NOT); the live counter increments after EVERY summary write (\u00a7D pseudocode moved out of the if-completed block); the fold and test 2.8 aligned ('all summaries'); test 4.38 added (incomplete pass then second same-phase pass => distinct reconcile_ids); open item 2 marked resolved."
+   }
+  },
+  {
+   "id": "M6C-13",
+   "lens": "build-1",
+   "severity": "major",
+   "title": "test_reconcile_cli.py was unimplementable: no seam carried scripted drift or offline credentials through the _cmd_reconcile/_cmd_paper composition",
+   "section": "\u00a7E / \u00a7G / \u00a7I file 5",
+   "problem": "_cmd_paper hardcodes credentials_path=_SECRETS/'alpaca_paper.json' (verified __main__.py:45,211) and the orchestrator's paper branch constructs AlpacaPaperBroker internally with no order_api passthrough, so the two \u00a7G-sanctioned seams are unreachable from the CLI path while the offline suite forbids credential reads/network \u2014 most file-5 cases could not be built without unsanctioned monkeypatching.",
+   "evidence": "rev1 :732-739, :776-780, :936-951; repo scripts/agent/__main__.py:45, :211 (verified), scripts/agent/orchestrator.py:557-562.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7G gains a THIRD sanctioned seam, pinned for CLI tests only: patch __main__._SECRETS to a tmp secrets root with a fake alpaca_paper.json, and patch the orchestrator module's AlpacaPaperBroker symbol to a factory returning AlpacaPaperBroker(order_api=ScriptedOrderApi(...), credentials_loader=fake). \u00a7I file-5 header references the seam; no other monkeypatching sanctioned. [AMENDED at rev 4 per RC-7 \u2014 original wording retained above as history, do not build from it: the factory construction as first pinned passes BOTH order_api and credentials_loader to the real ctor, which raises ValueError on the pair (scripts/agent/broker/alpaca.py:96-107, 'order_api OR credentials_loader, not both'); since the orchestrator's paper branch CALLS the patched symbol with credentials_loader= (scripts/agent/orchestrator.py:561-562), the corrected pin is: the factory ACCEPTS the credentials_loader kwarg, DISCARDS it, and returns AlpacaPaperBroker(order_api=ScriptedOrderApi(...)) \u2014 order_api only, never both. Contract \u00a7G clause (b) and the \u00a7I file-5 harness note carry the corrected wording.] [AMENDED again at rev 5 per RC-12 \u2014 both prior wordings retained as history: the patch TARGET they share ('the orchestrator module's AlpacaPaperBroker symbol') does not exist \u2014 grep of scripts/agent/orchestrator.py shows the ONLY AlpacaPaperBroker occurrence is the function-local lazy import at :560 ('from agent.broker.alpaca import AlpacaPaperBroker  # lazy'), re-resolved from agent.broker.alpaca at call time. The corrected pin: patch agent.broker.alpaca.AlpacaPaperBroker (the source-module attribute) to the accepts-and-discards factory; the two sanctioned patch points are exactly __main__._SECRETS and agent.broker.alpaca.AlpacaPaperBroker. Contract \u00a7G clause (b) and the \u00a7I file-5 header carry the corrected wording at rev 5.]"
+   }
+  },
+  {
+   "id": "M6C-14",
+   "lens": "build-1",
+   "severity": "major",
+   "title": "JournalCorruption handling: FD-M6-19 contradicted FD-M6-7, and no RECONCILE_NOTES token existed for the note both required",
+   "section": "FD-M6-19 vs FD-M6-7 vs \u00a73 RECONCILE_NOTES",
+   "problem": "FD-M6-7 listed JournalCorruption among note-producing outcomes; FD-M6-19 said it is fatal/propagates but also 'after journaling a note' \u2014 yet the closed note set has no corruption member and out-of-vocab emission raises with no row. The builder must either violate the closed vocabulary or drop a mandated note, and guess whether a summary is written.",
+   "evidence": "rev1 :190, :202, :209, :236-247.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "JournalCorruption removed from FD-M6-7's note class; FD-M6-19's note clause dropped (LEAN \u2014 no new vocab token): the CLI maps it to exit 3 with NO reconcile row written, in-process it propagates. D26 and test 5.9 aligned."
+   }
+  },
+  {
+   "id": "M6C-15",
+   "lens": "build-1+build-2 (merges 2 raw _session_over findings)",
+   "severity": "major",
+   "title": "Contract both forbade and required a schedule consult for _session_over; the same-session-post-close D14 case was undecidable without schedule_for, and UnknownSessionDate was an unenumerated mid-pass crash",
+   "section": "\u00a70.1 dropped-claims note vs \u00a7D run_reconcile step 4 / \u00a73 rows 4-5 / \u00a7H D14",
+   "problem": "\u00a70.1 asserted the reconcile path never calls schedule_for/phase_at while \u00a7D's _session_over compared 'the recorded instant against the fixture schedule' \u2014 which IS a schedule_for consult; a pure date compare silently degrades D14 (nightly cron runs on the SAME session date as the DAY order), while consulting the schedule can raise UnknownSessionDate (verified market_calendar.py:56, :275-279), a failure mode FD-M6-7 did not enumerate.",
+   "evidence": "rev1 :103-104, :696-699, :257-258, :816-817; repo scripts/agent/market_calendar.py:56, :268-279 (verified).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Pinned algorithm (\u00a7D): session_over = (submit session date < session_date_et) OR (equal AND recorded instant >= that session's rth_close_utc via exactly ONE schedule_for(order_session_date) consult); UnknownSessionDate caught => session-NOT-over (presumed-live). The two merged fixes conflicted on the UnknownSessionDate arm (presumed-live vs note+exit-3); resolved to presumed-live \u2014 the arm that fabricates no expiry and keeps the order tracked + open-denied (fail-closed for the order; logged). \u00a70.1 claim amended; \u00a73 row + D14 updated."
+   }
+  },
+  {
+   "id": "M6C-16",
+   "lens": "build-2",
+   "severity": "major",
+   "title": "Frozen resolve_order_probe signature could not implement the frozen \u00a73 table: the journaled cum fill watermark (a fills-stream fact) was not among its inputs",
+   "section": "\u00a7A resolve_order_probe / \u00a73 rows 1-2 / \u00a7D step 4",
+   "problem": "Table rows split on 'broker filled_qty > journaled cum watermark', but local_row is the latest ORDERS-stream row (which carries filled_qty only on broker_order_update rows and never the fills-stream cum watermark \u2014 verified exec_ledger.py:1081-1090, paper_book.py:646-649), so the engine could not distinguish fills_missed from a plain order_state resolution.",
+   "evidence": "rev1 :254-255, :359-365, :639-648; repo scripts/agent/exec_ledger.py:1081-1090, scripts/agent/paper_book.py:646-649.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "resolve_order_probe gains cum_filled_watermark: Decimal, computed by the orchestrator at the impure edge (max cum_filled_qty per order_id over first-occurrence fill_ids); \u00a7A docstring, \u00a73 table header, \u00a7D step 4 pseudocode (_fills_cum_watermarks()) and test 1.19 updated."
+   }
+  },
+  {
+   "id": "M6C-17",
+   "lens": "build-2",
+   "severity": "major",
+   "title": "Type contract for local/broker/diff was incoherent: \u00a7A pinned canonical strings while \u00a7B.1a demanded as_broker_usd lineage validation that is impossible on strings",
+   "section": "\u00a7A DriftFinding / \u00a7A.2 / \u00a7B.1a / FD-M6-10 / tests 1.23+2.5",
+   "problem": "as_broker_usd raises TypeError on ANY non-BrokerUSD input including every str (verified serializer.py), and a ModeledUSD-as-string is byte-indistinguishable from a BrokerUSD-as-string \u2014 lineage is erased at stringification. The builder had to violate either the string pin or the lineage rule; FD-M6-10's wall was enforced nowhere specific.",
+   "evidence": "rev1 :310-312, :415-418, :488, :193; repo scripts/agent/serializer.py:58-64.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "The lineage wall moved to ONE typed boundary: the new make_finding factory (\u00a7A) validates typed inputs (BrokerUSD via as_broker_usd; plain finite Decimal qty; ModeledUSD/float/bool/NaN => TypeError \u2014 test 1.23's home) and renders the canonical string once; the facade (\u00a7B.1a) validates strings structurally only (parseable finite Decimal string / closed token / None). Test 2.5 reworded; FD-M6-10 routing noted."
+   }
+  },
+  {
+   "id": "M6C-18",
+   "lens": "repo-facts",
+   "severity": "minor",
+   "title": "run_reconcile pseudocode read parsed_account.read.cash \u2014 BrokerAccountRead has no .read attribute",
+   "section": "\u00a7D pseudocode step 5",
+   "problem": "parse_account_payload returns a BrokerAccountRead, which carries cash directly; .read exists only on the AccountRead wrapper (verified account_state.py:36-52 vs :161-169). A builder copying the skeleton bakes an AttributeError into the cash lens.",
+   "evidence": "repo scripts/agent/risk/account_state.py:34-52 (cash field), :161-169 (AccountRead.read) \u2014 verified this session.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Pseudocode changed to broker_cash=parsed_account.cash."
+   }
+  },
+  {
+   "id": "M6C-19",
+   "lens": "repo-facts",
+   "severity": "minor",
+   "title": "V27's parenthetical '(plus risk in the replay-idempotency test)' did not exist at the cited location; \u00a71 row 11's rationale leaned on the nonexistent test",
+   "section": "\u00a70.1 V27 / \u00a71 rows 11+16",
+   "problem": "Verified: _STREAMS = (orders, fills, positions) at test_synthetic_e2e.py:40; the only byte compare (:65-73) covers those three streams; no test byte-compares risk.jsonl at the e2e level. Row 11's claim that an F4 row 'is byte-compared in the synthetic e2e replay test' justified a frozen decision on a nonexistent test.",
+   "evidence": "tests/agent/test_synthetic_e2e.py:40, :65-80 (verified this session); tests/agent/test_risk_ledger.py:301 (ledger-level replayed-row compare).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "V27 parenthetical dropped and re-pointed at the real ledger-level pin (test_risk_ledger.py:301, scope stated); \u00a71 row 11 rationale restated on its solid grounds (freshness perturbation + unpinned risk rows + the pass's own provenance)."
+   }
+  },
+  {
+   "id": "M6C-20",
+   "lens": "repo-facts",
+   "severity": "minor",
+   "title": "V5/\u00a7B.2 called the prev-value check 'byte-exact'; the cited repo precedent is Decimal VALUE equality \u2014 literal byte equality would brick rehydrate on value-equal scale-different Decimals",
+   "section": "\u00a70.1 V5 / \u00a7B.2 fold rule / \u00a7K / test 3.3",
+   "problem": "paper_book.py:679-685 compares with != on Decimals (Decimal('30') == Decimal('30.00')) \u2014 verified this session; the genuine string-compare discipline lives elsewhere (exec_ledger.py:753-757). A byte/string-equality implementation of the adjust prev-check is STRICTER than the precedent and can brick restarts on legitimate pinned-context arithmetic.",
+   "evidence": "repo scripts/agent/paper_book.py:679-685 (verified: 'if folded_broker != residual_broker: raise').",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "V5, \u00a7B.2 fold rule, the \u00a7K conventions row and test 3.3 reworded to 'exact Decimal VALUE equality (the V5 precedent)' with an explicit value-equal/scale-different no-brick test cell."
+   }
+  },
+  {
+   "id": "M6C-21",
+   "lens": "repo-facts",
+   "severity": "minor",
+   "title": "FD-M6-11 attributed 'RunLockHeld => exit 2' to 'the existing CLI precedent'; today RunLockHeld is uncaught in the CLI, and _cmd_paper also needed the wrapper",
+   "section": "FD-M6-11 / \u00a71 row 6 / \u00a7E",
+   "problem": "grep RunLockHeld scripts/agent/__main__.py => no hits (verified); the lock is acquired in the Orchestrator ctor, so today agent paper against a locked journal dies with an unhandled traceback. Presenting the mapping as precedented misstated the repo and hid that _cmd_paper needs the same try/except for the exit table to hold.",
+   "evidence": "repo scripts/agent/__main__.py (no RunLockHeld handler \u2014 verified); scripts/agent/run_lock.py:33-115; orchestrator ctor acquisition (V22).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "FD-M6-11 reworded: RunLockHeld=>2 is a NEW mapping, family-consistent with the usage/mode-mismatch exit-2 precedent; FD-M6-22 + \u00a7E extend the try/except wrapper to _cmd_paper; \u00a71 row 6 rationale and the \u00a70.1 dropped-claims note corrected; test 5.6 covers both commands."
+   }
+  },
+  {
+   "id": "M6C-22",
+   "lens": "safety",
+   "severity": "minor",
+   "title": "rehydrate_reconcile_state trusted the summary's clean flag over the drift rows it just folded \u2014 a buggy clean=true summary could clear a latch the same window's rows set",
+   "section": "FD-M6-6 / \u00a7B.1 / \u00a7B.1a",
+   "problem": "The fold cleared on any completed+clean summary even with drift rows in the window, and nothing validated clean => drift_count==0 \u2014 a single caller bug or hand-seeded inconsistent fixture yields a journal whose rows show drift while the fold reports latched=False.",
+   "evidence": "rev1 :453-457, :494-495, :682, :170.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Facade validates clean=true => drift_count==0 (\u00a7B.1a); the fold clears only when completed AND clean AND zero drift rows observed since the previous summary (an inconsistent window keeps the latch, fail-closed); fold test cell added (2.8)."
+   }
+  },
+  {
+   "id": "M6C-23",
+   "lens": "safety+correctness (merges 2 raw _cmd_paper-exit findings)",
+   "severity": "minor",
+   "title": "_cmd_paper mapped an INCOMPLETE SOD pass (broker unreadable at startup) to exit 0 \u2014 could-not-check collapsed into startup-ok",
+   "section": "\u00a7E _cmd_paper / FD-M6-11 / FD-M6-7",
+   "problem": "A SOD pass returning completed=false with no prior latch matched neither exit-1 condition, so agent paper exited 0 having verified nothing while the standalone job exits 3 for the identical outcome \u2014 FD-M6-7's three-outcome discipline collapsed on the startup path.",
+   "evidence": "rev1 :745-748, :190, :194, :741-743.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "_cmd_paper pinned to return 3 on a completed=false SOD pass (the job-consistent arm); FD-M6-11 + \u00a7E updated; test 5.15 added; open item 3's flag to Robin extended to cover the new non-zero startup exits."
+   }
+  },
+  {
+   "id": "M6C-24",
+   "lens": "safety",
+   "severity": "minor",
+   "title": "The in-memory drift latch committed only after ALL journal writes \u2014 a raise mid-write-sequence left journaled drift with a False in-process latch",
+   "section": "\u00a7B.3 / \u00a7D steps 6-7 / FD-M6-6",
+   "problem": "Any raise inside step 6 (facade TypeError, adjust prev-mismatch ExecError, I/O error) propagated with drift rows journaled but the in-process latch still False; any current-or-future caller that catches and keeps ticking trades on a drift-aware journal with a drift-unaware gate. The latch is one-way within a pass; setting it early costs nothing.",
+   "evidence": "rev1 :669-693, :532-538, :202.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7D/FD-M6-6 pin self._drift_latch = True the moment findings become non-empty (and at the immediate-pass synthesis), BEFORE the first journal write; the clear decision stays at step 7. Test 4.35 (ledger raise injected mid-step-6 => latch already True in-process and after restart)."
+   }
+  },
+  {
+   "id": "M6C-25",
+   "lens": "safety",
+   "severity": "minor",
+   "title": "Runbook alerted only on exits 1 and 3 \u2014 a permanently held/hung RunLock made the nightly reconcile exit 2 forever, unalerted: reconciliation silently stops happening",
+   "section": "\u00a7E ops story / FD-M6-11 / D27",
+   "problem": "V22 reclaims only DEAD pids; a hung live process or a malformed lock holds the lock indefinitely, yielding exit-2 nights with no reconcile and no alert \u2014 the A4 channel goes dark fail-open at the ops layer.",
+   "evidence": "rev1 :750-753, :194, :829; repo scripts/agent/run_lock.py:33-115.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7E ops story: alert on ANY non-zero exit; exit 2 gets its own runbook line (hung agent pid / stale-malformed .lock remediation)."
+   }
+  },
+  {
+   "id": "M6C-26",
+   "lens": "correctness",
+   "severity": "minor",
+   "title": "Cash-telescope dedupe was window-local; duplicate fill_ids straddling a baseline watermark were unpinned and could double-count",
+   "section": "FD-M6-4(c) / FD-M6-17 / \u00a7A diff_cash",
+   "problem": "diff_cash sees only fill_rows_since_watermark; duplicates are a designed-for stream property (paper_book.py:647-648 tolerates them) and byte-identical. First occurrence at seq <= watermark (inside baseline_cash) + duplicate above it => double-count => false cash drift.",
+   "evidence": "rev1 :187, :351-357, :858-859; repo scripts/agent/paper_book.py:88-91, :647-648, scripts/agent/exec_ledger.py:763-767.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Cross-boundary dedupe pinned at the orchestrator: the pre-filter excludes any row whose fill_id already occurs at seq <= the watermark (one replay scan at the impure edge). FD-M6-4(c)/FD-M6-17, \u00a7A diff_cash doc, \u00a7D step 5, D25 and test 4.21 updated."
+   }
+  },
+  {
+   "id": "M6C-27",
+   "lens": "correctness",
+   "severity": "minor",
+   "title": "Vocabulary/matrix coverage gaps: durable_id_missing had no matrix row, no test, and no state home for its once-per-run dedupe; order_probe_failed and cash_skipped_inflight had no composition-level pins",
+   "section": "\u00a73 / \u00a7H / \u00a7I / FD-M6-14",
+   "problem": "Three frozen vocabulary members had no pinned test ('every row is at least one pinned test' was false), and the once-per-run note memory had no specified home in an otherwise per-invocation-stateless pass.",
+   "evidence": "rev1 :197, :238-247, :801-829, :840-968.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "State home pinned: self._noted_durables seeded at step 6.5 (FD-M6-14, \u00a7D). New matrix rows D30 (durable_id_missing once across two passes), D31 (mid-sweep probe failure => completed=false, exit 3, latch unchanged), D32 (in-flight cash skip + carried-forward baseline); test 4.33 covers them."
+   }
+  },
+  {
+   "id": "M6C-28",
+   "lens": "correctness+build-1 (merges 2 raw adjusted-cost findings)",
+   "severity": "minor",
+   "title": "adjusted_broker_cost_usd was unspecified for flattened and non-last positions and when re-anchoring is skipped (D10 broker-flat / avg_entry_price None); adjust-to-zero realized-PnL silence was unstated",
+   "section": "\u00a7A.1 / \u00a7B.2 / \u00a7H D2+D10",
+   "problem": "PlannedAdjust requires adjusted_broker_cost_usd on every plan but the constraint fixed only the re-anchor target; flattened lots and the D10 no-broker-row case had arbitrary journaled costs that byte-pinned tests and the rehydrate prev-check would freeze unreviewed; whether adjust-close records realized PnL was unstated.",
+   "evidence": "rev1 :318-325, :400-404, :804, :812; repo scripts/agent/risk/account_state.py:301-302 (V2 zero-row drop), scripts/agent/paper_book.py:675-685.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7A.1 pins: flatten-to-zero plans carry adjusted_broker_cost_usd = Decimal('0'); intermediate reduced-but-open positions keep prev cost; only the re-anchor target moves; avg_entry_price None => survivors keep prev, flattened lots 0 (covers D10). One-line statement added: adjust-close deliberately records no realized-PnL fields (broker ledger owns the economics; the drift row is the record). D10 updated; test 1.25 added."
+   }
+  },
+  {
+   "id": "M6C-29",
+   "lens": "build-1",
+   "severity": "minor",
+   "title": "NOT_FOUND=>expired terminal resolution left three required record_order_terminal kwargs unpinned",
+   "section": "\u00a73 row 4 / FD-M6-21 / \u00a7H D14",
+   "problem": "record_order_terminal requires filled_qty, cum_notional_usd, ts_broker_utc (verified exec_ledger.py:705-721) and the not-found resolution has no broker payload; M5's precedent resolves to unconfirmed (no terminal row), so builders would invent permanent journaled values.",
+   "evidence": "rev1 :257, :204; repo scripts/agent/exec_ledger.py:704-721 (V11), scripts/agent/orchestrator.py:710-716.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "FD-M6-21 pins: filled_qty = journaled cum watermark (Decimal('0') when no fills), cum_notional_usd = journaled cum notional after the last fill (Decimal('0') when no fills), ts_broker_utc = None. Carried into the TerminalResolution dataclass (M6C-30), \u00a73 row, D14."
+   }
+  },
+  {
+   "id": "M6C-30",
+   "lens": "build-1",
+   "severity": "minor",
+   "title": "resolve_order_probe's return shape was unspecified: the skeleton said '-> tuple' while the pseudocode read named attributes",
+   "section": "\u00a7A skeleton vs \u00a7D step 4",
+   "problem": "The pseudocode consumed verdicts.findings/.notes/.terminal_resolutions \u2014 attribute access a plain tuple does not support \u2014 and the field set of terminal_resolutions was never defined; a core W2 pure function's output contract was left to the builder.",
+   "evidence": "rev1 :359-361, :646-650.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Frozen dataclasses pinned in \u00a7A: ProbeResolution(findings, notes, terminal_resolutions, defer_symbols) and TerminalResolution(decision_id, order_id, terminal_state, filled_qty, cum_notional_usd, ts_broker_utc); defer_symbols also serves the M6C-2/3 deferral plumbing. Skeleton + pseudocode updated."
+   }
+  },
+  {
+   "id": "M6C-31",
+   "lens": "build-1",
+   "severity": "minor",
+   "title": "Test 4.16 asserted cross-stream seq ordering, but seq counters are independent per resolved path \u2014 the assertion was meaningless as written",
+   "section": "\u00a7I test 4.16 vs \u00a70.1 V12",
+   "problem": "status.jsonl and reconcile_alerts.jsonl have independent path-keyed monotonic counters (journal.py:70-81), so 'freeze row seq precedes the pass's first row' can be vacuously true (both seq 1) and proves nothing about write order.",
+   "evidence": "rev1 :908-910, :77; repo scripts/agent/journal.py:70-81.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Test 4.16 reworded to assert CALL ORDER via a record-spy over StatusLedger.record_broker_adjust_freeze and ReconcileLedger.record_*, with the cross-stream-seq trap noted inline."
+   }
+  },
+  {
+   "id": "M6C-32",
+   "lens": "build-2",
+   "severity": "minor",
+   "title": "Test-plan arithmetic: per-file estimates summed to 135, not the stated ~132; suite target 1655, not ~1650",
+   "section": "\u00a7I totals / \u00a7J wave plan",
+   "problem": "30+22+14+34+13+8+10+4 = 135 vs 'Total new tests \u2248 132; suite target \u2248 1650' (1520+135=1655) \u2014 the lens-checkable arithmetic in a frozen contract should be self-consistent for the W5 gate.",
+   "evidence": "rev1 :840, :866, :883-884, :899, :936, :952, :960-961, :966 vs :970; baseline 1520 at :8.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Re-summed AFTER the rev-2 cell additions: per-file estimates now 35+25+18+44+17+8+10+4 = 161; totals line states 'Total new tests \u2248 161; suite target \u2248 1681' with the sum-must-equal-total rule pinned; \u00a7J W5 gate updated to \u2248 1681."
+   }
+  },
+  {
+   "id": "M6C-33",
+   "lens": "build-2",
+   "severity": "minor",
+   "title": "'Sorted by a total key' was false: the findings/notes sort keys contain Optional[str] slots, and None-vs-str comparison raises TypeError in Python",
+   "section": "\u00a7A.2 / \u00a7A ReconcilePassResult / \u00a7D step 6",
+   "problem": "Tuple ordering raises TypeError the first time a None meets a str after equal prefixes \u2014 e.g. two order_state findings on one symbol where one carries local_order_id=None (exactly the flatten-probe shape); a builder copying the pinned keys bakes in a latent multi-divergence crash.",
+   "evidence": "rev1 :415, :333, :335, :670, :677; Python semantics: (\"a\", None) < (\"a\", \"x\") raises TypeError.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "None-coercion pinned: _finding_key = (kind, symbol or \"\", position_id or \"\", local_order_id or \"\"), note key (note, symbol or \"\", detail); \u00a7A comments, \u00a7A.2, and the pseudocode's sorted(..., key=...) calls updated; test 1.22 extended with None-bearing shuffled inputs."
+   }
+  },
+  {
+   "id": "M6C-34",
+   "lens": "build-2",
+   "severity": "minor",
+   "title": "The immediate-pass trigger could pass ts_utc=None into run_reconcile \u2014 the neighboring existing code guards this, the new wiring did not",
+   "section": "\u00a7D tick step 3 / run_reconcile step 1",
+   "problem": "self._instant_utc initializes to None (orchestrator.py:614, verified) and _refresh_account can run before any quote (the existing code at that exact site uses the epoch fallback at :900, verified); session_date_for(None) crashes with AttributeError mid-tick instead of any specified degrade.",
+   "evidence": "repo scripts/agent/orchestrator.py:614, :900 (both verified this session); scripts/agent/market_calendar.py:91-107.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7D tick step 3 pins ts = self._instant_utc or \"1970-01-01T00:00:00.000000Z\" (the existing :900 precedent) for both the freeze status row and the same-tick immediate pass \u2014 chosen over deferring the pass so the freeze-to-latch window stays zero ticks; test 4.39 (pre-instant freeze) added."
+   }
+  },
+  {
+   "id": "RC-1",
+   "lens": "recritique",
+   "severity": "major",
+   "title": "First-ever pass with a non-empty deferral set: the mandated reconcile_baseline row is unwritable (M6C-5 introduced)",
+   "section": "FD-M6-17 / \u00a7B.1 / \u00a7B.3 / \u00a7D / \u00a7H D24-D32",
+   "problem": "FD-M6-17 required EVERY completed pass to end by writing a reconcile_baseline row, but rev 2 (M6C-5) forbade refreshing the (cash_usd, fills_seq_watermark) pair unless the cash lens evaluated clean OR it was the first-ever seed (which itself requires an empty deferral set); when the lens was skipped the previous baseline's pair carries forward byte-identical. On a completed FIRST-EVER pass with a NON-EMPTY deferral set there is no previous pair to carry forward and the refresh is disallowed, yet \u00a7B.1a makes cash_usd (BrokerUSD) and fills_seq_watermark (non-negative int) required non-nullable fields and \u00a7B.3 wrote the baseline on every completed pass. A builder had to either skip the row (violating FD-M6-17/B.1/B.3) or write fresh torn values (violating M6C-5). No matrix row covered it: D24 pinned first-ever WITH an empty deferral set, D32 pinned the skip WITH an existing baseline. Concretely reachable: an existing M5 test crosses the session edge with an open order and no prior baseline (see RC-2).",
+   "evidence": "Rev-2 contract: FD-M6-17 ('Every COMPLETED pass ends by writing a reconcile_baseline row ... REFRESHES ... ONLY when the cash lens evaluated this pass AND found zero residue (or on the first-ever seed, which itself requires an empty deferral set)'); \u00a7B.1 (baseline 'end of every COMPLETED pass'; cash_usd/fills_seq_watermark in the frozen shape); \u00a7B.1a (cash_usd 'BrokerUSD via as_broker_usd', fills_seq_watermark 'non-negative int' \u2014 no None arm); \u00a7B.3; \u00a7D pseudocode (first-ever + defer \u2192 note only, then unconditional record_reconcile_baseline with pair = FRESH iff cash_clean else the previous pair \u2014 None here); \u00a7H D24 ('no baseline, deferral set empty') vs D32 ('baseline exists').",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Pinned the edge explicitly as the ONE FD-M6-17 exception: a completed pass with no prior baseline AND a non-empty deferral set writes NO reconcile_baseline row (the first seed defers in full; note cash_skipped_inflight); the first completed pass with an empty deferral set writes the seed. Amended FD-M6-17, \u00a71 row 19, \u00a7B.1, \u00a7B.3, \u00a7D step 6 + pseudocode (wrote_baseline guard; _latest_baseline tracks the row actually written), \u00a7H D24 + NEW matrix row D33, NEW test 4.40 (first-ever \u00d7 in-flight \u21d2 no baseline row; the next quiet completed pass seeds), and the \u00a7J W4 gate (the in-test EOD pass writes NO baseline row)."
+   }
+  },
+  {
+   "id": "RC-2",
+   "lens": "recritique",
+   "severity": "major",
+   "title": "The \u00a7D EOD hook is mode-ungated: it fires in synthetic/FakeBroker compositions and inside an existing M5 test, contradicting \u00a71 row 16 and the test-8 rationale",
+   "section": "\u00a7D tick step 10 / \u00a71 rows 5+16 / A4 / \u00a7I test 8 / \u00a7J W4",
+   "problem": "The EOD reconcile addition to _session_edge was gated only on '(self.broker is not None or self._account_provider is not None)' \u2014 no mode test, unlike the step-10 precedent it cites (mode==\"paper\" and broker is not None). Synthetic compositions DO have a broker (FakeBroker), so any synthetic run crossing a leaving-RTH edge would run an automatic pass \u2014 yet \u00a71 row 16's golden-stability argument asserted 'no automatic pass runs in synthetic/observe (row 4/5)' (rows 4/5 ruled only the ctor/SOD pass) and test 8 pinned the absence of reconcile_alerts.jsonl in synthetic/observe dirs \u2014 true only because the golden scripts happen not to cross 16:00. Worse, an EXISTING M5 paper-mode test crosses the edge with broker + FakeAccountProvider + an order resting 'new': an EOD pass would run mid-test \u2014 writing reconcile_alerts.jsonl into an M5 test, consuming an extra ScriptedOrderApi get_by_client_order_id FIFO entry (and in FakeBroker compositions advancing a scripted fill slice per probe, V18 \u2014 the \u00a71-row-12 side effect), and landing on the RC-1 unwritable-baseline edge. Jeopardized the W4 gate ('M5 pinned tests byte-unaffected').",
+   "evidence": "Rev-2 contract \u00a7D step 10 (EOD condition without a mode test); \u00a71 row 16 ('no automatic pass runs in synthetic/observe (row 4/5)'); \u00a71 rows 4/5 (ctor/SOD only); \u00a7I test 8; \u00a7J W4 gate. Repo: scripts/agent/orchestrator.py:628 (step-10 gate 'if self.mode == \"paper\" and self.broker is not None' \u2014 the mode-gated precedent); tests/lib/exec_fixtures.py:599-602 (run_synthetic_golden over FakeBroker \u2014 synthetic broker is not None); tests/agent/test_orchestrator.py:504-526 (test_session_edge_cancels_open_order_and_closes_day: AlpacaPaperBroker + FakeAccountProvider(), start_et=\"15:00\", crosses 16:00 ET with an order resting 'new'; 40 get_by_client_order_id entries scripted at :507-508); tests/lib/risk_fixtures.py:36-55 (FakeAccountProvider returns a valid account payload + [] positions, last repeats \u2014 the pass completes).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Gated the EOD invocation on self.mode == \"paper\" (mirroring the V7 step-10 gate at orchestrator.py:628) and made the gate LOAD-BEARING in \u00a7D with the full rationale; amended \u00a71 rows 5/16 (structural exclusion, not an artifact of the golden scripts stopping short of 16:00), A4, FD-M6-12's eod bullet, \u00a7I test 8 + NEW test 4.41 (paper edge fires exactly one pass; synthetic edge fires none), and the \u00a7J W4 gate now explicitly OWNS the one in-test firing (test_session_edge_cancels_open_order_and_closes_day: one extra scripted entry consumed \u2014 headroom verified, 40 scripted; reconcile notes + summary land in that test's own journal dir; NO baseline row per RC-1; assertions untouched)."
+   }
+  },
+  {
+   "id": "RC-3",
+   "lens": "recritique",
+   "severity": "minor",
+   "title": "FD-M6-12 lists _cmd_reconcile under the 'sod' invocation bullet, contradicting \u00a7E/FD-M6-22 (phase=\"cli\", exactly one pass) and FD-M6-12's own no-double-reconcile rationale",
+   "section": "FD-M6-12",
+   "problem": "FD-M6-12's invocation list read 'sod \u2014 _cmd_paper and _cmd_reconcile call it after construction (...)' and separately 'cli \u2014 _cmd_reconcile'. Taken literally, the CLI job runs a sod pass AND a cli pass \u2014 exactly the double-reconcile the same FD's rationale says the design avoids, contradicting \u00a7E (single run_reconcile(phase=\"cli\")) and FD-M6-22. A literal builder mints two reconcile_ids and two summaries per nightly job.",
+   "evidence": "Rev-2 contract FD-M6-12 ('Invocations: sod \u2014 _cmd_paper and _cmd_reconcile call it after construction ...' + rationale '...avoids double-reconcile in the CLI job'); \u00a7E (single run_reconcile(phase=\"cli\")); FD-M6-22.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Amended the FD-M6-12 sod bullet to name _cmd_paper ONLY ('_cmd_reconcile runs NO sod pass'); moved the degraded-observe/exit-3 parenthetical to the cli bullet and pinned 'exactly ONE pass per job' there \u2014 consistent with \u00a7E and FD-M6-22."
+   }
+  },
+  {
+   "id": "RC-4",
+   "lens": "recritique",
+   "severity": "minor",
+   "title": "Pseudocode computes _session_over for flatten probes, but the pinned algorithm needs an order_submit_attempt row that flatten ids never have (M6C-15 \u00d7 M6C-3 composition gap)",
+   "section": "\u00a7D step 4 + pseudocode / _session_over pin",
+   "problem": "\u00a7D step 4 called 'session_over=self._session_over(probe_id, ts_utc)' for EVERY probe_id, including 'flatten-<symbol>' ids. The pinned _session_over algorithm consults the order's order_submit_attempt session date \u2014 but flatten ids never appear in the orders stream as journal ids (the kill booking mints separate o- ledger ids; the broker-side client_order_id flatten-<symbol> rides payload fields only), so a faithful builder hits a missing-row lookup before resolve_order_probe is even reached. The \u00a73 flatten rows never consume session_over, so the computed value is dead either way.",
+   "evidence": "Rev-2 contract \u00a7D pseudocode (session_over computed unconditionally in the probe loop while is_flatten/local_row=None is handled beside it); the pinned _session_over algorithm ('the order's order_submit_attempt session date'); the three \u00a73 flatten rows (none consults session_over). Repo: scripts/agent/orchestrator.py:40-46 (ledger-side ids separately minted; broker-side client_order_id stays flatten-<symbol> \u2014 no orders-stream row keyed by the flatten id).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7D step 4 + pseudocode now pass constant session_over=False on the flatten branch and compute _session_over only for non-flatten probes; the _session_over pin gained an explicit scope sentence (RC-4): defined ONLY for journaled o-/synthetic-o- order ids \u2014 flatten ids have no order_submit_attempt row and the \u00a73 flatten rows never consult the value."
+   }
+  },
+  {
+   "id": "RC-5",
+   "lens": "recritique",
+   "severity": "minor",
+   "title": "D12 missed-fill cash arm: after M6C-5 the residue is permanently operator-latched, but FD-M6-21/\u00a71 row 8 still describe the economics as 'adopted in the SAME pass' and no row/test pins the persistence",
+   "section": "FD-M6-21 / \u00a71 row 8 / \u00a7H D12 / \u00a7I 4.14",
+   "problem": "A D12 missed fill is never journaled as a fill row (FD-M6-21 forbids fabrication), the cash telescope consumes ONLY broker_fill rows (FD-M6-4(c)), and a residue-bearing pass carries the baseline pair forward unchanged (M6C-5) \u2014 so the missed fill's cash effect re-detects as a latched_operator cash drift on EVERY subsequent pass and can never clear autonomously until agent reconcile --rebaseline-cash. Yet FD-M6-21 and \u00a71 row 8 still said 'the economic effect is adopted by the position/cash lenses' own rows in the SAME pass' (true only for the position lens), and D12's latch column said just 'set' with no next-pass statement \u2014 unlike D6, which spells out the hold-until-operator behavior. Fail-closed preserved (strictly more closed), but the autonomous-paper-validation story and the matrix were silent on a consequence rev 2 created, and no test pinned the D12 next-pass cash outcome.",
+   "evidence": "Rev-2 contract FD-M6-21 ('the economic effect is adopted by the position/cash lenses' own rows in the SAME pass'); \u00a71 row 8 resolution (same claim); FD-M6-4(c) (telescope over broker_fill rows only; residue \u21d2 latched_operator + carry-forward, M6C-5); FD-M6-17; \u00a7H D12 (latch 'set', no persistence) vs D6 (spells out the operator hold); test 4.34 pinned residue persistence only for the pure-cash D6 case.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "FD-M6-21 now states the cash effect is only DETECTED, never machine-resolved: when a baseline exists the same pass journals a cash residue (latched_operator) that re-detects every subsequent pass and holds the latch until --rebaseline-cash \u2014 deliberate and strictly fail-closed; \u00a71 row 8 rationale amended likewise; \u00a7H D12 gained the action + persistence columns; test 4.14 extended (pass N+1 re-detects cash ONLY against the unrefreshed baseline). The alternative arm \u2014 letting the telescope also consume terminal-resolution cum-notional deltas \u2014 was explicitly NOT taken: it would loosen the no-fabrication line; pinned in FD-M6-21 as a contract-rev decision, not a default (resolved toward fail-closed per the standing rule)."
+   }
+  },
+  {
+   "id": "RC-6",
+   "lens": "recritique (round 3)",
+   "severity": "major",
+   "title": "M6C-19 resolution sweep incomplete: \u00a71 row 16 still claimed goldens byte-compare risk.jsonl ('orders/fills/positions(+risk)'), contradicting the contract's own corrected V27 and the repo",
+   "section": "\u00a7V (unverified resolution) / \u00a71 row 16",
+   "problem": "The rev-2 M6C-19 fix removed the risk.jsonl byte-compare falsehood from V27 and \u00a71 row 11, but the identical claim stood in \u00a71 row 16's 'Verified:' rationale ('goldens compare orders/fills/positions(+risk) only (V27)') \u2014 and the row was edited again in rev 3 (it carries RC-2 language), so the falsehood survived two revision passes. It directly contradicted the corrected V27 one section above.",
+   "evidence": "Rev-3 contract line 190 ('goldens compare orders/fills/positions(+risk) only (V27)') vs line 99 (corrected V27: synthetic compares ONLY ('orders','fills','positions'); risk byte-determinism pinned only at the ledger level). Repo: tests/agent/test_synthetic_e2e.py:40 (_STREAMS = ('orders','fills','positions')) and :65-73 (the only stream byte compare); tests/agent/test_observe_e2e.py:131-146 (decisions.jsonl/forecast_scored.jsonl/observe_report.json only); tests/agent/test_risk_ledger.py:301 (ledger-level replayed-row compare, not an e2e stream-file compare). All re-verified this session.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a71 row 16 rationale corrected to 'goldens compare orders/fills/positions only (V27 \u2014 no e2e golden byte-compares risk.jsonl; RC-6)'. Full-text sweep of the contract confirms no '(+risk)' claim remains anywhere outside the resolution-log history. The same single edit resolves RC-10, the duplicate surface of this defect. Logged in \u00a7V.3."
+   }
+  },
+  {
+   "id": "RC-7",
+   "lens": "recritique (round 3)",
+   "severity": "major",
+   "title": "\u00a7G pinned CLI seam un-constructible: AlpacaPaperBroker(order_api=..., credentials_loader=...) raises ValueError in the real ctor (M6C-13-introduced)",
+   "section": "\u00a7G third sanctioned seam / \u00a7I file 5 / archive M6C-13",
+   "problem": "The rev-2 third sanctioned seam pinned file-5 tests to patch the orchestrator module's AlpacaPaperBroker symbol to 'a factory returning AlpacaPaperBroker(order_api=ScriptedOrderApi(...), credentials_loader=<fake>)'. The real ctor explicitly rejects both kwargs together ('order_api OR credentials_loader, not both \u2014 the three modes are exclusive'), so a builder following the pinned mechanism literally gets an immediate ValueError, and the contract forbids any other monkeypatching ('This is the PINNED mechanism; no other monkeypatching of __main__/orchestrator internals is sanctioned'). The orchestrator's paper branch CALLS the patched symbol with credentials_loader=, so the factory must accept-and-discard that kwarg and construct with order_api only. The identical wording was baked into the archive's M6C-13 resolution detail \u2014 the defect originated in the rev-2 fix itself.",
+   "evidence": "Rev-3 contract \u00a7G lines 1016-1025 (clause (b) + the PINNED-mechanism sentence). Repo: scripts/agent/broker/alpaca.py:96-107 ('if order_api is not None and credentials_loader is not None: raise ValueError(...)' \u2014 re-verified this session); scripts/agent/orchestrator.py:557-562 (paper branch constructs AlpacaPaperBroker(credentials_loader=lambda: load_alpaca_paper_credentials(creds)) \u2014 re-verified). Archive M6C-13 resolution.detail carried the same invalid construction.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7G clause (b) reworded: the patched factory ACCEPTS the orchestrator's credentials_loader kwarg, DISCARDS it, and returns AlpacaPaperBroker(order_api=ScriptedOrderApi(...)) \u2014 order_api only, never both kwargs (with the ctor-raise and call-site evidence inline). \u00a7I file-5 harness note mirrored ('accepts-and-discards the credentials_loader kwarg ... never both kwargs'). The archive's M6C-13 resolution detail amended in place with the corrected pin \u2014 original wording retained inside the entry as history, marked do-not-build-from. Logged in \u00a7V.3. [AMENDED at rev 5 per RC-12 \u2014 wording above retained as history, do not build from its patch TARGET: 'the orchestrator module's AlpacaPaperBroker symbol' does not exist. scripts/agent/orchestrator.py binds the name ONLY function-locally via the lazy import at :560 inside the paper branch (:557-562), so the call at :561-562 resolves agent.broker.alpaca.AlpacaPaperBroker at call time, never an orchestrator-module attribute; patching agent.orchestrator.AlpacaPaperBroker is a dead binding and the real broker's _build_real_client reaches the alpaca SDK import (broker/alpaca.py:177-195) \u2014 ImportError in the stdlib-only offline suite. The corrected pinned target is agent.broker.alpaca.AlpacaPaperBroker (e.g. unittest.mock.patch('agent.broker.alpaca.AlpacaPaperBroker', factory), the factory closing over the real class BEFORE patching); the accepts-and-discards credentials_loader semantics pinned here stand unchanged.]"
+   }
+  },
+  {
+   "id": "RC-8",
+   "lens": "recritique (round 3)",
+   "severity": "major",
+   "title": "Cash-residue latch fail-open window: a clean pass whose cash lens was SKIPPED cleared a latch that a known unexplained residue should hold (M6C-5 \u00d7 FD-M6-6 composition, D6\u2192D32)",
+   "section": "FD-M6-6 / FD-M6-17 / \u00a7D / \u00a7B.1 / \u00a7H / A6",
+   "problem": "Rev 2's M6C-5 carry-forward made the latch 'hold' via re-detection: each EVALUATED pass re-journals the residue. But the clear rule (FD-M6-6, \u00a7D step 7, and the fold) required only completed + clean + phase\u2208{sod,eod,cli} + drift-free window + not frozen \u2014 no cash-evaluated guard. Composition D6\u2192D32: pass N finds a cash residue (latched_operator, exit 1, baseline carried forward); pass N+1 has an in-flight order \u21d2 cash lens skipped (note cash_skipped_inflight, NO finding emitted), and with no other drift findings==() \u21d2 completed=true, clean=true \u21d2 BOTH the in-process clear and the fold (pass N's drift row precedes pass N's summary, so N+1's window is drift-free) CLEAR the latch and the CLI exits 0. Opens re-enabled for at least one pass interval against a KNOWN, journaled, unadjudicated cash drift; re-latches only at the next pass with an empty deferral set. Contradicted D6's latch column, FD-M6-17's 'an unexplained residue re-detects every subsequent pass and holds the latch until the operator acts' (false for skipped passes), and A6's 'any skip that hides a previously-latched dimension cannot produce clean=true' (false for the cash dimension). Tests 4.34/5.17 pinned persistence only across consecutive EVALUATED passes. Revision-introduced: rev 1 auto-rebaselined (no persistent residue existed to clear over); rev 2 created the persistent residue without guarding the clear.",
+   "evidence": "Rev-3 contract: FD-M6-17 (line 218, the 're-detects every subsequent pass' claim); FD-M6-6 (line 207, clear conjuncts \u2014 no cash-evaluated term); \u00a7D step 7 + pseudocode :879-881 (clear condition) and :839-840 ('elif defer: notes.append((\"cash_skipped_inflight\"...)' \u2014 no finding emitted); \u00a7H D6 (:1053) and D32 (:1079, exit 0); A6 (:159-167); tests 4.34 (:1229-1230) / 5.17 (:1278-1279); fold window rule \u00a7B.1 (:555-560). All line-verified this session against rev 3.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Resolved via the finding's primary (leanest, fail-closed) arm \u2014 the carried-residue RE-JOURNAL, zero new row fields: while a residue is OUTSTANDING (latest EVALUATED cash outcome was a residue, not yet rebaselined, not yet re-evaluated clean), a completed pass that SKIPS the cash lens re-journals the carried residue as a cash drift row with local/broker/diff byte-identical to the outstanding row (fresh drift_id) \u2014 the pass can never be clean and neither the in-process clear nor the fold's drift-free window can fire; FD-M6-17's 're-detects every subsequent pass' becomes literally true. State home: self._outstanding_cash_residue, rehydrated at step 6.5 from a new rehydrate_reconcile_state output key (set by a latched_operator cash row; cleared by a rebaselined row or a completed=true summary with a cash-drift-free window \u2014 sound exactly because skips re-journal); set pre-write with the latch (M6C-24), cleared on evaluated-clean and on --rebaseline-cash. Applied across: FD-M6-17 (normative rule), FD-M6-6 (composition closed), FD-M6-21, A1, A6, \u00a71 row 19, \u00a7B.1 fold docstring, \u00a7B.1b zero state, \u00a7D steps 5/6.5 + pseudocode, \u00a7E, \u00a7H D6/D32 amended + NEW row D34, \u00a7I test 2.8 extended + NEW test 4.42; totals re-summed (163/1683, M6C-32 rule). The alternative arm (an unconditional cash_evaluated conjunct on every clear) was NOT taken: it would also block clears unrelated to any known residue; the chosen arm is equally fail-closed against the defect. Logged in \u00a7V.3."
+   }
+  },
+  {
+   "id": "RC-9",
+   "lens": "recritique (round 3)",
+   "severity": "major",
+   "title": "Flatten-probe PROBE_FAILED never reaches the deferral set: a kill-residual symbol with a failed flatten probe was adjustable over a possibly-live flatten (M6C-3-introduced gap + \u00a73 internal contradiction)",
+   "section": "\u00a73 / \u00a7D step 4 + pseudocode / FD-M6-13 / \u00a7H",
+   "problem": "\u00a73's generic failure row ('any | probe raised ... | symbol stays in the deferral set') is only satisfiable structurally for journaled orders (they remain in open_orders, picked up at step 4b). For flatten probes, the dedicated failed row OMITTED the deferral clause, and the pseudocode's PROBE_FAILED branch ('notes.append(...); completed = False; continue') bypasses resolve_order_probe entirely, so ProbeResolution.defer_symbols is unreachable; step 4b's deferral sources (open_orders \u222a _open_deny \u222a task) never contain kill-residual symbols. Result: when a flatten probe FAILS (BrokerTimeout / non-404 error-as-data) on a drifted residual symbol (e.g. a partially-filled flatten), the position lens plans and writes a position_adjust over a possibly-still-live flatten order in the same pass \u2014 exactly the hazard the adjacent live-flatten row exists to prevent. A failed probe is strictly LESS information than a live result, so fail-closed demands at least the same deferral. The contradiction between the generic 'any' row and the flatten-failed row also made the build ambiguous.",
+   "evidence": "Rev-3 contract lines 292 (generic 'any' row), 294 (live flatten \u21d2 defer_symbols), 295 (flatten failed \u21d2 note + completed=false ONLY); pseudocode :800-803 (PROBE_FAILED \u21d2 continue, before resolve_order_probe), :818-824 (step 4b sources). Repo: scripts/agent/risk/risk_kill.py:209-210 (residual_symbols \u21d2 self._residual, independent state \u2014 re-verified); scripts/agent/orchestrator.py:520, 691, 719, 1366 (every _open_deny.add site is a submit-recovery path; kill residuals never enter it \u2014 re-verified this session). The archive's M6C-3 resolution detail specifies the failed-flatten arm without a defer clause \u2014 the gap originated in the rev-2 fix.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "The orchestrator's PROBE_FAILED branch now adds the flatten symbol to the deferral set (defer.add(probe_id.removeprefix('flatten-')) when probe_id is not a journaled open order) \u2014 pinned in the \u00a7D step-4 prose and pseudocode; \u00a73 flatten-failed row amended to 'symbol joins the deferral set' (mirroring the live row, with the enforcement site named); \u00a73 generic-failed row clarified (journaled orders defer structurally via open_orders, flatten probes explicitly \u2014 removing the internal contradiction); FD-M6-13's deferral-set definition gains 'or FAILED'; NEW matrix row D35 (failed flatten + drifted qty \u21d2 adjust_deferred, NO position_adjust, completed=false, exit 3 per the D22 precedent) + NEW test 4.43. This supersedes the failed-flatten arm as described in the archive's M6C-3 resolution detail (that entry stands unedited as rev-2 history; the current normative text is the contract's). Logged in \u00a7V.3."
+   }
+  },
+  {
+   "id": "RC-10",
+   "lens": "recritique (round 3)",
+   "severity": "minor",
+   "title": "\u00a71 row 16 still claims goldens byte-compare risk.jsonl \u2014 the exact falsehood M6C-19 removed from V27 and row 11 (duplicate surface of RC-6)",
+   "section": "\u00a71 row 16",
+   "problem": "Row 16's 'Verified:' rationale read 'goldens compare orders/fills/positions(+risk) only (V27)'. The '(+risk)' is false against the repo and contradicts the contract's own corrected V27. Harm bounded \u2014 the row's conclusion (byte-stable, no regen) does not depend on it \u2014 but a frozen contract's 'Verified:' claims must verify. Same defect surface as RC-6 (reported by the re-critic under both the unverified-resolutions head and the per-row head).",
+   "evidence": "Rev-3 contract line 190 vs line 99. Repo: tests/agent/test_synthetic_e2e.py:40, :65-73; tests/agent/test_observe_e2e.py:131-146; tests/agent/test_risk_ledger.py:301 (see RC-6 \u2014 identical evidence, re-verified this session).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Applied via the RC-6 edit (one edit, both findings logged): '(+risk)' dropped from \u00a71 row 16. Logged in \u00a7V.3."
+   }
+  },
+  {
+   "id": "RC-11",
+   "lens": "recritique (round 3)",
+   "severity": "minor",
+   "title": "\u00a7A ReconcilePassResult.clean comment ('the latch-clearing condition') stale against the rev-2 clear rule",
+   "section": "\u00a7A ReconcilePassResult skeleton",
+   "problem": "The skeleton comment pinned clean as 'completed AND findings == () \u2014 the latch-clearing condition', but after M6C-1/M6C-22 the clear additionally requires phase \u2208 {sod,eod,cli}, a drift-free window, and NO frozen symbol (FD-M6-6, \u00a7B.1, \u00a7D step 7). Concretely divergent: a completed clean sod pass while a detector-frozen symbol's qty re-agrees (post-D29) \u2014 the comment says the latch clears, FD-M6-6/\u00a7D say it holds. Clean is necessary, not sufficient; the comment was accurate under rev 1's phase-blind clear and was not updated when the rule tightened. Low harm (the normative pseudocode and FD-M6-6 are explicit), but it is a frozen-skeleton comment a builder copies verbatim.",
+   "evidence": "Rev-3 contract line 384 vs FD-M6-6 (line 207), \u00a7B.1 (:586-588 'the ONLY latch-clearing row'), \u00a7D pseudocode :879-881 (four-conjunct clear). Archive M6C-1 evidence confirms rev 1's clear was phase-blind \u2014 the comment predates the tightened rule.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Skeleton comment amended: 'completed AND findings == () \u2014 NECESSARY, not sufficient, for a latch clear: the clear additionally requires phase \u2208 {sod, eod, cli}, a drift-free window, and NO frozen symbol (FD-M6-6, \u00a7B.1, \u00a7D step 7 \u2014 RC-11)'. Logged in \u00a7V.3."
+   }
+  },
+  {
+   "id": "RC-12",
+   "lens": "recritique (round 4)",
+   "severity": "major",
+   "title": "\u00a7G pinned CLI seam is STILL un-constructible after RC-7: the patch target 'the orchestrator module's AlpacaPaperBroker symbol' does not exist \u2014 the orchestrator imports AlpacaPaperBroker function-locally ('# lazy'), so the patched symbol is never consulted",
+   "section": "\u00a7G third sanctioned seam / \u00a7I file 5 / \u00a7V.3 RC-7 row / archive RC-7 + M6C-13",
+   "problem": "RC-7 fixed the both-kwargs ValueError but kept the rev-2 patch target. The contract pinned file-5 tests to 'patch the orchestrator module's AlpacaPaperBroker symbol to a factory' (and forbade any other monkeypatching of __main__/orchestrator internals). But scripts/agent/orchestrator.py has NO module-scope AlpacaPaperBroker name: the only occurrence is the function-local lazy import inside the paper ctor branch ('from agent.broker.alpaca import AlpacaPaperBroker  # lazy', :560), which re-resolves agent.broker.alpaca.AlpacaPaperBroker at call time. Setting agent.orchestrator.AlpacaPaperBroker = factory merely creates a dead module attribute; the paper branch still constructs the REAL broker with credentials_loader=, whose _build_real_client validates the fake creds' base_url then executes 'from alpaca.common.exceptions import APIError' \u2014 an ImportError in the stdlib-only offline suite (alpaca-py is not installed). Fail-safe direction (loud failure, no silent network), but the PINNED mechanism for the entire file-5 test surface is unimplementable as written \u2014 the exact defect class RC-7 was supposed to close. The \u00a7G text's own evidence line ('the orchestrator's paper branch CALLS the patched symbol with credentials_loader= (orchestrator.py:561-562)') is subtly false: :561-562 calls the name bound at :560 from agent.broker.alpaca, not any orchestrator-module attribute. The archive's RC-7 resolution detail and the amended M6C-13 entry carry the same wrong target.",
+   "evidence": "Contract (rev 4) :1069-1079 ('patch the orchestrator module's `AlpacaPaperBroker` symbol to a factory...' at :1070; 'This is the PINNED mechanism; no other monkeypatching of `__main__`/orchestrator internals is sanctioned' :1078-1079) and :1320-1324 (\u00a7I file-5 header: 'patched orchestrator-module `AlpacaPaperBroker` factory'). Repo: grep -n AlpacaPaperBroker scripts/agent/orchestrator.py \u21d2 ONLY :560-561 ('from agent.broker.alpaca import AlpacaPaperBroker  # lazy' inside the elif mode == \"paper\" branch, :557-562) \u2014 no module-scope binding exists (re-verified this session); scripts/agent/broker/alpaca.py:96-107 (ctor) and :177-195 (_build_real_client: base_url validated :184-189, then 'from alpaca.common.exceptions import APIError' at :191 \u2014 SDK import, 'never reached offline'). Archive RC-7 resolution.detail + amended M6C-13 detail (same target).",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "\u00a7G clause (b) re-pinned to the SOURCE-module attribute the lazy import resolves at call time: patch agent.broker.alpaca.AlpacaPaperBroker (e.g. unittest.mock.patch('agent.broker.alpaca.AlpacaPaperBroker', factory)) to the accepts-and-discards factory, which closes over the REAL class before patching and returns AlpacaPaperBroker(order_api=ScriptedOrderApi(...)) \u2014 RC-7's accepts/discards-credentials_loader semantics unchanged. The 'no other monkeypatching' sentence reworded to name exactly the two sanctioned patch points (__main__._SECRETS and agent.broker.alpaca.AlpacaPaperBroker); \u00a7I file-5 header mirrored (M6C-13/RC-7/RC-12); the contract's \u00a7V.3 RC-7 row gained a supersession note; the archive's RC-7 and M6C-13 resolution details amended in place (history retained inside both entries). Logged in \u00a7V.4."
+   }
+  },
+  {
+   "id": "RC-13",
+   "lens": "recritique (round 4)",
+   "severity": "minor",
+   "title": "D35 makes the FD-M6-11/\u00a7E exit-code clauses literally overlap with no pinned precedence: 'drift found this pass' (exit 1) and 'not completed' (exit 3) both match the failed-flatten row, and only the matrix \u2014 not the normative text \u2014 resolves it",
+   "section": "FD-M6-11 / \u00a7E return mapping / \u00a7H D35 (vs D22/D31) / \u00a7I 4.43",
+   "problem": "FD-M6-11/\u00a7E define exit 1 as 'drift found this pass OR a pre-existing latch still set' and exit 3 as 'could not reconcile / not completed', with no precedence rule. The D35 row (RC-9) is the first composition where DRIFT IS FOUND AND JOURNALED THIS PASS (the position_qty adjust_deferred finding) while the pass is simultaneously completed=false (failed flatten probe) \u2014 both clauses match literally, and D35 pins exit 3. D22 already pinned 3 over the 'pre-existing latch still set' arm, but D35 newly extends the collision to the 'drift found this pass' arm, so two faithful builders could pin different exits (1 vs 3) for the same frozen matrix row and byte-pin different file-5 goldens. Not fail-open (both exits are non-zero and the runbook alerts on ANY non-zero per M6C-25; the latch is set and re-surfaces as exit 1 on the next completed pass), but the frozen exit table should be deterministic without consulting matrix rows.",
+   "evidence": "Contract (rev 4) :216 (FD-M6-11: '1 = drift found this pass OR a pre-existing latch still set ... 3 = could not reconcile') and :1017-1019 (\u00a7E return mapping, same unprioritized clauses) vs :1136 (D35: kind position_qty journaled, action adjust_deferred, 'set' latch, CLI exit 3) and :1123 (D22: 'unchanged (a pre-set latch survives) | 3' \u2014 the pre-existing half of the same overlap); :1315-1318 (test 4.43 pins 'completed=false (exit 3 at the CLI)').",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "FD-M6-11 gains the normative precedence sentence: completed=false \u21d2 exit 3 takes precedence over exit 1 regardless of drift findings journaled this pass or any latch state \u2014 could-not-fully-check outranks drift-found; the drift is journaled+latched and re-surfaces as exit 1 on the next completed pass; both codes alert per M6C-25 \u2014 consistent with D22/D31/D35 as already pinned, and extended to _cmd_paper's SOD mapping (3 over 1 on an incomplete SOD pass, M6C-23). \u00a7E return mapping mirrored; \u00a7H D35 exit cell cites the precedence; \u00a7I test 4.43 pins it explicitly (the drift journaled this pass does NOT yield exit 1). No fail-closed behavior touched: both arms were already non-zero + alerting. Logged in \u00a7V.4."
+   }
+  },
+  {
+   "id": "RC-14",
+   "lens": "recritique-r5",
+   "severity": "minor",
+   "title": "outstanding_cash_residue typed Optional[dict] in the fold/step-6.5 but assigned a DriftFinding in step-5 pseudocode \u2014 _carried_residue_finding received two incompatible shapes",
+   "section": "\u00a7B.1 / \u00a7B.1b / \u00a7D step 5+6.5",
+   "problem": "RC-8's carry-forward field was typed Optional[dict] (journal-row content) by the fold contract and seeded as a dict at step 6.5, while step-5 pseudocode assigned diff_cash's Optional[DriftFinding] return value; the carried-residue re-journal consumer therefore received a dict on the restart-rehydrate path but a frozen dataclass on the same-run path (residue['local'] vs residue.local). Values byte-identical either way (no determinism or safety impact), but a frozen-contract type contradiction in a load-bearing field a W4 builder copies verbatim.",
+   "evidence": "Contract (rev 5): line 570 fold typing Optional[dict]; line 631 \u00a7B.1b zero state; line 703 step-6.5 dict seed; line 874-875 consumer; line 891 DriftFinding assignment; \u00a7A diff_cash -> Optional[DriftFinding]; DriftFinding frozen dataclass \u00a7A:344-355.",
+   "resolution": {
+    "disposition": "applied",
+    "detail": "Rev 6: ONE shape pinned \u2014 inside the orchestrator the field is ALWAYS Optional[DriftFinding]. Step 6.5 projects via new pure helper _residue_from_row(row: Optional[dict]) -> Optional[DriftFinding] (None-propagating, direct dataclass construction from kind/symbol/field/local/broker/diff/action + optional ids; NOT make_finding \u2014 row money values are already-validated canonical Decimal strings, no typed boundary re-crossed). \u00a7B.1 fold comment states fold returns the ROW DICT and the orchestrator seam projects (fold contract unchanged). _carried_residue_finding(residue: DriftFinding, reconcile_id) -> DriftFinding signature pinned. Determinism-neutrality stated. \u00a7V.5 added; header bumped to rev 6 READY-TO-BUILD."
+   }
+  }
+ ]
+}
