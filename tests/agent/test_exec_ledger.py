@@ -33,6 +33,7 @@ from agent.exec_ledger import (
     EVT_ORDER_SUBMITTED,
     EVT_ORDER_TERMINAL,
     EVT_PNL_SNAPSHOT,
+    EVT_POSITION_ADJUST,
     EVT_POSITION_CLOSE,
     EVT_POSITION_OPEN,
     EVT_POST_SUBMIT_CANCEL_ATTEMPT,
@@ -66,6 +67,8 @@ PF = "pf-preflight1"
 RV = "rv-verdict1"
 MF = "mf-modeled1"
 POS = "pos-position1"
+RC = "rc-reconcile1"
+ADJ = "adj-position1"
 
 _JOURNAL_KEYS = {"event_type", "run_id", "seq", "ts_utc", "hash",
                  "decision_id", "order_id"}
@@ -222,6 +225,11 @@ def _good_calls():
             realized_broker_pnl=BrokerUSD("80.00"),
             realized_modeled_pnl=ModeledUSD("73.04"), fees_assessed=_fees(),
             reason="strategy_exit", decision_id=DEC2, order_id=ORD2)),
+        (STREAM_POSITIONS, "record_position_adjust", dict(
+            adjust_id=ADJ, reconcile_id=RC, position_id=POS, symbol="AAPL",
+            prev_qty=Decimal("100"), adjusted_qty=Decimal("80"),
+            prev_broker_cost_usd=BrokerUSD("10020.00"),
+            adjusted_broker_cost_usd=BrokerUSD("8016.00"))),
     ]
 
 
@@ -288,6 +296,10 @@ _EXPECTED_PAYLOAD = {
         "residual_broker_cost_usd", "closed_slice_modeled_cost_usd",
         "residual_modeled_cost_usd", "realized_broker_pnl",
         "realized_modeled_pnl", "fees_assessed", "reason"},
+    EVT_POSITION_ADJUST: {
+        "adjust_id", "reconcile_id", "position_id", "symbol", "prev_qty",
+        "adjusted_qty", "prev_broker_cost_usd",
+        "adjusted_broker_cost_usd", "basis"},
 }
 
 _REPLAY = {STREAM_ORDERS: replay_orders, STREAM_FILLS: replay_fills,
@@ -393,6 +405,7 @@ class TestRecordRoundTrips(unittest.TestCase):
         self.assertEqual(EVT_BROKER_FILL, "broker_fill")
         self.assertEqual(EVT_MODELED_EXECUTION_FILL, "modeled_execution_fill")
         self.assertEqual(EVT_POSITION_CLOSE, "position_close")
+        self.assertEqual(EVT_POSITION_ADJUST, "position_adjust")
 
 
 class TestFieldSetExactness(unittest.TestCase):
@@ -489,9 +502,25 @@ class TestVocabularyAndShape(unittest.TestCase):
             ("record_position_open", dict(position_id="position-1")),
             ("record_position_open", dict(opening_order_id="b-1")),
             ("record_position_close", dict(closing_order_id="b-1")),
+            ("record_position_adjust", dict(adjust_id="adjust-1")),
+            ("record_position_adjust", dict(reconcile_id="reconcile-1")),
+            ("record_position_adjust", dict(position_id="position-1")),
         ]
         for method, bad in cases:
             self._raises(method, self._kwargs(method), **bad)
+
+    def test_position_adjust_refuses_order_lifecycle_kwargs(self):
+        good = self._kwargs("record_position_adjust")
+        with TemporaryDirectory() as tmpdir:
+            ledger, paths = _ledger(tmpdir)
+            with self.assertRaises(TypeError):
+                ledger.record_position_adjust(**good, decision_id=DEC)
+            with self.assertRaises(TypeError):
+                ledger.record_position_adjust(**good, order_id=ORD)
+            row = ledger.record_position_adjust(**good)
+            self.assertNotIn("decision_id", row)
+            self.assertNotIn("order_id", row)
+            self.assertEqual(row["basis"], "broker_truth")
 
     def test_synthetic_order_id_prefix_accepted(self):
         with TemporaryDirectory() as tmpdir:
@@ -708,6 +737,42 @@ class TestMoneyLineageWall(unittest.TestCase):
                     modeled_cost_usd=None, fee_assumption=_fees(),
                     opening_order_id=ORD, strategy_id="s1",
                     opened_ts_utc="t", decision_id=DEC, order_id=ORD)
+            with self.assertRaises(TypeError):
+                ledger.record_position_adjust(
+                    adjust_id=ADJ, reconcile_id=RC, position_id=POS,
+                    symbol="AAPL", prev_qty=Decimal("100"),
+                    adjusted_qty=Decimal("80"),
+                    prev_broker_cost_usd=ModeledUSD("10020.00"),
+                    adjusted_broker_cost_usd=BrokerUSD("8016.00"))
+            with self.assertRaises(TypeError):
+                ledger.record_position_adjust(
+                    adjust_id=ADJ, reconcile_id=RC, position_id=POS,
+                    symbol="AAPL", prev_qty=Decimal("100"),
+                    adjusted_qty=Decimal("80"),
+                    prev_broker_cost_usd=BrokerUSD("10020.00"),
+                    adjusted_broker_cost_usd=Decimal("8016.00"))
+
+    def test_position_adjust_qty_validation_leaves_stream_empty(self):
+        with TemporaryDirectory() as tmpdir:
+            ledger, paths = _ledger(tmpdir)
+            good = dict(
+                adjust_id=ADJ, reconcile_id=RC, position_id=POS, symbol="AAPL",
+                prev_qty=Decimal("100"), adjusted_qty=Decimal("80"),
+                prev_broker_cost_usd=BrokerUSD("10020.00"),
+                adjusted_broker_cost_usd=BrokerUSD("8016.00"))
+            for bad in (
+                {"prev_qty": Decimal("-1")},
+                {"adjusted_qty": Decimal("-1")},
+                {"prev_qty": True},
+                {"adjusted_qty": 80.0},
+                {"adjusted_qty": Decimal("NaN")},
+            ):
+                broken = dict(good)
+                broken.update(bad)
+                with self.assertRaises((ExecError, ValueError)):
+                    ledger.record_position_adjust(**broken)
+            self.assertFalse(paths["positions"].exists() and
+                             paths["positions"].read_bytes() != b"")
 
     def test_plain_decimal_divergence_slots_accept_any_decimal(self):
         # §P.2 pins divergence outputs as plain Decimal — the newtypes are

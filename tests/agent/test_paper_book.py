@@ -14,7 +14,7 @@ pattern).
 Invariants: S5, S2, S3.
 """
 import unittest
-from dataclasses import replace
+from dataclasses import asdict, replace
 from decimal import Context, Decimal, ROUND_HALF_EVEN, localcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,7 +26,7 @@ from agent.exec_reasons import ExecError
 from agent.fees import FEE_MODEL_VERSION, TAF_CAP_PER_TRADE_USD
 from agent.paper_book import PaperBook, PaperPosition
 from agent.quote_quality import QuoteSnapshot
-from agent.serializer import BrokerUSD, ModeledUSD, row_hash
+from agent.serializer import BrokerUSD, ModeledUSD, dumps, row_hash
 from recorder.persistence import EventWriter
 from tests.lib.alpaca_fixtures import order_fill_sequence
 
@@ -878,6 +878,17 @@ class TestRehydrate(unittest.TestCase):
                 "closed_slice_modeled_cost_usd": None,
                 "residual_modeled_cost_usd": None}
 
+    def _adjust_row(self, seq, pid, *, prev_qty="30", adjusted_qty="20",
+                    prev_cost="3003.00", adjusted_cost="2002.00",
+                    adjust_id="adj-1"):
+        return {"event_type": "position_adjust", "seq": seq,
+                "adjust_id": adjust_id, "reconcile_id": "rc-1",
+                "position_id": pid, "symbol": "AAPL",
+                "prev_qty": prev_qty, "adjusted_qty": adjusted_qty,
+                "prev_broker_cost_usd": prev_cost,
+                "adjusted_broker_cost_usd": adjusted_cost,
+                "basis": "broker_truth"}
+
     def test_baked_opening_fill_with_position_id_is_watermark_skipped(self):
         # Even if the orchestrator stamped the OPENING fill with the (derivable)
         # position_id, cum_filled_qty <= position_open.qty skips it: the open
@@ -973,6 +984,124 @@ class TestRehydrate(unittest.TestCase):
         self.assertEqual(forward, backward)
         self.assertEqual(str(forward[pid].qty), "60")
         self.assertEqual(str(forward[pid].broker_cost_usd), "6011.60")
+
+    def test_position_adjust_fold_qty_cost_combined_cost_only_and_close(self):
+        pid = "pos-x"
+        rehydrated = PaperBook.rehydrate(
+            [self._open_row(1, pid),
+             self._adjust_row(2, pid, prev_qty="30", adjusted_qty="20",
+                              prev_cost="3003.00", adjusted_cost="2002.00"),
+             self._adjust_row(3, pid, prev_qty="20", adjusted_qty="20",
+                              prev_cost="2002.00", adjusted_cost="1999.99"),
+             self._adjust_row(4, pid, prev_qty="20", adjusted_qty="0",
+                              prev_cost="1999.99", adjusted_cost="0.00")],
+            [])
+        self.assertEqual(rehydrated[pid].status, "closed")
+        self.assertEqual(str(rehydrated[pid].qty), "0")
+        self.assertEqual(str(rehydrated[pid].broker_cost_usd), "0.00")
+
+    def test_position_adjust_prev_verification_and_decimal_value_equality(self):
+        pid = "pos-x"
+        value_equal = PaperBook.rehydrate(
+            [self._open_row(1, pid, qty="30.00", cost="3003.000"),
+             self._adjust_row(2, pid, prev_qty="30", adjusted_qty="31",
+                              prev_cost="3003.00", adjusted_cost="3103.10")],
+            [])
+        self.assertEqual(str(value_equal[pid].qty), "31")
+        self.assertEqual(str(value_equal[pid].broker_cost_usd), "3103.10")
+
+        with self.assertRaises(ExecError):
+            PaperBook.rehydrate(
+                [self._open_row(1, pid),
+                 self._adjust_row(2, pid, prev_qty="29.99")], [])
+        with self.assertRaises(ExecError):
+            PaperBook.rehydrate(
+                [self._open_row(1, pid),
+                 self._adjust_row(2, pid, prev_cost="3003.01")], [])
+
+    def test_position_adjust_seq_order_unbricks_close_after_adjustment(self):
+        pid = "pos-x"
+        # open 30 -> adjust to broker truth 20 @ 2002.00 -> close 5 against
+        # the adjusted basis. A restart must verify the close against 2002.00,
+        # not the original open cost.
+        rehydrated = PaperBook.rehydrate(
+            [self._open_row(1, pid),
+             self._adjust_row(2, pid, prev_qty="30", adjusted_qty="20",
+                              prev_cost="3003.00", adjusted_cost="2002.00"),
+             self._close_row(3, pid, exit_qty="5", slice_b="500.50",
+                             resid_b="1501.50")],
+            [])
+        self.assertEqual(rehydrated[pid].status, "open")
+        self.assertEqual(str(rehydrated[pid].qty), "15")
+        self.assertEqual(str(rehydrated[pid].broker_cost_usd), "1501.50")
+
+    def test_position_adjust_does_not_reset_fill_watermark(self):
+        pid = "pos-x"
+        # The opening row seeds the cum watermark at 30. An adjust down to 20
+        # must not lower it, or a duplicated old opening fill at cum=30 would
+        # be folded a second time after restart.
+        rehydrated = PaperBook.rehydrate(
+            [self._open_row(1, pid),
+             self._adjust_row(2, pid, prev_qty="30", adjusted_qty="20",
+                              prev_cost="3003.00", adjusted_cost="2002.00")],
+            [self._fill_row(1, pid, delta_qty="30", delta_cost="3003.00",
+                            cum="30")])
+        self.assertEqual(str(rehydrated[pid].qty), "20")
+        self.assertEqual(str(rehydrated[pid].broker_cost_usd), "2002.00")
+
+    def test_position_adjust_bad_seeded_rows_raise(self):
+        pid = "pos-x"
+        with self.assertRaises(ExecError):
+            PaperBook.rehydrate(
+                [self._adjust_row(1, "pos-ghost")], [])
+        with self.assertRaises(ExecError):
+            PaperBook.rehydrate(
+                [self._open_row(1, pid),
+                 self._adjust_row(2, pid, adjusted_qty="-1")], [])
+        with self.assertRaises(ExecError):
+            PaperBook.rehydrate(
+                [self._open_row(1, pid, qty="1", cost="10.00"),
+                 self._close_row(2, pid, exit_qty="1", slice_b="10.00",
+                                 resid_b="0.00"),
+                 self._adjust_row(3, pid, prev_qty="0", adjusted_qty="1",
+                                  prev_cost="0.00", adjusted_cost="10.00")],
+                [])
+
+    def test_apply_position_adjust_writes_then_commits_and_rehydrates_byte_exact(self):
+        with TemporaryDirectory() as tmpdir:
+            book, _, paths = _book(tmpdir)
+            pos = _open_aapl(book, fills=[_fill(Decimal("30"),
+                                                Decimal("3003.00"))])
+            live = book.apply_position_adjust(
+                position_id=pos.position_id, adjusted_qty=Decimal("20"),
+                adjusted_broker_cost_usd=BrokerUSD("2002.00"),
+                adjust_id="adj-1", reconcile_id="rc-1")
+            self.assertEqual(str(live.qty), "20")
+            self.assertEqual(str(live.broker_cost_usd), "2002.00")
+            self.assertEqual(str(live.modeled_cost_usd), "10018.00")
+
+            rows = replay_positions(paths["positions"])
+            self.assertEqual(rows[-1]["event_type"], "position_adjust")
+            self.assertNotIn("decision_id", rows[-1])
+            self.assertNotIn("order_id", rows[-1])
+            folded = PaperBook.rehydrate(rows, replay_fills(paths["fills"]))
+            self.assertEqual(dumps(asdict(folded[pos.position_id])),
+                             dumps(asdict(live)))
+
+    def test_apply_position_adjust_journal_failure_leaves_book_unchanged(self):
+        with TemporaryDirectory() as tmpdir:
+            book, _, paths = _book(tmpdir)
+            pos = _open_aapl(book, fills=[_fill(Decimal("30"),
+                                                Decimal("3003.00"))])
+            before = book.position(pos.position_id)
+            rows_before = list(replay_positions(paths["positions"]))
+            with self.assertRaises(ExecError):
+                book.apply_position_adjust(
+                    position_id=pos.position_id, adjusted_qty=Decimal("20"),
+                    adjusted_broker_cost_usd=BrokerUSD("2002.00"),
+                    adjust_id="bad-1", reconcile_id="rc-1")
+            self.assertEqual(book.position(pos.position_id), before)
+            self.assertEqual(replay_positions(paths["positions"]), rows_before)
 
 
 class TestBookGuards(unittest.TestCase):

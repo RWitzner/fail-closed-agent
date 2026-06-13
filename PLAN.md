@@ -113,7 +113,15 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
     `identity_note` cent boundary. Verification: targeted broker-reconcile test file green, full
     suite green (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`), `git diff --check`
     clean, and W2 diff audited to exactly the two W2 files.
-  - **Next:** W3 (PaperBook fold) → W4 (orchestrator wiring) → W5 (CLI/canary/purity, suite
+  - **W3 DONE (suite 1599 = 1590 + 9):** positions-stream `EVT_POSITION_ADJUST` +
+    `record_position_adjust` in `scripts/agent/exec_ledger.py`, and `PaperBook.rehydrate` /
+    `apply_position_adjust` in `scripts/agent/paper_book.py`. Covers ledger field-set/id/lineage/qty
+    validation, no order-lifecycle kwargs, qty/cost/combined/cost-only/zero adjust folds, prev-state
+    verification with Decimal value equality, close-after-adjust brick trap, unchanged fill watermark,
+    bad seeded rows, modeled-lineage preservation, and write-ahead no-commit on ledger refusal.
+    Verification: targeted exec-ledger + paper-book tests green, reconcile/ledger/book regression green,
+    and full suite green (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
+  - **Next:** W4 (orchestrator wiring) → W5 (CLI/canary/purity, suite
     ≈1683) → W6 (multi-lens repro-gated adversarial review, separate authoring/review). Each wave:
     build agent (NO git) → own suite run + git-audit → commit.
 
@@ -156,7 +164,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF; nothing merged to main.
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation). ← **in progress on `m6-reconcile`** —
   contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
-  1590 tests); W3–W6 remain (see status above).
+  1590 tests), W3 built (1599 tests); W4–W6 remain (see status above).
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. The M7 contract must pin
   the paper-phase success criteria (see "Edge before live" locked decision).
 - **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned

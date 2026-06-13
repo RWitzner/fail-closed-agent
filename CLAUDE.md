@@ -13,8 +13,8 @@ design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`. Build is sta
 **State:** M0–M5 done (M5 hardened, 1520 tests). **M6 IN PROGRESS on branch `m6-reconcile`** (stacked on
 `m3-signal`→`m2-market-state`; nothing merged to `main`): contract frozen rev 6 READY-TO-BUILD (`1e96d5d`,
 48-finding critic archive, 4 re-critique rounds to convergence); W1 built+committed (`2c2b6ed`, 1574 tests);
-W2 pure diff core built+committed (`436f7b0`, 1590 tests); next is W3 (PaperBook `position_adjust` fold), then
-W4–W5 per contract §J and W6 = adversarial review. M1 tier-2 (2b live-verified) stays deferred (no paid
+W2 pure diff core built+committed (`436f7b0`, 1590 tests); W3 PaperBook `position_adjust` fold built (1599 tests);
+next is W4 (orchestrator wiring), then W5 per contract §J and W6 = adversarial review. M1 tier-2 (2b live-verified) stays deferred (no paid
 live realtime subscription). **Plan locked (2026-06-10): finish M6→M7, then a full autonomous paper
 edge-validation phase (success criteria pinned in advance, in the M7 contract) before any M8/live step — see
 PLAN.md "Edge before live". Merge-to-main decision still open.**

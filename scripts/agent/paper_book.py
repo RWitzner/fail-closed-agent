@@ -138,6 +138,7 @@ _EVT_POSITION_OPEN = "position_open"
 _EVT_MARK = "mark"
 _EVT_PNL_SNAPSHOT = "pnl_snapshot"
 _EVT_POSITION_CLOSE = "position_close"
+_EVT_POSITION_ADJUST = "position_adjust"
 _EVT_BROKER_FILL = "broker_fill"
 
 
@@ -284,6 +285,15 @@ def _row_decimal(value, *, field: str, allow_none: bool = False) -> Optional[Dec
                     f"(got {type(value).__name__})")
 
 
+def _row_nonnegative_decimal(value, *, field: str) -> Decimal:
+    parsed = _row_decimal(value, field=field)
+    if not parsed.is_finite():
+        raise ExecError(f"{field}: non-finite Decimal not allowed: {parsed}")
+    if parsed < 0:
+        raise ExecError(f"{field}: must be >= 0, got {parsed}")
+    return parsed
+
+
 # --- §K PaperPosition ------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -413,6 +423,31 @@ class PaperBook:
             new_qty = pos.qty + delta_qty
         updated = replace(pos, qty=new_qty,
                           broker_cost_usd=as_broker_usd(BrokerUSD(new_cost)))
+        self._positions[position_id] = updated
+        return updated
+
+    def apply_position_adjust(self, *, position_id: str, adjusted_qty: Decimal,
+                              adjusted_broker_cost_usd: BrokerUSD,
+                              adjust_id: str,
+                              reconcile_id: str) -> PaperPosition:
+        """Apply an M6 broker-truth correction after the ledger write succeeds.
+        Only qty and broker_cost_usd move; modeled lineage remains byte-identical
+        (FD-M6-10)."""
+        pos = self._open(position_id)
+        row = self._ledger.record_position_adjust(
+            adjust_id=adjust_id, reconcile_id=reconcile_id,
+            position_id=position_id, symbol=pos.symbol, prev_qty=pos.qty,
+            adjusted_qty=adjusted_qty,
+            prev_broker_cost_usd=pos.broker_cost_usd,
+            adjusted_broker_cost_usd=adjusted_broker_cost_usd)
+        new_qty = _row_nonnegative_decimal(row["adjusted_qty"],
+                                           field="adjusted_qty")
+        adjusted_cost = _row_decimal(row["adjusted_broker_cost_usd"],
+                                     field="adjusted_broker_cost_usd")
+        updated = replace(
+            pos, qty=new_qty,
+            broker_cost_usd=as_broker_usd(BrokerUSD(adjusted_cost)),
+            status=("closed" if new_qty == 0 else "open"))
         self._positions[position_id] = updated
         return updated
 
@@ -581,7 +616,7 @@ class PaperBook:
         Directly pluggable as `rehydrate_exec_state(book_rehydrate=...)`."""
         positions: Dict[str, PaperPosition] = {}
         watermark: Dict[str, Decimal] = {}
-        close_rows = []
+        post_fill_rows = []
 
         for row in sorted(position_rows, key=lambda r: r["seq"]):
             event_type = row.get("event_type")
@@ -620,8 +655,8 @@ class PaperBook:
                 watermark[pid] = positions[pid].qty
             elif event_type in (_EVT_MARK, _EVT_PNL_SNAPSHOT):
                 continue   # derived state — recomputed live, never folded
-            elif event_type == _EVT_POSITION_CLOSE:
-                close_rows.append(row)
+            elif event_type in (_EVT_POSITION_CLOSE, _EVT_POSITION_ADJUST):
+                post_fill_rows.append(row)
             else:
                 raise ExecError(f"out-of-vocab positions-stream event_type: "
                                 f"{event_type!r}")
@@ -657,54 +692,88 @@ class PaperBook:
                 pos, qty=new_qty,
                 broker_cost_usd=as_broker_usd(BrokerUSD(new_cost)))
 
-        # Closes: subtract the journaled slice, verify the journaled residual.
-        for row in close_rows:
+        # Closes/adjusts: both are stream-sequenced post-fill position effects.
+        for row in sorted(post_fill_rows, key=lambda r: r["seq"]):
             pid = row["position_id"]
             pos = positions.get(pid)
             if pos is None:
-                raise ExecError(f"position_close references unknown position "
-                                f"{pid!r}")
-            if pos.status == "closed":
-                continue   # terminal-skip
-            exit_qty = _row_decimal(row["exit_qty"], field="exit_qty")
-            with localcontext(_DECIMAL_CTX):
-                new_qty = pos.qty - exit_qty
-            if new_qty < 0:
-                raise ExecError(f"position_close: exit_qty {exit_qty} exceeds "
-                                f"folded qty {pos.qty} for {pid!r}")
-            slice_broker = _row_decimal(row["closed_slice_broker_cost_usd"],
-                                        field="closed_slice_broker_cost_usd")
-            residual_broker = _row_decimal(row["residual_broker_cost_usd"],
-                                           field="residual_broker_cost_usd")
-            with localcontext(_DECIMAL_CTX):
-                folded_broker = pos.broker_cost_usd - slice_broker
-            if folded_broker != residual_broker:
-                raise ExecError(
-                    f"position_close residual drift for {pid!r}: folded "
-                    f"{folded_broker} != journaled {residual_broker} "
-                    f"(fail-closed)")
-            slice_modeled = _row_decimal(row["closed_slice_modeled_cost_usd"],
-                                         field="closed_slice_modeled_cost_usd",
-                                         allow_none=True)
-            residual_modeled = _row_decimal(row["residual_modeled_cost_usd"],
-                                            field="residual_modeled_cost_usd",
-                                            allow_none=True)
-            if (pos.modeled_cost_usd is None) != (slice_modeled is None) or \
-                    (slice_modeled is None) != (residual_modeled is None):
-                raise ExecError(f"position_close modeled-lineage nullity "
-                                f"mismatch for {pid!r}")
-            if slice_modeled is not None:
+                raise ExecError(f"{row.get('event_type')} references unknown "
+                                f"position {pid!r}")
+            event_type = row.get("event_type")
+            if event_type == _EVT_POSITION_CLOSE:
+                if pos.status == "closed":
+                    continue   # terminal-skip
+                exit_qty = _row_decimal(row["exit_qty"], field="exit_qty")
                 with localcontext(_DECIMAL_CTX):
-                    folded_modeled = pos.modeled_cost_usd - slice_modeled
-                if folded_modeled != residual_modeled:
+                    new_qty = pos.qty - exit_qty
+                if new_qty < 0:
+                    raise ExecError(f"position_close: exit_qty {exit_qty} "
+                                    f"exceeds folded qty {pos.qty} for {pid!r}")
+                slice_broker = _row_decimal(
+                    row["closed_slice_broker_cost_usd"],
+                    field="closed_slice_broker_cost_usd")
+                residual_broker = _row_decimal(
+                    row["residual_broker_cost_usd"],
+                    field="residual_broker_cost_usd")
+                with localcontext(_DECIMAL_CTX):
+                    folded_broker = pos.broker_cost_usd - slice_broker
+                if folded_broker != residual_broker:
                     raise ExecError(
-                        f"position_close modeled residual drift for {pid!r}: "
-                        f"folded {folded_modeled} != journaled "
-                        f"{residual_modeled}")
-            positions[pid] = replace(
-                pos, qty=new_qty,
-                broker_cost_usd=as_broker_usd(BrokerUSD(residual_broker)),
-                modeled_cost_usd=(None if residual_modeled is None
-                                  else ModeledUSD(residual_modeled)),
-                status=("closed" if new_qty == 0 else "open"))
+                        f"position_close residual drift for {pid!r}: folded "
+                        f"{folded_broker} != journaled {residual_broker} "
+                        f"(fail-closed)")
+                slice_modeled = _row_decimal(
+                    row["closed_slice_modeled_cost_usd"],
+                    field="closed_slice_modeled_cost_usd", allow_none=True)
+                residual_modeled = _row_decimal(
+                    row["residual_modeled_cost_usd"],
+                    field="residual_modeled_cost_usd", allow_none=True)
+                if (pos.modeled_cost_usd is None) != (slice_modeled is None) or \
+                        (slice_modeled is None) != (residual_modeled is None):
+                    raise ExecError(f"position_close modeled-lineage nullity "
+                                    f"mismatch for {pid!r}")
+                if slice_modeled is not None:
+                    with localcontext(_DECIMAL_CTX):
+                        folded_modeled = pos.modeled_cost_usd - slice_modeled
+                    if folded_modeled != residual_modeled:
+                        raise ExecError(
+                            f"position_close modeled residual drift for "
+                            f"{pid!r}: folded {folded_modeled} != journaled "
+                            f"{residual_modeled}")
+                positions[pid] = replace(
+                    pos, qty=new_qty,
+                    broker_cost_usd=as_broker_usd(BrokerUSD(residual_broker)),
+                    modeled_cost_usd=(None if residual_modeled is None
+                                      else ModeledUSD(residual_modeled)),
+                    status=("closed" if new_qty == 0 else "open"))
+            elif event_type == _EVT_POSITION_ADJUST:
+                if pos.status == "closed":
+                    raise ExecError(f"position_adjust targets closed position "
+                                    f"{pid!r}")
+                if row["symbol"] != pos.symbol:
+                    raise ExecError(f"position_adjust symbol mismatch for "
+                                    f"{pid!r}: {row['symbol']!r} != "
+                                    f"{pos.symbol!r}")
+                prev_qty = _row_nonnegative_decimal(row["prev_qty"],
+                                                    field="prev_qty")
+                adjusted_qty = _row_nonnegative_decimal(row["adjusted_qty"],
+                                                        field="adjusted_qty")
+                prev_cost = _row_decimal(row["prev_broker_cost_usd"],
+                                         field="prev_broker_cost_usd")
+                adjusted_cost = _row_decimal(
+                    row["adjusted_broker_cost_usd"],
+                    field="adjusted_broker_cost_usd")
+                if prev_qty != pos.qty:
+                    raise ExecError(
+                        f"position_adjust qty drift for {pid!r}: folded "
+                        f"{pos.qty} != journaled prev {prev_qty}")
+                if prev_cost != pos.broker_cost_usd:
+                    raise ExecError(
+                        f"position_adjust cost drift for {pid!r}: folded "
+                        f"{pos.broker_cost_usd} != journaled prev "
+                        f"{prev_cost}")
+                positions[pid] = replace(
+                    pos, qty=adjusted_qty,
+                    broker_cost_usd=as_broker_usd(BrokerUSD(adjusted_cost)),
+                    status=("closed" if adjusted_qty == 0 else "open"))
         return positions

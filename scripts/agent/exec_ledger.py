@@ -124,6 +124,7 @@ __all__ = [
     "EVT_MARK",
     "EVT_PNL_SNAPSHOT",
     "EVT_POSITION_CLOSE",
+    "EVT_POSITION_ADJUST",
     "ExecLedger",
     "as_modeled_usd",
     "replay_orders",
@@ -160,6 +161,7 @@ EVT_POSITION_OPEN = "position_open"
 EVT_MARK = "mark"
 EVT_PNL_SNAPSHOT = "pnl_snapshot"
 EVT_POSITION_CLOSE = "position_close"
+EVT_POSITION_ADJUST = "position_adjust"
 
 # Frozen §P.2 provenance sub-dict key set (resolution 3); + book_hash where noted.
 _PROVENANCE_KEYS = ("dataset", "schema", "ts_event_utc", "ts_recv_utc",
@@ -181,6 +183,8 @@ _PREFLIGHT_ID_PREFIXES = ("pf-",)
 _RISK_VERDICT_ID_PREFIXES = ("rv-",)
 _MODELED_FILL_ID_PREFIXES = ("mf-",)
 _POSITION_ID_PREFIXES = ("pos-",)
+_RECONCILE_ID_PREFIXES = ("rc-",)
+_ADJUST_ID_PREFIXES = ("adj-",)
 
 # Pinned §P.2 literals (resolution 6).
 _THRESHOLD_BPS = "10"
@@ -238,6 +242,13 @@ def _exact_decimal(value, *, field: str, allow_none: bool = False) -> Optional[D
         raise ValueError(f"{field}: must be a Decimal (got {type(value).__name__}={value!r})")
     if not value.is_finite():
         raise ValueError(f"{field}: non-finite Decimal not allowed ({value!r})")
+    return value
+
+
+def _nonnegative_decimal(value, *, field: str) -> Decimal:
+    value = _exact_decimal(value, field=field)
+    if value < 0:
+        raise ExecError(f"{field}: must be >= 0 (got {value})")
     return value
 
 
@@ -445,7 +456,7 @@ def _attr(obj, name: str, *, what: str):
 
 class ExecLedger:
     """One kwarg-only record_* method per §P.2 event type (10 on orders.jsonl,
-    4 on fills.jsonl, 4 on positions.jsonl); each validates the EXACT field set
+    4 on fills.jsonl, 5 on positions.jsonl); each validates the EXACT field set
     (kwarg-only signatures: missing/extra => TypeError), the per-field vocab /
     type rules, the money-lineage walls, and refuses `_RESERVED` collisions —
     all BEFORE anything is written (a raise leaves the stream untouched)."""
@@ -1009,6 +1020,32 @@ class ExecLedger:
                                     prefixes=_DECISION_ID_PREFIXES),
             order_id=_require_id(order_id, field="order_id",
                                  prefixes=_ORDER_ID_PREFIXES))
+
+    def record_position_adjust(self, *, adjust_id, reconcile_id, position_id,
+                               symbol, prev_qty, adjusted_qty,
+                               prev_broker_cost_usd,
+                               adjusted_broker_cost_usd) -> dict:
+        """Journal an M6 reconcile broker-truth correction. This is not an
+        order lifecycle row, so it deliberately writes no journal-level
+        decision_id/order_id kwargs."""
+        body = {
+            "adjust_id": _require_id(adjust_id, field="adjust_id",
+                                     prefixes=_ADJUST_ID_PREFIXES),
+            "reconcile_id": _require_id(reconcile_id, field="reconcile_id",
+                                        prefixes=_RECONCILE_ID_PREFIXES),
+            "position_id": _require_id(position_id, field="position_id",
+                                       prefixes=_POSITION_ID_PREFIXES),
+            "symbol": _require_str(symbol, field="symbol"),
+            "prev_qty": _nonnegative_decimal(prev_qty, field="prev_qty"),
+            "adjusted_qty": _nonnegative_decimal(adjusted_qty,
+                                                 field="adjusted_qty"),
+            "prev_broker_cost_usd": _broker_usd(
+                prev_broker_cost_usd, field="prev_broker_cost_usd"),
+            "adjusted_broker_cost_usd": _broker_usd(
+                adjusted_broker_cost_usd, field="adjusted_broker_cost_usd"),
+            "basis": "broker_truth",
+        }
+        return self._record(self._positions, EVT_POSITION_ADJUST, body)
 
 
 # --- replay (S3 — the shared code path, semantics inherited verbatim) ----------
