@@ -21,6 +21,13 @@ _ENTRY_MID = Decimal("100.000000")
 _QTY = Decimal("2")
 _FEES = Decimal("0.100000")
 _USD_QUANTUM = Decimal("0.000001")
+_FIXTURE_SESSION_DATES = (
+    "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05",
+    "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12",
+    "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-19",
+    "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26",
+)
+_FIXTURE_TRADE_COUNT = 30
 
 
 class ArtifactWriteRefused(ValueError):
@@ -46,8 +53,12 @@ def _decimal_from_string(value: str, *, name: str) -> Decimal:
     return parsed
 
 
-def _fixture_trade(net_pnl_usd: Decimal) -> BacktestTrade:
+def _fixture_trade(net_pnl_usd: Decimal, *, index: int) -> BacktestTrade:
+    date = _FIXTURE_SESSION_DATES[index % len(_FIXTURE_SESSION_DATES)]
+    minute = 31 + (index % 20)
     gross = (net_pnl_usd + _FEES).quantize(
+        _USD_QUANTUM, rounding=ROUND_HALF_EVEN)
+    benchmark = (net_pnl_usd / Decimal("2")).quantize(
         _USD_QUANTUM, rounding=ROUND_HALF_EVEN)
     exit_mid = (_ENTRY_MID + gross / _QTY).quantize(
         _USD_QUANTUM, rounding=ROUND_HALF_EVEN)
@@ -55,24 +66,32 @@ def _fixture_trade(net_pnl_usd: Decimal) -> BacktestTrade:
         symbol="AAPL",
         instrument_id=1001,
         qty=_QTY,
-        entry_bar_end_utc="2026-06-15T14:31:00.000000Z",
-        exit_bar_end_utc="2026-06-15T14:32:00.000000Z",
+        entry_bar_end_utc=f"{date}T14:{minute:02d}:00.000000Z",
+        exit_bar_end_utc=f"{date}T14:{minute + 1:02d}:00.000000Z",
         entry_mid=_ENTRY_MID,
         exit_mid=exit_mid,
         gross_modeled_usd=gross,
         fees_usd=_FEES,
         net_execution_realistic_pnl_usd=net_pnl_usd.quantize(
             _USD_QUANTUM, rounding=ROUND_HALF_EVEN),
+        benchmark_pnl_usd=benchmark,
     )
 
 
-def _refuse_production_write(artifacts_dir: Path,
-                             allow_reviewed_artifact: bool) -> None:
+def _fixture_trades(total_net_pnl_usd: Decimal) -> tuple:
+    per_trade = (total_net_pnl_usd / Decimal(_FIXTURE_TRADE_COUNT)).quantize(
+        _USD_QUANTUM, rounding=ROUND_HALF_EVEN)
+    return tuple(
+        _fixture_trade(per_trade, index=index)
+        for index in range(_FIXTURE_TRADE_COUNT)
+    )
+
+
+def _refuse_production_write(artifacts_dir: Path) -> None:
     if artifacts_dir.resolve() == PRODUCTION_ARTIFACTS_DIR:
-        if not allow_reviewed_artifact:
-            raise ArtifactWriteRefused(
-                "refusing to write committed artifacts/backtests without "
-                "--write-reviewed-artifact")
+        raise ArtifactWriteRefused(
+            "fixture builder cannot write committed artifacts/backtests; "
+            "historical reviewed-artifact flow is deferred")
 
 
 def write_m7_fixture_artifact(*, artifacts_dir, rules_hash: str, data_pin: str,
@@ -82,19 +101,22 @@ def write_m7_fixture_artifact(*, artifacts_dir, rules_hash: str, data_pin: str,
                               allow_reviewed_artifact: bool = False
                               ) -> ArtifactBuildResult:
     output_dir = Path(artifacts_dir)
-    _refuse_production_write(output_dir, allow_reviewed_artifact)
+    _refuse_production_write(output_dir)
 
     net = _decimal_from_string(fixture_net_pnl_usd, name="fixture_net_pnl_usd")
     payload = build_v2_artifact_payload(
         strategy_id=STRATEGY_ID,
         rules_hash=rules_hash,
         data_pin=data_pin,
-        trades=(_fixture_trade(net),),
+        trades=_fixture_trades(net),
         skips=(),
         created_utc=created_utc,
         input_manifest_hash=input_manifest_hash,
         builder_git_commit=builder_git_commit,
         tier=tier,
+        allocated_notional_usd=Decimal("100000"),
+        p95_realism_gap_bps=Decimal("0.000000"),
+        max_single_fill_divergence_bps=Decimal("0.000000"),
     )
     criteria = evaluate_paper_phase_criteria(payload["metrics"])
     artifact_path = output_dir / f"{STRATEGY_ID}.json"

@@ -118,7 +118,7 @@ class TestTradeSimulation(unittest.TestCase):
 
         self.assertEqual(result.reason, "horizon_crosses_close")
 
-    def test_quote_b_must_be_at_or_after_latency_budget(self):
+    def test_quote_b_must_be_after_latency_budget(self):
         too_early = _reader(_bar(
             "2026-06-15T14:31:00.000000Z",
             "2026-06-15T14:31:00.249000Z",
@@ -138,18 +138,37 @@ class TestTradeSimulation(unittest.TestCase):
         )
         self.assertEqual(rejected.reason, "quote_b_before_latency")
 
+        delayed_decision_bucket = _reader(_bar(
+            "2026-06-15T14:31:00.000000Z",
+            "2026-06-15T14:31:00.250000Z",
+            "100.000000",
+        ))
+        rejected = simulate_long_midbar_trade(
+            reader=delayed_decision_bucket,
+            symbol="AAPL",
+            instrument_id=1001,
+            entry_bar_end_utc="2026-06-15T14:31:00.000000Z",
+            exit_bar_end_utc="2026-06-15T14:32:00.000000Z",
+            decision_ts_utc="2026-06-15T14:31:00.000000Z",
+            latency_ms=250,
+            rth_close_utc="2026-06-15T20:00:00.000000Z",
+            qty=Decimal("2"),
+            fees_usd=Decimal("0"),
+        )
+        self.assertEqual(rejected.reason, "quote_b_before_latency")
+
         accepted = _reader(
-            _bar("2026-06-15T14:31:00.000000Z",
-                 "2026-06-15T14:31:00.250000Z", "100.000000"),
             _bar("2026-06-15T14:32:00.000000Z",
-                 "2026-06-15T14:32:00.000000Z", "101.000000"),
+                 "2026-06-15T14:32:00.000000Z", "100.000000"),
+            _bar("2026-06-15T14:33:00.000000Z",
+                 "2026-06-15T14:33:00.000000Z", "101.000000"),
         )
         trade = simulate_long_midbar_trade(
             reader=accepted,
             symbol="AAPL",
             instrument_id=1001,
-            entry_bar_end_utc="2026-06-15T14:31:00.000000Z",
-            exit_bar_end_utc="2026-06-15T14:32:00.000000Z",
+            entry_bar_end_utc="2026-06-15T14:32:00.000000Z",
+            exit_bar_end_utc="2026-06-15T14:33:00.000000Z",
             decision_ts_utc="2026-06-15T14:31:00.000000Z",
             latency_ms=250,
             rth_close_utc="2026-06-15T20:00:00.000000Z",
@@ -163,29 +182,47 @@ class TestTradeSimulation(unittest.TestCase):
 
 class TestArtifactPayload(unittest.TestCase):
     def test_artifact_payload_is_deterministic_and_verifier_compatible(self):
-        trade = BacktestTrade(
-            symbol="AAPL",
-            instrument_id=1001,
-            qty=Decimal("2"),
-            entry_bar_end_utc="2026-06-15T14:31:00.000000Z",
-            exit_bar_end_utc="2026-06-15T14:32:00.000000Z",
-            entry_mid=Decimal("100.000000"),
-            exit_mid=Decimal("101.000000"),
-            gross_modeled_usd=Decimal("2.000000"),
-            fees_usd=Decimal("0.100000"),
-            net_execution_realistic_pnl_usd=Decimal("1.900000"),
+        session_dates = (
+            "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04",
+            "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10",
+            "2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16",
+            "2026-06-17", "2026-06-18", "2026-06-19", "2026-06-22",
+            "2026-06-23", "2026-06-24", "2026-06-25", "2026-06-26",
+        )
+        trades = tuple(
+            BacktestTrade(
+                symbol="AAPL",
+                instrument_id=1001,
+                qty=Decimal("2"),
+                entry_bar_end_utc=(
+                    f"{session_dates[index % len(session_dates)]}"
+                    f"T14:{31 + index % 20:02d}:00.000000Z"),
+                exit_bar_end_utc=(
+                    f"{session_dates[index % len(session_dates)]}"
+                    f"T14:{32 + index % 20:02d}:00.000000Z"),
+                entry_mid=Decimal("100.000000"),
+                exit_mid=Decimal("101.000000"),
+                gross_modeled_usd=Decimal("2.000000"),
+                fees_usd=Decimal("0.100000"),
+                net_execution_realistic_pnl_usd=Decimal("1.900000"),
+                benchmark_pnl_usd=Decimal("0.500000"),
+            )
+            for index in range(30)
         )
         kwargs = dict(
             strategy_id="directional.momentum_v1",
             rules_hash="rh-m7",
             data_pin=DATA_PIN,
-            trades=(trade,),
+            trades=trades,
             skips=(BacktestSkip("future_receipt", "2026-06-15T14:30:00.000000Z",
                                 {"symbol": "AAPL"}),),
             created_utc="2026-06-13T00:00:00.000000Z",
             input_manifest_hash="mh-test",
             builder_git_commit="test",
             tier="fixture",
+            allocated_notional_usd=Decimal("100000"),
+            p95_realism_gap_bps=Decimal("0.000000"),
+            max_single_fill_divergence_bps=Decimal("0.000000"),
         )
 
         payload_a = build_v2_artifact_payload(**kwargs)

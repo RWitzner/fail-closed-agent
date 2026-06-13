@@ -69,10 +69,18 @@ class TestM7BacktestCli(unittest.TestCase):
         rc, _, err = _run_main(_cli_args(committed))
 
         self.assertEqual(rc, 2)
-        self.assertIn("refusing to write committed artifacts/backtests", err)
+        self.assertIn("fixture builder cannot write committed artifacts/backtests",
+                      err)
         self.assertFalse(target.exists())
 
-    def test_builder_allows_production_path_only_with_explicit_flag(self):
+        rc, _, err = _run_main(_cli_args(committed, "--write-reviewed-artifact"))
+
+        self.assertEqual(rc, 2)
+        self.assertIn("fixture builder cannot write committed artifacts/backtests",
+                      err)
+        self.assertFalse(target.exists())
+
+    def test_fixture_builder_never_writes_production_artifact_path(self):
         with TemporaryDirectory() as tmp:
             production = Path(tmp) / "artifacts" / "backtests"
             with patch.object(backtest_builder, "PRODUCTION_ARTIFACTS_DIR",
@@ -90,20 +98,20 @@ class TestM7BacktestCli(unittest.TestCase):
                         allow_reviewed_artifact=False,
                     )
 
-                result = backtest_builder.write_m7_fixture_artifact(
-                    artifacts_dir=production,
-                    rules_hash=_RULES_HASH,
-                    data_pin=_DATA_PIN,
-                    created_utc="2026-06-13T00:00:00.000000Z",
-                    input_manifest_hash="mh-cli-test",
-                    builder_git_commit="test",
-                    tier="fixture",
-                    fixture_net_pnl_usd="1.900000",
-                    allow_reviewed_artifact=True,
-                )
+                with self.assertRaises(backtest_builder.ArtifactWriteRefused):
+                    backtest_builder.write_m7_fixture_artifact(
+                        artifacts_dir=production,
+                        rules_hash=_RULES_HASH,
+                        data_pin=_DATA_PIN,
+                        created_utc="2026-06-13T00:00:00.000000Z",
+                        input_manifest_hash="mh-cli-test",
+                        builder_git_commit="test",
+                        tier="fixture",
+                        fixture_net_pnl_usd="1.900000",
+                        allow_reviewed_artifact=True,
+                    )
 
-            self.assertTrue(result.criteria.passed)
-            self.assertTrue(result.artifact_path.is_file())
+            self.assertFalse((production / f"{_STRATEGY_ID}.json").exists())
 
     def test_runbook_names_exact_paper_evidence_before_m8(self):
         runbook = (_REPO_ROOT / "docs" / "runbooks"

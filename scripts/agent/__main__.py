@@ -30,8 +30,8 @@ exits non-zero on a mismatch; no flag can flip a gate (§M.2 step 9).
   supports the operator-only ``--rebaseline-cash`` flag, and exits 0 clean,
   1 drift/latch, 2 usage/lock, or 3 could-not-reconcile.
 - ``m7-backtest`` — local deterministic fixture artifact builder for M7. Writes
-  only after paper-phase criteria pass and refuses committed artifacts/backtests
-  unless ``--write-reviewed-artifact`` is supplied.
+  only after paper-phase criteria pass and always refuses committed
+  artifacts/backtests; the historical reviewed-artifact flow is separate.
 """
 import argparse
 import json
@@ -391,7 +391,8 @@ def build_parser() -> argparse.ArgumentParser:
     m7.add_argument("--fixture-net-pnl-usd", dest="fixture_net_pnl_usd",
                     default="1.900000")
     m7.add_argument("--write-reviewed-artifact",
-                    dest="write_reviewed_artifact", action="store_true")
+                    dest="write_reviewed_artifact", action="store_true",
+                    help="reserved; fixture builder still refuses production")
     m7.set_defaults(func=_cmd_m7_backtest)
     return parser
 

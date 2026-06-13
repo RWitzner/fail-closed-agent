@@ -47,6 +47,7 @@ class BacktestTrade:
     gross_modeled_usd: Decimal
     fees_usd: Decimal
     net_execution_realistic_pnl_usd: Decimal
+    benchmark_pnl_usd: Decimal
 
 
 def _skip(reason: str, bucket_end_utc: str, symbol: str) -> BacktestSkip:
@@ -91,7 +92,7 @@ def simulate_long_midbar_trade(*, reader: MidBarSeriesReader, symbol: str,
                                ) -> Union[BacktestTrade, BacktestSkip]:
     """Simulate one deterministic long trade over eligible mid bars.
 
-    Quote B must be received exactly at or after the configured latency instant.
+    Quote B must be the next selected bar after the configured latency instant.
     Any horizon crossing the RTH close is skipped rather than filled from a future
     bar.
     """
@@ -110,10 +111,13 @@ def simulate_long_midbar_trade(*, reader: MidBarSeriesReader, symbol: str,
         _parse_utc(decision_ts_utc)
         + timedelta(milliseconds=_as_nonnegative_latency_ms(latency_ms))
     )
-    latency_as_of = _canonical_utc(latency_instant)
+    entry_end = _parse_utc(entry_bar_end_utc)
+    if entry_end <= latency_instant:
+        return _skip("quote_b_before_latency", entry_bar_end_utc, symbol)
 
     entry = read_eligible_midbar(
-        reader, symbol, instrument_id, entry_bar_end_utc, as_of_utc=latency_as_of)
+        reader, symbol, instrument_id, entry_bar_end_utc,
+        as_of_utc=_canonical_utc(entry_end))
     if isinstance(entry, BacktestSkip):
         return entry
     if _parse_utc(entry.watermark_utc) < latency_instant:
@@ -140,4 +144,5 @@ def simulate_long_midbar_trade(*, reader: MidBarSeriesReader, symbol: str,
         gross_modeled_usd=gross,
         fees_usd=fees_q,
         net_execution_realistic_pnl_usd=net,
+        benchmark_pnl_usd=gross,
     )

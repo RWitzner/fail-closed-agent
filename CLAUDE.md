@@ -10,16 +10,14 @@ live`, fail-closed, "nothing opens by default") but is otherwise live-like, so t
 interfaces and code path — *not* a rebuild, though live is still a separately-validated step. Authoritative
 design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`. Build is staged M0→M8; see `PLAN.md`.
 
-**State:** M0-M6 done (M6 closed with 1639 tests). **M6 DONE on branch `m6-reconcile`** (stacked on
-`m3-signal`→`m2-market-state`; nothing merged to `main`): contract frozen rev 6 READY-TO-BUILD (`1e96d5d`,
-48-finding critic archive, 4 re-critique rounds to convergence); W1 built+committed (`2c2b6ed`, 1574 tests);
-W2 pure diff core built+committed (`436f7b0`, 1590 tests); W3 PaperBook `position_adjust` fold built (1599 tests);
-W4 orchestrator reconcile wiring built (1611 tests); W5 CLI/canary/purity/runbook built (1636 tests);
-W6 initial adversarial review blockers fixed+committed (`483ea34`: dirty-window latch, post-adjust durable
-seeding, `position_open` seq LIFO; 1639 tests); separate W6 re-review returned no issues and M6 is closed.
-M1 tier-2 (2b live-verified) stays deferred (no paid live realtime subscription). **Plan locked (2026-06-10):
-M7 next, then a full autonomous paper edge-validation phase (success criteria pinned in advance, in the M7
-contract) before any M8/live step — see PLAN.md "Edge before live". Merge-to-main decision still open.**
+**State:** M0-M7 done. **M7 OFFLINE-COMPLETE on branch `codex/m7-backtest-gate`** (1671 tests green after
+review hardening): anti-lookahead backtest primitives, v2 artifact verifier/metrics, full-triple artifact cache
+hardening, temp-only fixture builder, paper-phase criteria/runbook, and first real strategy
+`directional.momentum_v1`. Production `artifacts/backtests/` still contains only `.gitkeep`; the reviewed
+historical v2 artifact is explicitly deferred until a credentialed historical data run/review produces it. M1
+tier-2 (2b live-verified) stays deferred (no paid live realtime subscription). **Next phase is full autonomous
+paper edge-validation, not M8.** M8/live remains blocked until realized paper edge satisfies the M7-pinned
+criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -40,7 +38,8 @@ If a task implicitly requires breaching any of these, stop and ask.
 
 ## Commands
 
-M6 has landed on `m6-reconcile`. The **offline acceptance suite** (currently 1639 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
+1671 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)

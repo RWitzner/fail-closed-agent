@@ -1,32 +1,35 @@
-# M7 (Backtest gate + first paper-eligible directional strategy) - DRAFT CONTRACT
+# M7 (Backtest gate + first paper-eligible directional strategy) - OFFLINE-COMPLETE CONTRACT
 
-> **Status:** DRAFT for adversarial review, 2026-06-13.
+> **Status:** Review-hardened offline-complete contract, 2026-06-13. Historical reviewed artifact is deferred.
 > **Parent:** `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 > **Build base:** `m6-reconcile` closeout (`d83f392`, 1639-test M6 closeout). M7 is stacked after M6.
 >
-> This contract intentionally stops short of "READY-TO-BUILD" until the normal multi-lens review/hardening pass
-> has run. It is precise enough for review and for turning into the TDD build plan.
+> M7 closes the offline gate/engine/strategy path while keeping production `artifacts/backtests/` empty. A
+> reviewed historical artifact is a separate credentialed tier before the paper edge-validation phase can open.
 
 ## 0. Scope and hard boundaries
 
-M7 is the first milestone that may make a **real, non-synthetic strategy** paper-eligible. It does that only by
-building a historical anti-lookahead backtest gate and committing one reviewed artifact for one reviewed strategy.
+M7 is the first milestone that may make a **real, non-synthetic strategy** eligible for the paper open pipeline.
+It does that by building the historical anti-lookahead artifact gate. In the offline-complete closeout, no
+production strategy artifact is committed; the default artifact directory remains fail-closed.
 
 **In scope**
 
 - `scripts/agent/backtest_gate.py`: extend the M5 artifact verifier/shape without weakening fail-closed behavior.
 - New pure backtest modules under `scripts/agent/`:
-  - `backtest_data.py` for pinned historical replay inputs and data manifests.
   - `backtest_engine.py` for event-time simulation over M3 `MidBar`/`SignalSnapshot` seams.
   - `backtest_metrics.py` for `execution_realistic_pnl` metrics and benchmark attribution.
+  - `backtest_builder.py` for deterministic temp-dir fixture artifacts only.
+  - `paper_phase_criteria.py` for the post-M7 paper/M8 evidence gate.
 - New real strategy module under `scripts/agent/strategies/`:
   - `directional_momentum.py` with `strategy_id = "directional.momentum_v1"`.
 - CLI/runbook surface for producing and reviewing an artifact:
-  - `python3 -m agent backtest ...`
+  - `python3 -m agent m7-backtest ...` for fixture/temp artifacts only.
   - `docs/runbooks/m7-paper-edge-validation.md`
 - Tests and fixtures for anti-lookahead, artifact verification, strategy behavior, and orchestrator/preflight
   integration.
-- One committed, reviewed artifact under `artifacts/backtests/` only after the build proves the strategy passed.
+- A separate historical reviewed-artifact tier. It is deferred unless credentials/data are available and a reviewed
+  v2 artifact is intentionally committed.
 
 **Out of scope**
 
@@ -34,7 +37,8 @@ building a historical anti-lookahead backtest gate and committing one reviewed a
 - Flipping committed run gates. `config/agent_rules.json` keeps `enabled=false` and `paper_trading.enabled=false`.
 - Raising committed risk caps. `config/risk_rules.json` caps stay `0`; committed config remains S1 fail-closed.
 - Short selling. The first real strategy is long-only.
-- Online learning or retraining. The first strategy uses frozen code/config and a reviewed artifact.
+- Online learning or retraining.
+- Opening a real strategy without a verified artifact in `artifacts/backtests/`.
 - Using adjusted OHLCV closes as a trading label or fill source.
 
 ## 1. Repo facts M7 builds on
@@ -62,14 +66,14 @@ building a historical anti-lookahead backtest gate and committing one reviewed a
 | FD-M7-5 | **Cost basis:** artifact metrics use `execution_realistic_pnl`, including modeled spread/slippage/fees. Raw signal returns and optimistic fills may be reported under diagnostics but cannot satisfy S9. |
 | FD-M7-6 | **Benchmark attribution:** the pass/fail metric includes an exposure-matched benchmark: same symbol, same side, same entry/exit windows, equal notional, raw mid-bar marks, same blackout calendar, no cost advantage. Strategy pass requires positive active PnL versus this benchmark. |
 | FD-M7-7 | **First strategy:** `directional.momentum_v1` is long-only and emits at most one BUY candidate per symbol per completed bar. It never emits sells-to-open, shorts, multi-leg candidates, or reduce instructions. Existing reduce/close handling remains M5-owned. |
-| FD-M7-8 | **Paper eligibility:** `directional.momentum_v1` may emit `Candidate(..., paper_eligible=True)` only when its scanned `SignalSnapshot.rules_hash`, `feature.data_pin`, and strategy id match a verified artifact. If no verified artifact is visible to the strategy, it emits no candidate rather than emitting an ineligible candidate. |
+| FD-M7-8 | **Paper eligibility source of truth:** `directional.momentum_v1` remains pure and may emit `Candidate(..., paper_eligible=True)` after local feature/edge predicates pass. That flag is necessary but not sufficient to open. The orchestrator/preflight S9 gate is the only artifact source of truth before broker submit: it verifies `(strategy_id, rules_hash, data_pin)` and rejects missing/mismatched/invalid artifacts before minting an open token or writing a submit attempt. |
 | FD-M7-9 | **Artifact check cache key:** orchestrator artifact checks are cached by the full triple `(strategy_id, rules_hash, data_pin)`, never by strategy alone. A data-pin change in one run must re-check the artifact and can re-close the gate. |
 | FD-M7-10 | **Artifact top-level compatibility:** M7 keeps the M5 top-level key set exactly unchanged: `v,strategy_id,rules_hash,data_pin,metrics,created_utc,artifact_hash`. New M7 data lives under `metrics` so old malformed/extra top-level payloads still fail closed. |
 | FD-M7-11 | **Artifact version:** M7 artifact payloads use `v = 2`. `verify_artifact` accepts v1 only for existing M5 tests and v2 for production M7 artifacts. Unknown versions are `hash_invalid`. |
 | FD-M7-12 | **Artifact hash:** `artifact_hash = row_hash(payload_without_artifact_hash)`. Hash mismatch, float/non-serializable metric value, missing metric, wrong basis, or wrong version returns `hash_invalid`, never raises. |
-| FD-M7-13 | **Artifact path:** production verifier still defaults to `artifacts/backtests/<strategy_id>.json`; builders/tests must take a mandatory temp `artifacts_dir`. M7 replaces the M5 empty-dir canary with an allowlist canary for `.gitkeep` plus reviewed M7 artifacts only. |
+| FD-M7-13 | **Artifact path:** production verifier still defaults to `artifacts/backtests/<strategy_id>.json`; fixture builders/tests must take a mandatory temp `artifacts_dir` and must never write the committed production directory. Production artifacts require a separate historical reviewed-artifact flow. |
 | FD-M7-14 | **No secret signing in M7:** "signed" means committed, reviewed, and hash-bound by `artifact_hash` plus git history. HMAC or external attestation is deferred unless explicitly approved. |
-| FD-M7-15 | **Artifact pass criteria are data:** pass/fail thresholds live inside the v2 artifact metrics under `thresholds`. `verify_artifact` verifies required fields and that `metrics.pass is True`; it does not recompute the backtest. Recompute is owned by the builder tests and runbook. |
+| FD-M7-15 | **Artifact pass criteria are data with pinned floors:** pass/fail thresholds live inside the v2 artifact metrics under `thresholds`, but `verify_artifact` rejects thresholds looser than the M7-pinned paper/M8 criteria. It verifies required fields and that `metrics.pass is True`; it does not recompute the backtest. Recompute is owned by the builder tests and runbook. |
 | FD-M7-16 | **Backtest runner determinism:** identical inputs, rules hash, data pin, and strategy id produce byte-identical artifact body and report rows, except for `created_utc` when not pinned. Golden tests pin `created_utc`. |
 | FD-M7-17 | **Rules hash discipline:** artifact key uses the same assembled-config `rules_hash` used by orchestrator/preflight. A changed committed config re-closes S9 until a new artifact is produced. |
 | FD-M7-18 | **Data pin discipline:** `data_pin` remains the M3 format `dataset:schema:interval:source_id`. The `source_id` for M7 must include a manifest hash of the historical/fixture input set, not a mutable directory name. |
@@ -114,7 +118,8 @@ Required `metrics` keys for v2:
 
 - `missing`: no file or invalid strategy id/path.
 - `hash_invalid`: malformed JSON, extra/missing top-level keys, bad hash, wrong v2 required fields, wrong basis,
-  `metrics.pass is not True`, non-string Decimal fields, or float anywhere in payload.
+  `metrics.pass is not True`, non-string Decimal fields, thresholds looser than the pinned criteria, or float
+  anywhere in payload.
 - `key_mismatch`: hash-valid artifact whose `(strategy_id, rules_hash, data_pin)` does not match the current run.
 - `ok`: hash-valid, key-matching, v2 metric-valid artifact.
 
@@ -130,7 +135,8 @@ Per bar:
 3. Call `directional.momentum_v1.scan(ctx)`.
 4. For a candidate:
    - reject if not single-leg BUY, whole-share qty, positive limit, and `paper_eligible=True`;
-   - apply the M5 pricing model over quote A and quote B after latency;
+   - apply the M5 pricing model over quote A and the selected quote-B bar after latency;
+   - reject a delayed receipt of the decision bucket; quote B must be a later selected bar after the latency instant;
    - mark a simulated open only if quote B is eligible and marketable after costs.
 5. Close by deterministic horizon policy from the strategy config/code constants:
    - default: close at the configured signal horizon's eligible mid bar;
@@ -205,7 +211,7 @@ the separate two-key arming, broker dry-run, kill-switch drill, caps, and runboo
 | `tests/agent/test_backtest_engine_m7.py` | future receipt rejected; watermark equality accepted; lexicographic timestamp trap; horizon crossing close skipped; quote B latency semantics; deterministic artifact body. |
 | `tests/agent/test_directional_momentum_m7.py` | long-only candidate, no candidate on weak/negative features, no side effects/imports, price grid, whole-share qty, edge score. |
 | `tests/agent/test_m7_paper_phase_criteria.py` | criteria evaluator blocks each failed threshold and passes only the full matrix. |
-| `tests/agent/test_m7_backtest_cli.py` | fixture artifact builder writes only on passing criteria, refuses production dir without explicit reviewed-artifact flag, and pins the paper-phase runbook. |
+| `tests/agent/test_m7_backtest_cli.py` | fixture artifact builder writes only on passing criteria, always refuses the production dir, and pins the paper-phase runbook. |
 | `tests/agent/test_m7_s9_integration.py` | missing/mismatched/valid artifact S9 paths plus committed-config zero-submit with a valid artifact. |
 | Existing canaries | S1 committed config, no network/no creds, synthetic isolation, M5 preflight reasons, full suite. |
 
@@ -213,9 +219,9 @@ the separate two-key arming, broker dry-run, kill-switch drill, caps, and runboo
 
 M7 has two acceptance tiers:
 
-1. **Offline complete:** all M7 unit/integration tests pass; artifact verifier/runner are deterministic; a small
-   committed fixture proves anti-lookahead behavior and artifact verification without credentials; committed
-   config canary remains zero-submit.
+1. **Offline complete:** all M7 unit/integration tests pass; artifact verifier/runner are deterministic; temp-dir
+   fixture artifacts prove anti-lookahead behavior and artifact verification without credentials; committed config
+   canary remains zero-submit and production `artifacts/backtests/` contains only `.gitkeep`.
 2. **Historical artifact complete:** an explicitly run historical backtest over the pinned data manifest produces
    the reviewed `directional.momentum_v1` artifact. If credentials or sufficient historical data are unavailable,
    tier 2 is a written deferral and no paper-eligible real strategy artifact is committed.
@@ -264,4 +270,7 @@ python3 -m compileall scripts tests
 
 ## 10. Revision log
 
+- rev 1, 2026-06-13: review hardening. Contract now matches the offline-complete/artifact-deferred closeout,
+  pins threshold floors in the verifier/evaluator, quarantines fixture artifacts to temp dirs, and assigns S9
+  artifact authority to orchestrator/preflight.
 - rev 0, 2026-06-13: initial draft contract from current repo seams after M6 closeout.

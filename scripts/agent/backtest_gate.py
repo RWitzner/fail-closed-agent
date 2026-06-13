@@ -70,6 +70,14 @@ _V2_THRESHOLD_KEYS = frozenset({
 _V2_PROVENANCE_KEYS = frozenset({
     "input_manifest_hash", "builder_git_commit", "tier",
 })
+_PINNED_MIN_SESSIONS = 20
+_PINNED_MIN_TRADES = 30
+_PINNED_MIN_TRADED_SESSIONS = 5
+_PINNED_PROFIT_FACTOR_MIN = Decimal("1.10")
+_PINNED_MAX_DRAWDOWN_PCT_ALLOCATED = Decimal("0.0150")
+_PINNED_WORST_DAY_PCT_ALLOCATED = Decimal("0.0075")
+_PINNED_P95_REALISM_GAP_BPS_MAX = Decimal("15")
+_PINNED_MAX_SINGLE_FILL_DIVERGENCE_BPS = Decimal("50")
 
 
 def _finite_decimal_string(value) -> bool:
@@ -88,6 +96,12 @@ def _nonnegative_int(value) -> bool:
 
 def _string(value) -> bool:
     return isinstance(value, str) and value != ""
+
+
+def _decimal_value(value):
+    if not _finite_decimal_string(value):
+        return None
+    return Decimal(value)
 
 
 def _valid_v2_metrics(metrics: dict) -> bool:
@@ -149,14 +163,34 @@ def _valid_v2_metrics(metrics: dict) -> bool:
     for key in ("min_sessions", "min_trades", "min_traded_sessions"):
         if not _nonnegative_int(thresholds[key]):
             return False
+    if thresholds["min_sessions"] < _PINNED_MIN_SESSIONS:
+        return False
+    if thresholds["min_trades"] < _PINNED_MIN_TRADES:
+        return False
+    if thresholds["min_traded_sessions"] < _PINNED_MIN_TRADED_SESSIONS:
+        return False
     for key in ("require_positive_net_pnl", "require_positive_active_pnl"):
-        if not isinstance(thresholds[key], bool):
+        if thresholds[key] is not True:
             return False
     for key in ("profit_factor_min", "max_drawdown_pct_allocated",
                 "worst_day_pct_allocated", "p95_realism_gap_bps_max",
                 "max_single_fill_divergence_bps"):
         if not _finite_decimal_string(thresholds[key]):
             return False
+    if _decimal_value(thresholds["profit_factor_min"]) < _PINNED_PROFIT_FACTOR_MIN:
+        return False
+    if (_decimal_value(thresholds["max_drawdown_pct_allocated"])
+            > _PINNED_MAX_DRAWDOWN_PCT_ALLOCATED):
+        return False
+    if (_decimal_value(thresholds["worst_day_pct_allocated"])
+            > _PINNED_WORST_DAY_PCT_ALLOCATED):
+        return False
+    if (_decimal_value(thresholds["p95_realism_gap_bps_max"])
+            > _PINNED_P95_REALISM_GAP_BPS_MAX):
+        return False
+    if (_decimal_value(thresholds["max_single_fill_divergence_bps"])
+            > _PINNED_MAX_SINGLE_FILL_DIVERGENCE_BPS):
+        return False
 
     provenance = metrics["provenance"]
     if not isinstance(provenance, dict) or set(provenance) != _V2_PROVENANCE_KEYS:

@@ -172,6 +172,27 @@ class TestBacktestGateV2(unittest.TestCase):
 
             self.assertEqual(self._verify(tmp).status, "hash_invalid")
 
+    def test_v2_thresholds_cannot_be_weakened_below_pinned_paper_gate(self):
+        cases = (
+            {"min_sessions": 19},
+            {"min_trades": 29},
+            {"min_traded_sessions": 4},
+            {"require_positive_net_pnl": False},
+            {"require_positive_active_pnl": False},
+            {"profit_factor_min": "1.09"},
+            {"max_drawdown_pct_allocated": "0.0151"},
+            {"worst_day_pct_allocated": "0.0076"},
+            {"p95_realism_gap_bps_max": "15.01"},
+            {"max_single_fill_divergence_bps": "50.01"},
+        )
+        for weakened in cases:
+            with self.subTest(weakened=weakened), TemporaryDirectory() as tmp:
+                metrics = _v2_metrics()
+                metrics["thresholds"] = dict(metrics["thresholds"], **weakened)
+                _write_artifact(tmp, _artifact_payload(metrics=metrics))
+
+                self.assertEqual(self._verify(tmp).status, "hash_invalid")
+
     def test_v2_unknown_version_is_hash_invalid(self):
         with TemporaryDirectory() as tmp:
             _write_artifact(tmp, _artifact_payload(v=99))

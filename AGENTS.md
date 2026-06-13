@@ -8,14 +8,13 @@ An autonomous **US-equities** trading agent built with the same `observe → pap
 Polymarket agent: it starts **paper-only with "nothing opens by default"** and is otherwise live-like (live data,
 live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-**Current state:** M0-M6 are done. **M6 (reconcile hardening) is closed on branch `m6-reconcile`**
-(`483ea34` + docs closeout; 1639 tests green; separate W6 re-review clean). M1 tier-2 (2b live-verified)
-remains deferred pending the unprovisioned live realtime subscription. M6 adds deterministic SOD/EOD/immediate
-broker reconciliation, `journal/reconcile_alerts.jsonl`, explicit `position_adjust` folds, drift latching into
-`portfolio_unreconciled`, and CLI exit mapping. It submits no orders, mints no preflight tokens, imports no heavy
-SDK at module scope, and keeps live/run gates OFF. Next milestone is **M7**: anti-lookahead backtest gate + first
-paper-eligible directional strategy with the paper-phase success criteria pinned in advance. See `PLAN.md` for
-live status.
+**Current state:** M0-M7 are done. **M7 (backtest gate + first directional strategy) is review-hardened and
+closed offline on branch `codex/m7-backtest-gate`** (1671 tests green). M1 tier-2 (2b live-verified) remains
+deferred pending the unprovisioned live realtime subscription. M7 adds deterministic anti-lookahead backtest
+primitives, v2 artifact verifier/metrics, full-triple artifact cache hardening, a temp-only fixture builder,
+paper-phase criteria/runbook, and `directional.momentum_v1`. Production `artifacts/backtests/` still contains
+only `.gitkeep`; the reviewed historical v2 artifact is deferred. Next phase is **paper edge-validation**, not
+M8. M8 is blocked until positive realized paper edge satisfies the pinned criteria. See `PLAN.md` for live status.
 
 ## Scope
 

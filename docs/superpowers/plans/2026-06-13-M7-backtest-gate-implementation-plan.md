@@ -1,7 +1,8 @@
 # M7 - Backtest Gate Implementation Plan
 
 - **Date:** 2026-06-13
-- **Status:** Offline build complete (2026-06-13): Waves 1-6 green, full suite 1669 tests.
+- **Status:** Review-hardened offline closeout (2026-06-13): Waves 1-6 + M7 review fixes green, full suite
+  1671 tests.
 - **Parent contract:** `docs/superpowers/specs/2026-06-13-M7-backtest-gate-contract.md`
 - **Milestone goal:** build the anti-lookahead historical backtest gate and the first real paper-eligible
   directional strategy without weakening committed fail-closed defaults.
@@ -104,8 +105,8 @@ Files:
 TDD tests:
 
 - CLI writes v2 artifact only when thresholds pass.
-- CLI refuses to write into production `artifacts/backtests/` unless an explicit `--write-reviewed-artifact` flag
-  is provided.
+- CLI fixture builder always refuses to write into production `artifacts/backtests/`; reviewed production artifacts
+  require the separate historical artifact flow.
 - criteria evaluator blocks each missing/failed paper-phase threshold.
 - runbook names the exact post-M7 paper evidence required before M8.
 

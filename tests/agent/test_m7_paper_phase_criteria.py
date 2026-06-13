@@ -127,6 +127,34 @@ class TestPaperPhaseCriteria(unittest.TestCase):
                 self.assertEqual(verdict.passed, False)
                 self.assertIn(expected_failure, verdict.failures)
 
+    def test_artifact_thresholds_cannot_weaken_pinned_m7_criteria(self):
+        cases = (
+            ("min_sessions", 19, "threshold_floor:min_sessions"),
+            ("min_trades", 29, "threshold_floor:min_trades"),
+            ("min_traded_sessions", 4,
+             "threshold_floor:min_traded_sessions"),
+            ("profit_factor_min", "1.09",
+             "threshold_floor:profit_factor_min"),
+            ("max_drawdown_pct_allocated", "0.0151",
+             "threshold_ceiling:max_drawdown_pct_allocated"),
+            ("worst_day_pct_allocated", "0.0076",
+             "threshold_ceiling:worst_day_pct_allocated"),
+            ("p95_realism_gap_bps_max", "15.01",
+             "threshold_ceiling:p95_realism_gap_bps_max"),
+            ("max_single_fill_divergence_bps", "50.01",
+             "threshold_ceiling:max_single_fill_divergence_bps"),
+        )
+
+        for key, value, expected_failure in cases:
+            with self.subTest(key=key):
+                metrics = copy.deepcopy(_passing_metrics())
+                metrics["thresholds"][key] = value
+
+                verdict = evaluate_paper_phase_criteria(metrics)
+
+                self.assertEqual(verdict.passed, False)
+                self.assertIn(expected_failure, verdict.failures)
+
 
 if __name__ == "__main__":
     unittest.main()
