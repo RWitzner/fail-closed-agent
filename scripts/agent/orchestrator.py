@@ -76,6 +76,19 @@ from typing import Callable, Dict, List, Mapping, Optional, Tuple
 from agent import config as agent_config
 from agent.backtest_gate import ARTIFACTS_DIR, verify_artifact
 from agent.bar_series import MidBarSeriesReader, _parse_utc
+from agent.broker_reconcile import (
+    NOT_FOUND,
+    PROBE_FAILED,
+    DriftFinding,
+    ReconcilePassResult,
+    canonical_decimal_str,
+    diff_cash,
+    diff_positions,
+    identity_note,
+    make_finding,
+    require_phase,
+    resolve_order_probe,
+)
 from agent.broker.base import OrderIntent
 from agent.broker.order_state import (
     BrokerOrder,
@@ -87,6 +100,7 @@ from agent.broker.order_state import (
 )
 from agent.calibration import AsOfClimatology, ForecastResolver, ScoredLedger
 from agent.candidate import Candidate
+from agent.corporate_actions import BrokerAdjustDetector
 from agent.exec_ledger import ExecLedger, rehydrate_exec_state, replay_orders
 from agent.exec_reasons import ExecError, TERMINAL_STATES
 from agent.execution_config import (
@@ -133,6 +147,11 @@ from agent.market_state_cache import MarketStateCache
 from agent.order_pricing import reduce_cap
 from agent.paper_book import PaperBook
 from agent.quote_quality import QuoteSnapshot, evaluate as evaluate_quote
+from agent.reconcile_ledger import (
+    ReconcileLedger,
+    rehydrate_reconcile_state,
+    replay_reconcile,
+)
 from agent.risk.account_state import (
     AccountInvalid,
     AccountStore,
@@ -158,9 +177,15 @@ from agent.secrets_runtime import (
     load_alpaca_paper_credentials,
     load_run_gates,
 )
-from agent.serializer import BrokerUSD, ModeledUSD, row_hash
+from agent.serializer import BrokerUSD, ModeledUSD, as_broker_usd, row_hash
 from agent.signal_config import SignalConfig
 from agent.signal_snapshot import GateFail, assemble
+from agent.status_ledger import (
+    EVT_BROKER_ADJUST_FREEZE,
+    StatusLedger,
+    rehydrate_state,
+    replay_status,
+)
 from agent.strategies.calibration_probe import CalibrationProbe, DecisionLedger
 from agent.strategies.synthetic import ExitProvider, ScriptedSyntheticStrategy, SyntheticStrategy
 from agent.strategy import ScanContext
@@ -208,6 +233,75 @@ def _canonical_utc_str(dt) -> str:
 def _bar_key(symbol: str, bucket_end_utc: str) -> str:
     """The M3 frozen bar-key format over the canonical surface form."""
     return f"{symbol}|{_BAR_INTERVAL}|{_canonical_utc_str(_parse_utc(bucket_end_utc))}"
+
+
+def _mint_reconcile_id(run_id: str, phase: str, session_date_et: str,
+                       occurrence: int) -> str:
+    return "rc-" + row_hash({
+        "run_id": run_id,
+        "phase": phase,
+        "session_date_et": session_date_et,
+        "occurrence": occurrence,
+    })
+
+
+def _mint_drift_id(reconcile_id: str, finding: DriftFinding) -> str:
+    return "rd-" + row_hash({
+        "reconcile_id": reconcile_id,
+        "kind": finding.kind,
+        "symbol": finding.symbol,
+        "field": finding.field,
+        "position_id": finding.position_id,
+        "local_order_id": finding.local_order_id,
+    })
+
+
+def _mint_adjust_id(reconcile_id: str, position_id: str) -> str:
+    return "adj-" + row_hash({
+        "reconcile_id": reconcile_id,
+        "position_id": position_id,
+    })
+
+
+def _finding_key(finding: DriftFinding):
+    return (finding.kind, finding.symbol or "", finding.position_id or "",
+            finding.local_order_id or "")
+
+
+def _note_key(note):
+    return (note[0], note[1] or "", note[2])
+
+
+def _residue_from_row(row: Optional[dict]) -> Optional[DriftFinding]:
+    if row is None:
+        return None
+    return DriftFinding(
+        kind=row["kind"],
+        symbol=row.get("symbol"),
+        field=row["field"],
+        local=row.get("local"),
+        broker=row.get("broker"),
+        diff=row.get("diff"),
+        action=row["action"],
+        position_id=row.get("position_id"),
+        local_order_id=row.get("local_order_id"),
+        broker_order_id=row.get("broker_order_id"),
+    )
+
+
+def _carried_residue_finding(residue: DriftFinding) -> DriftFinding:
+    return DriftFinding(
+        kind=residue.kind,
+        symbol=residue.symbol,
+        field=residue.field,
+        local=residue.local,
+        broker=residue.broker,
+        diff=residue.diff,
+        action=residue.action,
+        position_id=residue.position_id,
+        local_order_id=residue.local_order_id,
+        broker_order_id=residue.broker_order_id,
+    )
 
 
 def mint_run_id(*, host: str, pid: int, now_utc) -> str:
@@ -345,6 +439,7 @@ class Orchestrator:
                  exit_provider=None, account_provider=None,
                  credentials_path=None, run_gates_path=None,
                  instrument_ids: Optional[Mapping[str, int]] = None,
+                 durable_ids: Optional[Mapping[str, object]] = None,
                  artifacts_dir: Optional[str] = None,
                  fill_policy: str = "immediate_full",
                  row_clock: Optional[Callable[[], str]] = None) -> None:
@@ -364,6 +459,7 @@ class Orchestrator:
                 exit_provider=exit_provider, account_provider=account_provider,
                 credentials_path=credentials_path,
                 run_gates_path=run_gates_path, instrument_ids=instrument_ids,
+                durable_ids=durable_ids,
                 artifacts_dir=artifacts_dir, fill_policy=fill_policy,
                 row_clock=row_clock, lock_reclaimed=lock_reclaimed)
         except BaseException:
@@ -380,7 +476,8 @@ class Orchestrator:
                  calendar_provider, config, overlay, broker, strategy,
                  status_provider, exit_provider, account_provider,
                  credentials_path, run_gates_path, instrument_ids,
-                 artifacts_dir, fill_policy, row_clock, lock_reclaimed):
+                 durable_ids, artifacts_dir, fill_policy, row_clock,
+                 lock_reclaimed):
         # ---- step 2: config (parse fail-loud; gates view paper-only;
         #              rules_hash PRE-substitution — M5C-B7/M5C-S4) ----------
         if config is None:
@@ -453,6 +550,8 @@ class Orchestrator:
         self._decisions_path = self._journal_dir / "decisions.jsonl"
         self._scored_path = self._journal_dir / "forecast_scored.jsonl"
         self._risk_path = self._journal_dir / "risk.jsonl"
+        self._reconcile_path = self._journal_dir / "reconcile_alerts.jsonl"
+        self._status_path = self._journal_dir / "status.jsonl"
         self._decision_ledger = DecisionLedger(
             EventWriter(self._decisions_path, run_id, **writer_kwargs),
             rules_hash=self._signal_config.rules_hash)
@@ -470,8 +569,13 @@ class Orchestrator:
             positions=EventWriter(self._journal_dir / "positions.jsonl",
                                   run_id, **writer_kwargs),
             rules_hash=self.rules_hash)
-        self._status_writer = EventWriter(self._journal_dir / "status.jsonl",
-                                          run_id, **writer_kwargs)
+        self._reconcile_ledger = ReconcileLedger(
+            EventWriter(self._reconcile_path, run_id, **writer_kwargs),
+            rules_hash=self.rules_hash)
+        self._status_writer = EventWriter(self._status_path, run_id,
+                                          **writer_kwargs)
+        self._status_ledger = StatusLedger(
+            self._status_writer, rules_hash=self.rules_hash)
         if lock_reclaimed:
             self._status_row(STATUS_EVT_LOCK_RECLAIMED,
                              {"note": "stale dead-pid lock reclaimed"})
@@ -530,6 +634,32 @@ class Orchestrator:
         if mode != "paper" and self._recovery_queue:
             # observe/offline orphans resolve NOW (step 6, M5C-S2).
             self._resolve_offline_orphans()
+
+        # ---- step 6.5: reconcile rehydrate (PURE — NO broker call) ----------
+        reconcile_rows = replay_reconcile(self._reconcile_path)
+        reconcile_state = rehydrate_reconcile_state(reconcile_rows)
+        self._latest_baseline = reconcile_state["latest_baseline"]
+        self._pass_count = reconcile_state["pass_count"]
+        self._outstanding_cash_residue = _residue_from_row(
+            reconcile_state["outstanding_cash_residue"])
+        self._reconciled_eod_sessions: set = set()
+        self._durable_ids = dict(durable_ids or {})
+        self._observe_suspended: set = set()
+        self._noted_durables: set = set()
+        self._detector = BrokerAdjustDetector()
+        self._durable_seed_qty: Dict[str, Decimal] = {}
+        status_state = rehydrate_state(replay_status(self._status_path))
+        frozen_rows = [
+            row for row in status_state["corporate_actions"].values()
+            if row.get("event_type") == EVT_BROKER_ADJUST_FREEZE
+        ]
+        self._frozen_durables: set = {
+            row["durable_key"] for row in frozen_rows}
+        self._frozen_durable_symbols: set = {
+            row["symbol"] for row in frozen_rows if row.get("symbol")}
+        self._rehydrate_detector_baselines()
+        self._drift_latch = bool(reconcile_state["latched"]
+                                 or self._frozen_durables)
 
         # ---- step 7: HALTED latch -------------------------------------------
         if self._risk_kill.state == "halted":
@@ -654,6 +784,542 @@ class Orchestrator:
     @property
     def in_flight(self) -> bool:
         return self._task is not None
+
+    @property
+    def drift_latched(self) -> bool:
+        return self._drift_latch
+
+    # ----------------------------------------------------------- M6 reconcile
+
+    def _reconcile_ts(self, ts_utc: Optional[str]) -> str:
+        return (ts_utc or self._instant_utc
+                or "1970-01-01T00:00:00.000000Z")
+
+    def _open_positions_by_symbol(self) -> Dict[str, Tuple]:
+        grouped: Dict[str, List[object]] = {}
+        for position in self._book._positions.values():
+            if getattr(position, "status", None) != "open":
+                continue
+            grouped.setdefault(position.symbol, []).append(position)
+        return {symbol: tuple(sorted(positions,
+                                     key=lambda p: p.position_id,
+                                     reverse=True))
+                for symbol, positions in grouped.items()}
+
+    def _fill_rows(self) -> List[dict]:
+        return journal_replay(self._journal_dir / "fills.jsonl")
+
+    def _fills_seq_watermark(self, fill_rows: List[dict]) -> int:
+        seqs = [row["seq"] for row in fill_rows
+                if row.get("event_type") == "broker_fill"]
+        return max(seqs) if seqs else 0
+
+    def _fills_cum_watermarks(self, fill_rows: List[dict]) -> Dict[str, Decimal]:
+        marks: Dict[str, Decimal] = {}
+        for row in fill_rows:
+            if row.get("event_type") != "broker_fill":
+                continue
+            order_id = row.get("order_id")
+            if not isinstance(order_id, str):
+                continue
+            qty = Decimal(str(row.get("cum_filled_qty", "0")))
+            marks[order_id] = max(marks.get(order_id, _ZERO), qty)
+        return marks
+
+    def _fill_rows_since_baseline(self, fill_rows: List[dict]) -> List[dict]:
+        baseline = self._latest_baseline
+        if baseline is None:
+            return []
+        watermark = int(baseline["fills_seq_watermark"])
+        seen_before = {
+            row.get("fill_id") for row in fill_rows
+            if row.get("event_type") == "broker_fill" and row["seq"] <= watermark
+        }
+        return [row for row in fill_rows
+                if row.get("event_type") == "broker_fill"
+                and row["seq"] > watermark
+                and row.get("fill_id") not in seen_before]
+
+    def _checked_symbols(self, local_positions: Mapping,
+                         portfolio) -> List[str]:
+        broker_symbols = {position.symbol for position in portfolio.positions}
+        return sorted(set(local_positions) | broker_symbols)
+
+    def _baseline_positions(self, portfolio) -> List[dict]:
+        return [{"symbol": position.symbol,
+                 "qty": canonical_decimal_str(position.qty)}
+                for position in portfolio.positions]
+
+    def _wrapped_probe(self, order_id: str):
+        try:
+            result = self.broker.order_status(order_id)
+        except KeyError:
+            return NOT_FOUND
+        except Exception as err:  # noqa: BLE001 — probe failures are DATA.
+            if getattr(err, "status_code", None) == 404:
+                return NOT_FOUND
+            return PROBE_FAILED
+        if not isinstance(result, Mapping):
+            if getattr(result, "status_code", None) == 404:
+                return NOT_FOUND
+            return PROBE_FAILED
+        parsed = parse_order_payload(result, source=self._fill_source)
+        if isinstance(parsed, OrderInvalid):
+            return PROBE_FAILED
+        return parsed
+
+    def _current_open_orders(self) -> Dict[str, dict]:
+        order_rows = replay_orders(self._journal_dir / "orders.jsonl")
+        fill_rows = self._fill_rows()
+        position_rows = journal_replay(self._journal_dir / "positions.jsonl")
+        state = rehydrate_exec_state(
+            order_rows, fill_rows, position_rows, run_id=self.run_id,
+            book_rehydrate=PaperBook.rehydrate)
+        attempts = {
+            row["order_id"]: row for row in order_rows
+            if row.get("event_type") == "order_submit_attempt"
+        }
+        enriched = {}
+        for order_id, row in state["open_orders"].items():
+            attempt = attempts.get(order_id)
+            if attempt is None:
+                enriched[order_id] = row
+                continue
+            merged = dict(attempt)
+            merged.update(row)
+            for key in ("symbol", "instrument_id", "strategy_id",
+                        "decision_id", "quote_b"):
+                if key not in merged or merged[key] is None:
+                    merged[key] = attempt.get(key)
+            enriched[order_id] = merged
+        return enriched
+
+    def _session_over(self, order_row: Mapping, ts_utc: str) -> bool:
+        quote = order_row.get("quote_b")
+        order_ts = quote.get("ts_recv_utc") if isinstance(quote, Mapping) else None
+        if not isinstance(order_ts, str):
+            order_ts = order_row.get("ts_utc")
+        if not isinstance(order_ts, str):
+            return False
+        try:
+            order_session = self._calendar.session_date_for(order_ts)
+            current_session = self._calendar.session_date_for(ts_utc)
+            if order_session < current_session:
+                return True
+            if order_session != current_session:
+                return False
+            schedule = self._schedule_provider.schedule_for(order_session)
+        except UnknownSessionDate:
+            return False
+        close_utc = schedule.rth_close_utc
+        return bool(close_utc and _parse_utc(ts_utc) >= _parse_utc(close_utc))
+
+    def _frozen_symbols(self) -> set:
+        frozen = set(self._frozen_durable_symbols)
+        for symbol, durable in self._durable_ids.items():
+            if durable.key() in self._frozen_durables:
+                frozen.add(symbol)
+            elif self._detector.is_frozen(durable):
+                frozen.add(symbol)
+        return frozen
+
+    def _local_folded_qty(self, symbol: str) -> Decimal:
+        total = Decimal("0")
+        for position in self._book._positions.values():
+            if position.symbol == symbol and position.status == "open":
+                total += position.qty
+        return total
+
+    def _rehydrate_detector_baselines(self) -> None:
+        baseline = self._latest_baseline
+        if baseline is None:
+            return
+        by_symbol = {
+            row["symbol"]: Decimal(row["qty"])
+            for row in baseline.get("positions", [])
+        }
+        seeded = set(baseline.get("durable_seeded", []))
+        for symbol, durable in self._durable_ids.items():
+            key = durable.key()
+            if key not in seeded or symbol not in by_symbol:
+                continue
+            qty = by_symbol[symbol]
+            self._detector.seed_baseline(durable, qty)
+            self._durable_seed_qty[key] = qty
+
+    def _durable_seed_candidates(self, portfolio, defer, phase: str) -> List[str]:
+        if phase == "immediate":
+            return []
+        frozen = self._frozen_symbols()
+        seeded = []
+        for symbol, durable in sorted(self._durable_ids.items()):
+            if symbol in defer or symbol in frozen:
+                continue
+            broker_qty = portfolio.qty_for(symbol)
+            if broker_qty == 0:
+                continue
+            if self._local_folded_qty(symbol) != broker_qty:
+                continue
+            seeded.append(durable.key())
+        return seeded
+
+    def _commit_durable_seeds(self, portfolio, durable_keys) -> None:
+        wanted = set(durable_keys)
+        for symbol, durable in self._durable_ids.items():
+            key = durable.key()
+            if key not in wanted:
+                continue
+            qty = portfolio.qty_for(symbol)
+            self._detector.seed_baseline(durable, qty)
+            self._durable_seed_qty[key] = qty
+            self._observe_suspended.discard(symbol)
+
+    def _note_missing_durable_ids(self, checked_symbols, portfolio,
+                                  local_positions, notes) -> None:
+        for symbol in checked_symbols:
+            if symbol in self._durable_ids or symbol in self._noted_durables:
+                continue
+            local_qty = sum((position.qty for position in
+                             local_positions.get(symbol, ())), Decimal("0"))
+            if local_qty == 0 and portfolio.qty_for(symbol) == 0:
+                continue
+            notes.append(("durable_id_missing", symbol, ""))
+            self._noted_durables.add(symbol)
+
+    def _durable_observation_blocked(self, symbol: str) -> bool:
+        if symbol in self._observe_suspended:
+            return True
+        if self._task is not None and self._task.symbol == symbol:
+            return True
+        return symbol in self._open_deny
+
+    def _observe_durable_positions(self, portfolio, now_ms: int) -> None:
+        if not self._durable_ids:
+            return
+        frozen = self._frozen_symbols()
+        for symbol, durable in sorted(self._durable_ids.items()):
+            key = durable.key()
+            if key not in self._durable_seed_qty:
+                continue
+            if symbol in frozen or self._durable_observation_blocked(symbol):
+                continue
+            if self._local_folded_qty(symbol) != self._durable_seed_qty[key]:
+                self._observe_suspended.add(symbol)
+                continue
+            broker_qty = portfolio.qty_for(symbol)
+            signal = self._detector.observe_broker_qty(
+                durable, broker_qty, blacked_out=False)
+            if signal is None:
+                continue
+            instrument_id = self._instrument_ids.get(symbol)
+            if instrument_id is None:
+                for position in portfolio.positions:
+                    if position.symbol == symbol:
+                        instrument_id = position.instrument_id
+                        break
+            if instrument_id is None:
+                self._observe_suspended.add(symbol)
+                continue
+            self._frozen_durables.add(key)
+            self._frozen_durable_symbols.add(symbol)
+            self._status_ledger.record_broker_adjust_freeze(
+                freeze_signal=signal,
+                instrument_id=instrument_id,
+                ts_market_utc=self._reconcile_ts(self._instant_utc))
+            self.run_reconcile(
+                phase="immediate",
+                ts_utc=self._reconcile_ts(self._instant_utc),
+                now_ms=now_ms,
+                trigger=signal)
+
+    def _finish_reconcile_pass(self, *, reconcile_id: str, phase: str,
+                               session_date_et: str, trigger_durable_key,
+                               broker_source: str, checked_symbols,
+                               findings, adjustments, resolutions, notes,
+                               completed: bool, wrote_baseline=None
+                               ) -> ReconcilePassResult:
+        findings = tuple(sorted(findings, key=_finding_key))
+        adjustments = tuple(adjustments)
+        notes = tuple(sorted(set(notes), key=_note_key))
+
+        for finding in findings:
+            self._reconcile_ledger.record_reconcile(
+                reconcile_id=reconcile_id,
+                drift_id=_mint_drift_id(reconcile_id, finding),
+                kind=finding.kind, symbol=finding.symbol, field=finding.field,
+                local=finding.local, broker=finding.broker, diff=finding.diff,
+                action=finding.action, position_id=finding.position_id,
+                local_order_id=finding.local_order_id,
+                broker_order_id=finding.broker_order_id)
+
+        applied = []
+        if phase != "immediate":
+            for plan in adjustments:
+                self._book.apply_position_adjust(
+                    position_id=plan.position_id,
+                    adjusted_qty=plan.adjusted_qty,
+                    adjusted_broker_cost_usd=plan.adjusted_broker_cost_usd,
+                    adjust_id=_mint_adjust_id(reconcile_id, plan.position_id),
+                    reconcile_id=reconcile_id)
+                applied.append(plan)
+
+        for resolution in resolutions:
+            self._exec_ledger.record_order_terminal(
+                terminal_state=resolution.terminal_state,
+                filled_qty=resolution.filled_qty,
+                cum_notional_usd=resolution.cum_notional_usd,
+                ts_broker_utc=resolution.ts_broker_utc,
+                decision_id=resolution.decision_id,
+                order_id=resolution.order_id)
+
+        for note, symbol, detail in notes:
+            self._reconcile_ledger.record_reconcile_note(
+                reconcile_id=reconcile_id, note=note, symbol=symbol,
+                detail=detail)
+
+        if wrote_baseline is not None:
+            self._latest_baseline = self._reconcile_ledger.record_reconcile_baseline(
+                reconcile_id=reconcile_id,
+                session_date_et=session_date_et,
+                cash_usd=wrote_baseline["cash_usd"],
+                equity_usd=wrote_baseline["equity_usd"],
+                buying_power_usd=wrote_baseline["buying_power_usd"],
+                fills_seq_watermark=wrote_baseline["fills_seq_watermark"],
+                positions=wrote_baseline["positions"],
+                durable_seeded=wrote_baseline["durable_seeded"])
+
+        clean = bool(completed and not findings)
+        self._reconcile_ledger.record_reconcile_run(
+            reconcile_id=reconcile_id, phase=phase,
+            session_date_et=session_date_et,
+            trigger_durable_key=trigger_durable_key,
+            broker_source=broker_source,
+            checked_symbols=checked_symbols,
+            drift_count=len(findings), adjusted_count=len(applied),
+            note_count=len(notes), completed=completed, clean=clean)
+        self._pass_count += 1
+
+        if findings:
+            self._drift_latch = True
+        elif completed and phase != "immediate" and not self._frozen_symbols():
+            self._drift_latch = False
+
+        return ReconcilePassResult(
+            reconcile_id=reconcile_id, phase=phase,
+            session_date_et=session_date_et, completed=completed,
+            findings=findings, adjustments=tuple(applied), notes=notes,
+            clean=clean)
+
+    def run_reconcile(self, *, phase: str, ts_utc: Optional[str] = None,
+                      now_ms: Optional[int] = None,
+                      trigger=None) -> ReconcilePassResult:
+        """M6 SOD/EOD/CLI/immediate broker reconciliation.
+
+        Observation + journal only: this method never submits, cancels, or mints
+        preflight tokens. Position changes are explicit `position_adjust` rows
+        applied through PaperBook after the reconcile drift rows are written.
+        """
+        phase = require_phase(phase)
+        ts = self._reconcile_ts(ts_utc)
+        now = self._clock.now_ms() if now_ms is None else int(now_ms)
+        session_date_et = self._calendar.session_date_for(ts)
+        reconcile_id = _mint_reconcile_id(
+            self.run_id, phase, session_date_et, self._pass_count)
+        trigger_durable_key = None
+        notes: List[tuple] = []
+        findings: List[DriftFinding] = []
+        plans: List[object] = []
+        completed = True
+
+        if phase == "immediate":
+            if trigger is None:
+                raise ExecError("immediate reconcile requires a FreezeSignal")
+            trigger_durable_key = trigger.durable_id.key()
+            findings.append(make_finding(
+                kind="ca_silent_adjust", symbol=trigger.symbol,
+                field="qty", local=trigger.prev_qty, broker=trigger.curr_qty,
+                action="frozen_immediate"))
+            self._drift_latch = True
+
+        if self.broker is None and self._account_provider is None:
+            notes.append(("reconcile_skipped_no_broker", None, self.mode))
+            return self._finish_reconcile_pass(
+                reconcile_id=reconcile_id, phase=phase,
+                session_date_et=session_date_et,
+                trigger_durable_key=trigger_durable_key,
+                broker_source=self._account_source, checked_symbols=[],
+                findings=findings, adjustments=plans, resolutions=[],
+                notes=notes, completed=False)
+
+        account_payload, positions_payload = self._provider_payloads()
+        if (not isinstance(account_payload, Mapping)
+                or not isinstance(positions_payload, list)):
+            notes.append(("broker_read_failed", None, "payload shape"))
+            return self._finish_reconcile_pass(
+                reconcile_id=reconcile_id, phase=phase,
+                session_date_et=session_date_et,
+                trigger_durable_key=trigger_durable_key,
+                broker_source=self._account_source, checked_symbols=[],
+                findings=findings, adjustments=plans, resolutions=[],
+                notes=notes, completed=False)
+
+        parsed_account = parse_account_payload(
+            account_payload, source=self._account_source,
+            seen_at_ms=now, ts_read_utc=ts)
+        if isinstance(parsed_account, AccountInvalid):
+            notes.append(("broker_read_failed", None, parsed_account.reason))
+            completed = False
+            portfolio = None
+        else:
+            try:
+                portfolio = parse_positions_payload(
+                    positions_payload, source=self._account_source,
+                    seen_at_ms=now, stale=False)
+                self._portfolio = portfolio
+            except ValueError as exc:
+                notes.append(("broker_read_failed", None, str(exc)))
+                completed = False
+                portfolio = None
+
+        if not completed:
+            return self._finish_reconcile_pass(
+                reconcile_id=reconcile_id, phase=phase,
+                session_date_et=session_date_et,
+                trigger_durable_key=trigger_durable_key,
+                broker_source=self._account_source, checked_symbols=[],
+                findings=findings, adjustments=plans, resolutions=[],
+                notes=notes, completed=False)
+
+        fill_rows = self._fill_rows()
+        open_orders = self._current_open_orders()
+        watermarks = self._fills_cum_watermarks(fill_rows)
+        defer = set()
+        resolutions = []
+
+        for order_id, row in sorted(open_orders.items()):
+            probe = self._wrapped_probe(order_id)
+            if probe is PROBE_FAILED:
+                notes.append(("order_probe_failed", row.get("symbol"),
+                              order_id))
+                completed = False
+                defer.add(row.get("symbol"))
+                continue
+            verdict = resolve_order_probe(
+                row, probe, cum_filled_watermark=watermarks.get(order_id, _ZERO),
+                session_over=self._session_over(row, ts), flatten_symbol=None,
+                reconcile_id=reconcile_id)
+            findings.extend(verdict.findings)
+            notes.extend(verdict.notes)
+            resolutions.extend(verdict.terminal_resolutions)
+            defer.update(verdict.defer_symbols)
+
+        for symbol in sorted(self._risk_kill.residual_symbols()):
+            probe_id = f"flatten-{symbol}"
+            probe = self._wrapped_probe(probe_id)
+            if probe is PROBE_FAILED:
+                notes.append(("order_probe_failed", symbol, probe_id))
+                completed = False
+                defer.add(symbol)
+                continue
+            verdict = resolve_order_probe(
+                None, probe,
+                cum_filled_watermark=watermarks.get(probe_id, _ZERO),
+                session_over=False, flatten_symbol=symbol,
+                reconcile_id=reconcile_id)
+            findings.extend(verdict.findings)
+            notes.extend(verdict.notes)
+            resolutions.extend(verdict.terminal_resolutions)
+            defer.update(verdict.defer_symbols)
+
+        resolved_ids = {resolution.order_id for resolution in resolutions}
+        for order_id, row in open_orders.items():
+            if order_id not in resolved_ids:
+                symbol = row.get("symbol")
+                if isinstance(symbol, str) and symbol:
+                    defer.add(symbol)
+        if self._task is not None:
+            defer.add(self._task.symbol)
+        defer.update(self._open_deny)
+
+        local_positions = self._open_positions_by_symbol()
+        checked_symbols = self._checked_symbols(local_positions, portfolio)
+        self._note_missing_durable_ids(
+            checked_symbols, portfolio, local_positions, notes)
+        pos_findings, pos_plans, pos_notes = diff_positions(
+            local_positions, portfolio,
+            frozen_symbols=frozenset(self._frozen_symbols()),
+            inflight_symbols=frozenset(s for s in defer if isinstance(s, str)),
+            adjusts_allowed=(phase != "immediate"),
+            reconcile_id=reconcile_id)
+        findings.extend(pos_findings)
+        plans.extend(pos_plans)
+        notes.extend(pos_notes)
+
+        cash_clean = False
+        if self._latest_baseline is None:
+            if defer:
+                notes.append(("cash_skipped_inflight", None, ""))
+            else:
+                notes.append(("baseline_seeded", None, ""))
+                cash_clean = True
+        elif defer:
+            notes.append(("cash_skipped_inflight", None, ""))
+            if self._outstanding_cash_residue is not None:
+                findings.append(
+                    _carried_residue_finding(self._outstanding_cash_residue))
+        else:
+            baseline_cash = BrokerUSD(Decimal(self._latest_baseline["cash_usd"]))
+            cash_finding = diff_cash(
+                baseline_cash=baseline_cash,
+                fill_rows_since_watermark=self._fill_rows_since_baseline(fill_rows),
+                broker_cash=parsed_account.cash, reconcile_id=reconcile_id)
+            if cash_finding is None:
+                cash_clean = True
+                self._outstanding_cash_residue = None
+            else:
+                findings.append(cash_finding)
+                self._outstanding_cash_residue = cash_finding
+
+        id_note = identity_note(
+            equity=parsed_account.equity, cash=parsed_account.cash,
+            market_values=[position.market_value
+                           for position in portfolio.positions])
+        if id_note is not None:
+            notes.append(id_note)
+        if findings:
+            self._drift_latch = True
+
+        wrote_baseline = None
+        if completed and (self._latest_baseline is not None or not defer):
+            if self._latest_baseline is None or cash_clean:
+                cash_usd = parsed_account.cash
+                watermark = self._fills_seq_watermark(fill_rows)
+            else:
+                cash_usd = BrokerUSD(Decimal(self._latest_baseline["cash_usd"]))
+                watermark = int(self._latest_baseline["fills_seq_watermark"])
+            durable_seeded = self._durable_seed_candidates(
+                portfolio, defer, phase)
+            wrote_baseline = {
+                "cash_usd": as_broker_usd(cash_usd),
+                "equity_usd": parsed_account.equity,
+                "buying_power_usd": parsed_account.buying_power,
+                "fills_seq_watermark": watermark,
+                "positions": self._baseline_positions(portfolio),
+                "durable_seeded": durable_seeded,
+            }
+
+        result = self._finish_reconcile_pass(
+            reconcile_id=reconcile_id, phase=phase,
+            session_date_et=session_date_et,
+            trigger_durable_key=trigger_durable_key,
+            broker_source=self._account_source, checked_symbols=checked_symbols,
+            findings=findings, adjustments=plans, resolutions=resolutions,
+            notes=notes,
+            completed=completed, wrote_baseline=wrote_baseline)
+        if completed and wrote_baseline is not None:
+            self._commit_durable_seeds(
+                portfolio, wrote_baseline["durable_seeded"])
+        return result
 
     def write_report(self, path, *, generated_ts_utc: str, bins: int = 10) -> dict:
         """Observe-mode calibration report over this run's journal (§O.1
@@ -921,6 +1587,7 @@ class Orchestrator:
             self._portfolio = parse_positions_payload(
                 rows, source=self._account_source, seen_at_ms=now_ms,
                 stale=False)
+            self._observe_durable_positions(self._portfolio, now_ms)
         except ValueError:
             self._portfolio = None  # caller maps to portfolio_missing
 
@@ -929,7 +1596,8 @@ class Orchestrator:
             return None
         return replace(self._portfolio,
                        stale=portfolio_is_stale(self._portfolio.seen_at_ms,
-                                                now_ms))
+                                                now_ms),
+                       unreconciled_drift=self._drift_latch)
 
     # -- step 4 -----------------------------------------------------------------
 
@@ -1925,12 +2593,15 @@ class Orchestrator:
         if task is not None and task.state == "watch":
             self._attempt_cancel(task, "session_end")
         session_date_et = self._calendar.session_date_for(self._instant_utc)
-        if session_date_et in self._closed_sessions:
-            return
+        already_closed = session_date_et in self._closed_sessions
         read = self._account_store.latest_unsafe()
-        if read is None:
-            return  # no observation to close the day on
-        self._closed_sessions.add(session_date_et)
-        self._margin.close_of_day(session_date_et, observation_from_read(
-            read, session_date_et=session_date_et, after_iml_reducing=False,
-            eod=True))
+        if not already_closed and read is not None:
+            self._closed_sessions.add(session_date_et)
+            self._margin.close_of_day(session_date_et, observation_from_read(
+                read, session_date_et=session_date_et,
+                after_iml_reducing=False, eod=True))
+        if (self.mode == "paper"
+                and session_date_et not in self._reconciled_eod_sessions):
+            self._reconciled_eod_sessions.add(session_date_et)
+            self.run_reconcile(
+                phase="eod", ts_utc=self._instant_utc, now_ms=now_ms)

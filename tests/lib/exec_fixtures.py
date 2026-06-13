@@ -460,7 +460,7 @@ class ExecPipeline:
                  artifacts=None, artifacts_dir=None,
                  session_date="2026-06-15", start_et="09:30", minutes=75,
                  status_windows=None, fill_policy="immediate_full",
-                 row_clock=None):
+                 row_clock=None, durable_ids=None):
         self.symbol = symbol
         self.instrument_id = instrument_id
         self.journal_dir = Path(journal_dir)
@@ -520,6 +520,7 @@ class ExecPipeline:
             credentials_path=credentials_path,
             run_gates_path=run_gates_path,
             instrument_ids={symbol: instrument_id},
+            durable_ids=durable_ids,
             artifacts_dir=str(self.artifacts_dir),
             fill_policy=fill_policy,
             row_clock=row_clock or (lambda: FIXED_WRITER_TS),
