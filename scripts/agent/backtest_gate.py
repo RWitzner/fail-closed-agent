@@ -33,7 +33,6 @@ _PAYLOAD_KEYS = frozenset({
     "artifact_hash"})
 
 _REQUIRED_BASIS = "execution_realistic_pnl"    # the S9 metric pin
-_M7_STRATEGY_ID = "directional.momentum_v1"
 _V2_METRIC_KEYS = frozenset({
     "basis", "pass", "runner_version", "strategy_version", "sample", "pnl",
     "benchmark", "risk", "quality", "thresholds", "provenance",
@@ -110,7 +109,7 @@ def _decimal_value(value):
     return Decimal(value)
 
 
-def _valid_v2_metrics(metrics: dict) -> bool:
+def _valid_v2_metrics(metrics: dict, *, strategy_id: str) -> bool:
     if not isinstance(metrics, dict) or set(metrics) != _V2_METRIC_KEYS:
         return False
     if metrics.get("basis") != _REQUIRED_BASIS:
@@ -119,7 +118,7 @@ def _valid_v2_metrics(metrics: dict) -> bool:
         return False
     if not _string(metrics.get("runner_version")):
         return False
-    if metrics.get("strategy_version") != _M7_STRATEGY_ID:
+    if metrics.get("strategy_version") != strategy_id:
         return False
 
     sample = metrics["sample"]
@@ -287,7 +286,8 @@ def verify_artifact(strategy_id: str, *, rules_hash: str, data_pin: str,
     metrics = payload["metrics"]
     if not isinstance(metrics, dict) or metrics.get("basis") != _REQUIRED_BASIS:
         return _hash_invalid(path, claimed_hash)   # the S9 metric pin
-    if version == 2 and not _valid_v2_metrics(metrics):
+    if version == 2 and not _valid_v2_metrics(
+            metrics, strategy_id=payload["strategy_id"]):
         return _hash_invalid(path, claimed_hash)
 
     if (payload["strategy_id"], payload["rules_hash"], payload["data_pin"]) != (

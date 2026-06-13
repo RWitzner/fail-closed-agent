@@ -357,6 +357,7 @@ def _cmd_m7_historical_artifact(args) -> int:
             input_manifest=load_input_manifest_json(args.input_manifest_json),
             builder_git_commit=args.builder_git_commit,
             allow_reviewed_artifact=args.allow_reviewed_artifact,
+            strategy_id=args.strategy_id,
         )
     except HistoricalArtifactWriteRefused as exc:
         print(str(exc), file=sys.stderr)
@@ -463,6 +464,8 @@ def build_parser() -> argparse.ArgumentParser:
     hist.add_argument("--created-utc", dest="created_utc", required=True)
     hist.add_argument("--builder-git-commit", dest="builder_git_commit",
                       default="unknown")
+    hist.add_argument("--strategy-id", dest="strategy_id",
+                      default="directional.momentum_v1")
     hist.add_argument("--allow-reviewed-artifact",
                       dest="allow_reviewed_artifact", action="store_true")
     hist.set_defaults(func=_cmd_m7_historical_artifact)

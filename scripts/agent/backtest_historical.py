@@ -38,7 +38,7 @@ from agent.quote_quality import QuoteSnapshot
 from agent.serializer import dumps, row_hash
 from agent.signal_config import SignalConfig
 from agent.signal_snapshot import SignalSnapshot, assemble, horizon_gate
-from agent.strategies.directional_momentum import MomentumV1Strategy
+from agent.strategies.directional_momentum import strategy_for_id
 from agent.strategy import ScanContext
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -584,6 +584,7 @@ def run_historical_backtest(*, quote_rows: Iterable[dict], symbol: str,
                             data_pin: str, dataset: str = "EQUS.MINI",
                             schema: str = "tbbo", agent_rules_path=None,
                             input_manifest: Mapping[str, object] | None = None,
+                            strategy_id: str = STRATEGY_ID,
                             latency_ms: int = 250,
                             slippage_cap_bps: Decimal = Decimal("25"),
                             rth_close_time_utc: str = _DEFAULT_RTH_CLOSE_UTC
@@ -621,7 +622,7 @@ def run_historical_backtest(*, quote_rows: Iterable[dict], symbol: str,
     reader = MidBarSeriesReader(bars, missing)
     clock = _BacktestClock()
     features = FeatureEngine(reader=reader, config=config, clock=clock)
-    strategy = MomentumV1Strategy()
+    strategy = strategy_for_id(strategy_id)
 
     trades = []
     skips = list(
@@ -732,6 +733,7 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
                                  input_manifest: Mapping[str, object],
                                  builder_git_commit: str,
                                  allow_reviewed_artifact: bool,
+                                 strategy_id: str = STRATEGY_ID,
                                  agent_rules_path=None,
                                  production_artifacts_dir=None
                                  ) -> HistoricalArtifactBuildResult:
@@ -745,6 +747,7 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
         schema=schema,
         data_pin=data_pin,
     )
+    strategy_for_id(strategy_id)
     output_dir = Path(artifacts_dir)
     production_dir = (
         Path(production_artifacts_dir).resolve()
@@ -776,9 +779,10 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
         schema=schema,
         agent_rules_path=agent_rules_path,
         input_manifest=input_manifest,
+        strategy_id=strategy_id,
     )
     payload = build_v2_artifact_payload(
-        strategy_id=STRATEGY_ID,
+        strategy_id=strategy_id,
         rules_hash=rules_hash,
         data_pin=data_pin,
         trades=backtest.trades,
@@ -806,7 +810,7 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
         },
     )
     criteria = evaluate_paper_phase_criteria(payload["metrics"])
-    artifact_path = output_dir / f"{STRATEGY_ID}.json"
+    artifact_path = output_dir / f"{strategy_id}.json"
     result = HistoricalArtifactBuildResult(
         artifact_path=artifact_path,
         payload=payload,

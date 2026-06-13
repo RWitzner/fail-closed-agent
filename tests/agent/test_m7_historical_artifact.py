@@ -24,6 +24,7 @@ from agent.serializer import dumps, row_hash
 
 
 _STRATEGY_ID = "directional.momentum_v1"
+_STRATEGY_ID_V2 = "directional.momentum_v2"
 _RULES_HASH = "rh-historical-test"
 
 
@@ -233,6 +234,63 @@ class TestHistoricalArtifactFlow(unittest.TestCase):
                 ).status,
                 "ok",
             )
+
+    def test_reviewed_historical_flow_can_select_v2_strategy_id(self):
+        with TemporaryDirectory() as tmp:
+            rows = _historical_rows()
+            manifest = _manifest(rows)
+            with patch("agent.backtest_historical.run_historical_backtest",
+                       return_value=_passing_backtest_result()):
+                result = write_m7_historical_artifact(
+                    artifacts_dir=tmp,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    allow_reviewed_artifact=True,
+                    strategy_id=_STRATEGY_ID_V2,
+                )
+
+            self.assertTrue(result.criteria.passed)
+            self.assertEqual(result.payload["strategy_id"], _STRATEGY_ID_V2)
+            self.assertEqual(
+                result.payload["metrics"]["strategy_version"], _STRATEGY_ID_V2)
+            self.assertEqual(result.artifact_path,
+                             Path(tmp) / f"{_STRATEGY_ID_V2}.json")
+            self.assertEqual(
+                verify_artifact(
+                    _STRATEGY_ID_V2,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    artifacts_dir=tmp,
+                ).status,
+                "ok",
+            )
+
+    def test_unknown_historical_strategy_id_is_rejected_before_backtest(self):
+        rows = _historical_rows()
+        manifest = _manifest(rows)
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                write_m7_historical_artifact(
+                    artifacts_dir=tmp,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    allow_reviewed_artifact=True,
+                    strategy_id="directional.unknown",
+                )
+
+        self.assertIn("unknown strategy_id", str(ctx.exception))
 
     def test_manifest_hash_is_bound_to_data_pin(self):
         rows = _historical_rows()
@@ -469,13 +527,14 @@ class TestHistoricalArtifactCli(unittest.TestCase):
                     "--data-pin", _data_pin(manifest),
                     "--created-utc", "2026-06-13T12:00:00.000000Z",
                     "--builder-git-commit", "test-commit",
+                    "--strategy-id", _STRATEGY_ID_V2,
                     "--allow-reviewed-artifact",
                 ])
 
             self.assertEqual(rc, 0)
             self.assertEqual(
                 verify_artifact(
-                    _STRATEGY_ID,
+                    _STRATEGY_ID_V2,
                     rules_hash=_RULES_HASH,
                     data_pin=_data_pin(manifest),
                     artifacts_dir=tmp,

@@ -16,6 +16,7 @@ from agent.market_state import (
 from agent.quote_quality import QuoteSnapshot, QuoteVerdict
 from agent.signal_snapshot import SignalSnapshot
 from agent.strategy import ScanContext, Strategy
+from agent.strategies import directional_momentum
 from agent.strategies.directional_momentum import MomentumV1Strategy
 
 
@@ -47,7 +48,7 @@ def _feature(**overrides):
     )
 
 
-def _quote(mid=Decimal("100.000000")):
+def _quote(mid=Decimal("100.000000"), spread_bps=Decimal("2.00")):
     return QuoteSnapshot(
         symbol="AAPL",
         instrument_id=1001,
@@ -63,7 +64,7 @@ def _quote(mid=Decimal("100.000000")):
         dataset="EQUS.MINI",
         schema="tbbo",
     ), QuoteVerdict(ok=True, reasons=(), mid=mid,
-                    spread_bps=Decimal("2.00"), age_ms=0)
+                    spread_bps=spread_bps, age_ms=0)
 
 
 def _market_state():
@@ -84,8 +85,8 @@ def _market_state():
 
 
 def _snapshot(*, feature=None, mid=Decimal("100.000000"),
-              quote_verdict=None):
-    quote, verdict = _quote(mid)
+              quote_verdict=None, spread_bps=Decimal("2.00")):
+    quote, verdict = _quote(mid, spread_bps=spread_bps)
     if quote_verdict is not None:
         verdict = quote_verdict
     return SignalSnapshot(
@@ -183,6 +184,77 @@ class TestMomentumV1Strategy(unittest.TestCase):
                     isinstance(node.func, ast.Name)
                     and node.func.id in {"open", "__import__"},
                     "strategy must not perform file I/O or dynamic imports")
+
+
+class TestMomentumV2Strategy(unittest.TestCase):
+    def _strategy(self):
+        cls = getattr(directional_momentum, "MomentumV2Strategy", None)
+        self.assertIsNotNone(cls, "MomentumV2Strategy must be registered")
+        return cls()
+
+    def test_stricter_trend_snapshot_emits_v2_candidate(self):
+        strategy = self._strategy()
+        feature = _feature(features={
+            "z_ret_21": "0.30000000",
+            "momentum_9": "0.03000000",
+            "momentum_21": "0.02000000",
+            "ema_gap_9_21": "0.01000000",
+            "sma_gap_21_50": "0.01200000",
+            "realized_vol_21": "0.01000000",
+        })
+        ctx = ScanContext(snapshot=_snapshot(feature=feature),
+                          rules_hash="rh-m7", now_ms=1000)
+
+        candidates = strategy.scan(ctx)
+
+        self.assertIsInstance(strategy, Strategy)
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertEqual(candidate.strategy_id, "directional.momentum_v2")
+        self.assertEqual(candidate.paper_eligible, True)
+        self.assertEqual(candidate.score, Decimal("95.000000"))
+        leg = candidate.legs[0]
+        self.assertEqual(leg.side, "buy")
+        self.assertEqual(leg.qty, Decimal("10"))
+        self.assertEqual(leg.limit_price, Decimal("100.95"))
+
+    def test_v2_rejects_weak_trend_overextension_and_wide_spread(self):
+        strategy = self._strategy()
+        cases = (
+            {"ema_gap_9_21": "-0.00010000", "z_ret_21": "0.30000000"},
+            {"sma_gap_21_50": "0.00000000", "z_ret_21": "0.30000000"},
+            {"z_ret_21": "0.14999999"},
+            {"z_ret_21": "2.50000001"},
+            {"realized_vol_21": "0.00000000", "z_ret_21": "0.30000000"},
+        )
+        for features in cases:
+            with self.subTest(features=features):
+                ctx = ScanContext(
+                    snapshot=_snapshot(feature=_feature(features=features)),
+                    rules_hash="rh-m7",
+                    now_ms=1000,
+                )
+                self.assertEqual(strategy.scan(ctx), ())
+
+        wide_spread_ctx = ScanContext(
+            snapshot=_snapshot(
+                feature=_feature(features={"z_ret_21": "0.30000000"}),
+                spread_bps=Decimal("5.000001"),
+            ),
+            rules_hash="rh-m7",
+            now_ms=1000,
+        )
+        self.assertEqual(strategy.scan(wide_spread_ctx), ())
+
+    def test_strategy_registry_rejects_unknown_ids(self):
+        registry = getattr(directional_momentum, "strategy_for_id", None)
+        self.assertIsNotNone(registry, "strategy_for_id must be defined")
+        self.assertEqual(
+            registry("directional.momentum_v2").strategy_id,
+            "directional.momentum_v2",
+        )
+        with self.assertRaises(ValueError):
+            registry("directional.unknown")
 
 
 if __name__ == "__main__":

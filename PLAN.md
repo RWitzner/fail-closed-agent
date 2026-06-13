@@ -194,6 +194,14 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   negative active PnL, and most also breached one or both realism-gap gates. No staging artifact verified `ok`,
   no production artifact was written, and `artifacts/backtests/` remains `.gitkeep` only. Failure review:
   `docs/superpowers/reviews/2026-06-13-M7-holdout-historical-artifact-failure-review.md`.
+- **M7b strategy hardening attempt (2026-06-13, 1688 tests green):** added `directional.momentum_v2` plus an explicit historical
+  `strategy_id` selector so artifact payloads/filenames verify against the selected strategy version while v1 stays
+  compatible. V2 keeps criteria unchanged and tries stricter trend/spread/edge gating; the valid holdout replay
+  still failed every symbol with negative execution-realistic net PnL. The older broader manifests are no longer
+  valid reviewed inputs because they predate the required hash-bound `universe` block; a diagnostic reconstructed
+  broader replay also failed every symbol. No production artifact was written, `artifacts/backtests/` remains
+  `.gitkeep` only, and paper/M8 remain blocked. Failure review:
+  `docs/superpowers/reviews/2026-06-13-M7b-momentum-v2-failure-review.md`.
 
 ## Locked decisions
 
