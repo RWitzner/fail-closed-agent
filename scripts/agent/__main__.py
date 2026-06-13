@@ -33,7 +33,8 @@ exits non-zero on a mismatch; no flag can flip a gate (§M.2 step 9).
   only after paper-phase criteria pass and always refuses committed
   artifacts/backtests; the historical reviewed-artifact flow is separate.
 - ``m7-historical-artifact`` — reviewed historical artifact builder over
-  normalized quote JSONL. Production writes require ``--allow-reviewed-artifact``.
+  normalized quote JSONL plus a hash-bound input manifest. Production writes
+  require ``--allow-reviewed-artifact``.
 """
 import argparse
 import json
@@ -338,6 +339,7 @@ def _cmd_m7_backtest(args) -> int:
 
 def _cmd_m7_historical_artifact(args) -> int:
     from agent.backtest_historical import HistoricalArtifactWriteRefused
+    from agent.backtest_historical import load_input_manifest_json
     from agent.backtest_historical import load_quote_rows_jsonl
     from agent.backtest_historical import write_m7_historical_artifact
 
@@ -352,7 +354,7 @@ def _cmd_m7_historical_artifact(args) -> int:
             dataset=args.dataset,
             schema=args.schema,
             created_utc=args.created_utc,
-            input_manifest_hash=args.input_manifest_hash,
+            input_manifest=load_input_manifest_json(args.input_manifest_json),
             builder_git_commit=args.builder_git_commit,
             allow_reviewed_artifact=args.allow_reviewed_artifact,
         )
@@ -448,6 +450,8 @@ def build_parser() -> argparse.ArgumentParser:
         "m7-historical-artifact",
         help="build reviewed M7 historical artifact from normalized quote JSONL")
     hist.add_argument("--quotes-jsonl", dest="quotes_jsonl", required=True)
+    hist.add_argument("--input-manifest-json", dest="input_manifest_json",
+                      required=True)
     hist.add_argument("--artifacts-dir", dest="artifacts_dir", required=True)
     hist.add_argument("--symbol", required=True)
     hist.add_argument("--instrument-id", dest="instrument_id", type=int,
@@ -457,8 +461,6 @@ def build_parser() -> argparse.ArgumentParser:
     hist.add_argument("--rules-hash", dest="rules_hash", required=True)
     hist.add_argument("--data-pin", dest="data_pin", required=True)
     hist.add_argument("--created-utc", dest="created_utc", required=True)
-    hist.add_argument("--input-manifest-hash", dest="input_manifest_hash",
-                      required=True)
     hist.add_argument("--builder-git-commit", dest="builder_git_commit",
                       default="unknown")
     hist.add_argument("--allow-reviewed-artifact",

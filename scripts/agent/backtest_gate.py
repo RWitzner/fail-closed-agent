@@ -67,8 +67,13 @@ _V2_THRESHOLD_KEYS = frozenset({
     "worst_day_pct_allocated", "p95_realism_gap_bps_max",
     "max_single_fill_divergence_bps",
 })
-_V2_PROVENANCE_KEYS = frozenset({
+_V2_PROVENANCE_REQUIRED_KEYS = frozenset({
     "input_manifest_hash", "builder_git_commit", "tier",
+})
+_V2_PROVENANCE_OPTIONAL_KEYS = frozenset({
+    "normalizer_id", "calendar_pin", "fee_model_version",
+    "pricing_model_version", "realism_gap_model_version",
+    "latency_budget_ms", "slippage_cap_bps",
 })
 _PINNED_MIN_SESSIONS = 20
 _PINNED_MIN_TRADES = 30
@@ -193,9 +198,14 @@ def _valid_v2_metrics(metrics: dict) -> bool:
         return False
 
     provenance = metrics["provenance"]
-    if not isinstance(provenance, dict) or set(provenance) != _V2_PROVENANCE_KEYS:
+    if not isinstance(provenance, dict):
         return False
-    return all(_string(provenance[key]) for key in _V2_PROVENANCE_KEYS)
+    keys = set(provenance)
+    if not _V2_PROVENANCE_REQUIRED_KEYS <= keys:
+        return False
+    if keys - (_V2_PROVENANCE_REQUIRED_KEYS | _V2_PROVENANCE_OPTIONAL_KEYS):
+        return False
+    return all(_string(provenance[key]) for key in keys)
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ Build the reviewed historical artifact before starting paper validation:
 ```bash
 PYTHONPATH=scripts python3 -m agent m7-historical-artifact \
   --quotes-jsonl <normalized-historical-quotes.jsonl> \
+  --input-manifest-json <historical-input-manifest.json> \
   --artifacts-dir artifacts/backtests \
   --symbol <SYMBOL> \
   --instrument-id <DATABENTO_INSTRUMENT_ID> \
@@ -20,15 +21,29 @@ PYTHONPATH=scripts python3 -m agent m7-historical-artifact \
   --rules-hash <CURRENT_ASSEMBLED_RULES_HASH> \
   --data-pin <DATASET>:<SCHEMA>:1m:historical:<MANIFEST_HASH> \
   --created-utc <PINNED_CREATED_UTC> \
-  --input-manifest-hash <MANIFEST_HASH> \
   --builder-git-commit <CURRENT_COMMIT> \
   --allow-reviewed-artifact
 ```
 
+The manifest is part of the reviewed input, not operator prose. It must be a
+canonical JSON object whose `manifest_hash` recomputes from the body and whose
+`quote_rows_sha256` recomputes over the normalized JSONL rows. Required manifest
+contents include the dataset/schema/interval/symbol/instrument id, row count,
+source window, normalizer id, drop counts/reasons, calendar session windows,
+corporate-action blackout dates, latency budget, slippage cap, fee model,
+pricing model, and realism-gap model. The `data_pin` must equal
+`<DATASET>:<SCHEMA>:1m:historical:<manifest_hash>`.
+
+`EQUS.MINI:bbo-1m` normalized rows are acceptable only as an explicitly declared
+historical L1 quote tier with this manifest binding. A passing artifact must not
+come from ad hoc JSONL or a free-form manifest hash; if the source tier changes
+to `tbbo`, produce a new manifest and data pin.
+
 If this exits with `criteria_failed=...`, do not commit an artifact and do not
 start paper edge-validation. Production `artifacts/backtests/` must remain
 fail-closed until `verify_artifact(strategy_id, rules_hash, data_pin)` returns
-`ok` for the reviewed triple.
+`ok` for the reviewed triple. Reviewed writes target the exact
+`artifacts/backtests` directory; nested paths under it are refused.
 
 ## Required Sample
 

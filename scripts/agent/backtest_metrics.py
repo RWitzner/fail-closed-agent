@@ -115,7 +115,10 @@ def build_v2_artifact_payload(*, strategy_id: str, rules_hash: str, data_pin: st
                               builder_git_commit: str, tier: str,
                               allocated_notional_usd: Decimal,
                               p95_realism_gap_bps: Decimal,
-                              max_single_fill_divergence_bps: Decimal) -> dict:
+                              max_single_fill_divergence_bps: Decimal,
+                              ca_blackout_skips: int = 0,
+                              data_quality_skip_count: int | None = None,
+                              provenance_extra: dict | None = None) -> dict:
     """Build the hash-bound M7 v2 artifact payload.
 
     Thresholds are artifact data, but they are pinned to the M7 paper/M8 floors
@@ -130,6 +133,18 @@ def build_v2_artifact_payload(*, strategy_id: str, rules_hash: str, data_pin: st
     max_fill_gap = _nonnegative_decimal(
         max_single_fill_divergence_bps,
         name="max_single_fill_divergence_bps")
+    if (not isinstance(ca_blackout_skips, int)
+            or isinstance(ca_blackout_skips, bool)
+            or ca_blackout_skips < 0):
+        raise ValueError("ca_blackout_skips must be a nonnegative int")
+    if data_quality_skip_count is None:
+        data_quality_skips = len(skips_t)
+    elif (not isinstance(data_quality_skip_count, int)
+          or isinstance(data_quality_skip_count, bool)
+          or data_quality_skip_count < 0):
+        raise ValueError("data_quality_skip_count must be a nonnegative int")
+    else:
+        data_quality_skips = data_quality_skip_count
     start_utc, end_utc = _sample_bounds(trades_t, skips_t, created_utc)
     sessions = {
         _date_part(trade.entry_bar_end_utc) for trade in trades_t
@@ -235,8 +250,8 @@ def build_v2_artifact_payload(*, strategy_id: str, rules_hash: str, data_pin: st
                     "no_quotes_in_bucket",
                     "invalid_quotes_only",
                 }),
-            "ca_blackout_skips": 0,
-            "data_quality_skip_count": len(skips_t),
+            "ca_blackout_skips": ca_blackout_skips,
+            "data_quality_skip_count": data_quality_skips,
             "unresolved_reconcile_drift_count": 0,
             "s1_canary_breach_count": 0,
             "live_broker_submit_count": 0,
@@ -250,6 +265,11 @@ def build_v2_artifact_payload(*, strategy_id: str, rules_hash: str, data_pin: st
             "tier": tier,
         },
     }
+    if provenance_extra:
+        for key, value in provenance_extra.items():
+            if key in metrics["provenance"]:
+                raise ValueError(f"provenance_extra may not override {key!r}")
+            metrics["provenance"][key] = value
 
     payload = {
         "v": 2,

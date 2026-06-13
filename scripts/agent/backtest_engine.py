@@ -21,6 +21,11 @@ BACKTEST_SKIP_REASONS = frozenset({
     "invalid_quotes_only",
     "horizon_crosses_close",
     "quote_b_before_latency",
+    "candidate_invalid",
+    "pricing_rejected",
+    "latency_lost_edge",
+    "ca_blackout",
+    "market_state_not_tradable",
 })
 
 

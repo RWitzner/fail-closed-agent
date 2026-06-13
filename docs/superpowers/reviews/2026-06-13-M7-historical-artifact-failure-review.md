@@ -21,6 +21,16 @@ and the deterministic artifact-builder output.
 The historical artifact did not pass the M7 criteria, so no artifact was written
 to `artifacts/backtests/` and paper edge-validation must not start.
 
+Post-review hardening note: this failed run predates the manifest-bound
+historical builder hardening. The rejection remains valid because gross modeled
+PnL and net execution-realistic PnL were both negative, but the old active-PnL
+number used the pre-hardening benchmark proxy and must not be used as a template
+for approving a future artifact. Future reviewed attempts must use
+`--input-manifest-json`, a data pin ending in the recomputed manifest hash,
+quote-A/quote-B realistic fills, M5 sell-fee assumptions, measured realism gaps,
+and the exact production-write guard documented in
+`docs/runbooks/m7-paper-edge-validation.md`.
+
 Failed criteria:
 
 - `metrics.pass`
@@ -66,8 +76,9 @@ on this pinned AAPL sample:
 - The strategy lost money before fees: gross modeled PnL was `-58.860000`.
 - Fees added another `-138.900000`, turning a weak gross result into a clearly
   negative execution-realistic result.
-- The strategy also underperformed the exposure-matched benchmark: active PnL was
-  `-168.330000`.
+- The strategy also underperformed the pre-hardening benchmark proxy: active PnL
+  was `-168.330000`. Future reviews must recompute active PnL with the hardened
+  quote-A/quote-B benchmark model before approving any passing artifact.
 - Losing trades outnumbered winning trades (`787` losses versus `602` wins).
 
 The practical blocker is therefore strategy/input selection and cost-adjusted edge,
@@ -79,8 +90,8 @@ Do not tune thresholds or commit this artifact.
 
 Next acceptable attempts are:
 
-- run the same reviewed historical tier on a pre-declared broader universe or a
-  different pinned symbol/sample, or
+- run the hardened reviewed historical tier on a pre-declared broader universe
+  or a different pinned symbol/sample, or
 - revise `directional.momentum_v1` under a new reviewed strategy version and rerun
   the historical artifact tier from a new pinned manifest.
 

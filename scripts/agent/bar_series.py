@@ -193,6 +193,8 @@ def resample_midbars(quote_rows: Iterable[dict], *, symbol: str, instrument_id: 
             quote_provenance={
                 "ts_event_utc": q["ts_event_utc"],
                 "ts_recv_utc": q["ts_recv_utc"],
+                "bid_sz": q["bid_sz"],
+                "ask_sz": q["ask_sz"],
                 "reconnect_epoch": q["reconnect_epoch"],
                 "vendor_seq": q["vendor_seq"],
             },

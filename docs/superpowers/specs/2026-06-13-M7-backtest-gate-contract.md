@@ -71,12 +71,12 @@ production strategy artifact is committed; the default artifact directory remain
 | FD-M7-10 | **Artifact top-level compatibility:** M7 keeps the M5 top-level key set exactly unchanged: `v,strategy_id,rules_hash,data_pin,metrics,created_utc,artifact_hash`. New M7 data lives under `metrics` so old malformed/extra top-level payloads still fail closed. |
 | FD-M7-11 | **Artifact version:** M7 artifact payloads use `v = 2`. `verify_artifact` accepts v1 only for existing M5 tests and v2 for production M7 artifacts. Unknown versions are `hash_invalid`. |
 | FD-M7-12 | **Artifact hash:** `artifact_hash = row_hash(payload_without_artifact_hash)`. Hash mismatch, float/non-serializable metric value, missing metric, wrong basis, or wrong version returns `hash_invalid`, never raises. |
-| FD-M7-13 | **Artifact path:** production verifier still defaults to `artifacts/backtests/<strategy_id>.json`; fixture builders/tests must take a mandatory temp `artifacts_dir` and must never write the committed production directory. Production artifacts require a separate historical reviewed-artifact flow. |
+| FD-M7-13 | **Artifact path:** production verifier still defaults to `artifacts/backtests/<strategy_id>.json`; fixture builders/tests must take a mandatory temp `artifacts_dir` and must never write the committed production directory. Production artifacts require the separate historical reviewed-artifact flow and, when intentionally reviewed, must target the exact `artifacts/backtests` directory rather than a nested path. |
 | FD-M7-14 | **No secret signing in M7:** "signed" means committed, reviewed, and hash-bound by `artifact_hash` plus git history. HMAC or external attestation is deferred unless explicitly approved. |
 | FD-M7-15 | **Artifact pass criteria are data with pinned floors:** pass/fail thresholds live inside the v2 artifact metrics under `thresholds`, but `verify_artifact` rejects thresholds looser than the M7-pinned paper/M8 criteria. It verifies required fields and that `metrics.pass is True`; it does not recompute the backtest. Recompute is owned by the builder tests and runbook. |
 | FD-M7-16 | **Backtest runner determinism:** identical inputs, rules hash, data pin, and strategy id produce byte-identical artifact body and report rows, except for `created_utc` when not pinned. Golden tests pin `created_utc`. |
 | FD-M7-17 | **Rules hash discipline:** artifact key uses the same assembled-config `rules_hash` used by orchestrator/preflight. A changed committed config re-closes S9 until a new artifact is produced. |
-| FD-M7-18 | **Data pin discipline:** `data_pin` remains the M3 format `dataset:schema:interval:source_id`. The `source_id` for M7 must include a manifest hash of the historical/fixture input set, not a mutable directory name. |
+| FD-M7-18 | **Data pin discipline:** `data_pin` remains the M3 format `dataset:schema:interval:source_id`. For reviewed historical artifacts, `source_id` is `historical:<manifest_hash>` and the manifest hash must recompute from the manifest body, whose normalized-quote row hash recomputes over the JSONL input set. A mutable directory name or caller-provided hash string is not enough. |
 | FD-M7-19 | **No paper-run shortcut:** a green historical artifact only allows paper eligibility. It does not satisfy the post-M7 paper edge-validation phase and does not move M8. |
 | FD-M7-20 | **Committed config canary remains strongest:** with committed config, even a valid M7 artifact and real paper-eligible strategy must submit zero orders because run gates/caps are off. |
 | FD-M7-21 | **No network in offline tests:** credentialed historical pulls are optional tier-2 verification and must be behind explicit CLI flags. The normal suite remains stdlib-only and no-network/no-creds. |
@@ -91,7 +91,7 @@ Top-level shape remains exact:
   "v": 2,
   "strategy_id": "directional.momentum_v1",
   "rules_hash": "<assembled config hash>",
-  "data_pin": "EQUS.MINI:tbbo:1m:<manifest-hash-source-id>",
+  "data_pin": "EQUS.MINI:tbbo:1m:historical:<manifest-hash>",
   "metrics": {},
   "created_utc": "2026-06-13T00:00:00.000000Z",
   "artifact_hash": "<row_hash of payload without artifact_hash>"
@@ -112,7 +112,7 @@ Required `metrics` keys for v2:
 | `risk` | object | Decimal-strings for `max_drawdown_usd`, `max_drawdown_pct_allocated`, `worst_day_usd`, `worst_day_pct_allocated`, `p95_realism_gap_bps`, `max_single_fill_divergence_bps`. |
 | `quality` | object | `future_receipt_count`, `missing_bar_count`, `ca_blackout_skips`, `data_quality_skip_count`, plus zero-count paper safety fields for unresolved reconcile drift, S1 canary breaches, live broker submits, artifact mismatches, and unhandled loop exceptions. |
 | `thresholds` | object | The exact pass thresholds used, as strings/ints/bools. |
-| `provenance` | object | input manifest hash, artifact builder git commit if known, and fixture/historical tier. |
+| `provenance` | object | input manifest hash, artifact builder git commit if known, fixture/historical tier, and for reviewed historical artifacts the normalizer id, calendar pin, latency/slippage parameters, fee model, pricing model, and realism-gap model. |
 
 `verify_artifact` returns:
 
@@ -135,7 +135,7 @@ Per bar:
 3. Call `directional.momentum_v1.scan(ctx)`.
 4. For a candidate:
    - reject if not single-leg BUY, whole-share qty, positive limit, and `paper_eligible=True`;
-   - apply the M5 pricing model over quote A and the selected quote-B bar after latency;
+   - apply the M5 pricing model over quote A and the selected quote-B bar after latency; reviewed historical long entries score from quote-B ask, exits from the planned exit bid, sell fees from the M5 fee model, and the exposure-matched benchmark from quote-A raw mid to the same exit raw mid;
    - reject a delayed receipt of the decision bucket; quote B must be a later selected bar after the latency instant;
    - mark a simulated open only if quote B is eligible and marketable after costs.
 5. Close by deterministic horizon policy from the strategy config/code constants:
