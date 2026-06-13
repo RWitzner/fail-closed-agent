@@ -17,6 +17,9 @@ from agent.serializer import row_hash
 
 RUNNER_VERSION = "m7-backtest-v1"
 BENCHMARK_METHOD = "exposure_matched_midbar_v1"
+# M7c phase-1 additional benchmark identifier (long-only equal-weight basket).
+# Additional metric/provenance only; the verifier's pinned benchmark is unchanged.
+UNIVERSE_EQUAL_WEIGHT_LONG_BENCHMARK = "universe_equal_weight_long_v1"
 USD_QUANTUM = Decimal("0.000001")
 BPS_QUANTUM = Decimal("0.000001")
 

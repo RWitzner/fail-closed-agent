@@ -500,7 +500,7 @@ class TestStrategiesAstImportGuard(unittest.TestCase):
         self.assertEqual(
             sorted(path.name for path in files),
             ["__init__.py", "calibration_probe.py", "directional_momentum.py",
-             "synthetic.py"],
+             "relative_strength.py", "synthetic.py"],
             "strategies/ grew a file — extend the wall-3 guard consciously")
         return files
 
