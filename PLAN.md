@@ -144,6 +144,14 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
     0 critical/high/medium/low issues. It specifically re-checked dirty-window latch clearing, post-adjust
     durable seeding, and newest-first lot ordering by `position_open` stream `seq`; `git diff --check`, targeted
     regressions, compile, and the full 1639-test suite were green. M6 is closed on the branch; next is M7.
+- **M7 OFFLINE BUILD COMPLETE on branch `codex/m7-backtest-gate` (2026-06-13, 1669 tests green):**
+  anti-lookahead backtest primitives, v2 artifact verifier/metrics, artifact cache key hardening, deterministic
+  fixture artifact builder CLI, paper-phase criteria evaluator/runbook, and first real strategy
+  `directional.momentum_v1` are built. S9 integration is pinned: missing/mismatched artifacts reject before broker
+  submit; valid v2 fixture artifacts can pass under permissive paper fixtures; committed config plus valid artifact
+  still submits zero orders. Production `artifacts/backtests/` still contains no reviewed strategy artifact, so the
+  real strategy remains unable to open from the committed/default artifact directory. Historical reviewed artifact
+  tier is explicitly deferred until a separate credentialed data run/review produces and approves it.
 
 ## Locked decisions
 
@@ -186,8 +194,10 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
   1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
   W6 initial review blockers fixed+committed (`483ea34`, 1639 tests); separate W6 re-review clean; gates OFF.
-- **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. The M7 contract must pin
-  the paper-phase success criteria (see "Edge before live" locked decision).
+- **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. **Offline build complete**
+  on `codex/m7-backtest-gate` (1669 tests): v2 artifact gate, backtest engine, `directional.momentum_v1`,
+  builder CLI, criteria runbook, and S9 integration are green. Reviewed historical production artifact is deferred,
+  so default committed artifact state remains fail-closed.
 - **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned
   criteria — this run produces the "realized edge" evidence M8 requires.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).

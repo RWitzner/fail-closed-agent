@@ -750,7 +750,7 @@ class Orchestrator:
         self._last_phase: Optional[SessionPhase] = None
         self._closed_sessions: set = set()
         self._kill_skipped_latch = False
-        self._artifact_checks: Dict[str, object] = {}
+        self._artifact_checks: Dict[Tuple[str, str, str], object] = {}
         self._outstanding_open_tokens: List[Tuple[object, _OrderTask]] = []
         self._position_marked: set = set()
         self._tick_budget: Optional[int] = None
@@ -1843,7 +1843,7 @@ class Orchestrator:
                 if isinstance(self._strategy, SyntheticStrategy) else "o-")
 
     def _artifact_check(self, strategy_id: str, data_pin: str):
-        key = strategy_id
+        key = (strategy_id, self.rules_hash, data_pin)
         if key not in self._artifact_checks:
             self._artifact_checks[key] = verify_artifact(
                 strategy_id, rules_hash=self.rules_hash, data_pin=data_pin,

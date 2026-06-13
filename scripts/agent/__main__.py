@@ -1,5 +1,5 @@
-"""M5 §O.1 / M6 §E — the CLI:
-``observe | synthetic | paper | reconcile`` (FD-M5-4 / FD-M6-11).
+"""M5 §O.1 / M6 §E / M7 — the CLI:
+``observe | synthetic | paper | reconcile | m7-backtest``.
 
 Import discipline (§3): this module imports ``agent.orchestrator``,
 ``agent.config`` and ``agent.secrets_runtime`` ONLY (plus stdlib). Everything
@@ -29,6 +29,9 @@ exits non-zero on a mismatch; no flag can flip a gate (§M.2 step 9).
   `.secrets/` paper credentials. Runs exactly one M6 CLI reconcile pass,
   supports the operator-only ``--rebaseline-cash`` flag, and exits 0 clean,
   1 drift/latch, 2 usage/lock, or 3 could-not-reconcile.
+- ``m7-backtest`` — local deterministic fixture artifact builder for M7. Writes
+  only after paper-phase criteria pass and refuses committed artifacts/backtests
+  unless ``--write-reviewed-artifact`` is supplied.
 """
 import argparse
 import json
@@ -298,6 +301,39 @@ def _cmd_reconcile(args) -> int:
         orch.close()
 
 
+def _cmd_m7_backtest(args) -> int:
+    from agent.backtest_builder import ArtifactWriteRefused
+    from agent.backtest_builder import write_m7_fixture_artifact
+
+    try:
+        result = write_m7_fixture_artifact(
+            artifacts_dir=args.artifacts_dir,
+            rules_hash=args.rules_hash,
+            data_pin=args.data_pin,
+            created_utc=args.created_utc,
+            input_manifest_hash=args.input_manifest_hash,
+            builder_git_commit=args.builder_git_commit,
+            tier=args.tier,
+            fixture_net_pnl_usd=args.fixture_net_pnl_usd,
+            allow_reviewed_artifact=args.write_reviewed_artifact,
+        )
+    except ArtifactWriteRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"m7-backtest usage error: {exc}", file=sys.stderr)
+        return 2
+    if not result.criteria.passed:
+        print("criteria_failed=" + ",".join(result.criteria.failures),
+              file=sys.stderr)
+        return 1
+    print(
+        f"artifact_path={result.artifact_path} "
+        f"artifact_hash={result.payload['artifact_hash']}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -340,6 +376,23 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--rebaseline-cash", dest="rebaseline_cash",
                            action="store_true")
     reconcile.set_defaults(func=_cmd_reconcile)
+
+    m7 = sub.add_parser("m7-backtest",
+                        help="build deterministic M7 fixture artifact")
+    m7.add_argument("--artifacts-dir", dest="artifacts_dir", required=True)
+    m7.add_argument("--rules-hash", dest="rules_hash", required=True)
+    m7.add_argument("--data-pin", dest="data_pin", required=True)
+    m7.add_argument("--created-utc", dest="created_utc", required=True)
+    m7.add_argument("--input-manifest-hash", dest="input_manifest_hash",
+                    required=True)
+    m7.add_argument("--builder-git-commit", dest="builder_git_commit",
+                    default="unknown")
+    m7.add_argument("--tier", default="fixture")
+    m7.add_argument("--fixture-net-pnl-usd", dest="fixture_net_pnl_usd",
+                    default="1.900000")
+    m7.add_argument("--write-reviewed-artifact",
+                    dest="write_reviewed_artifact", action="store_true")
+    m7.set_defaults(func=_cmd_m7_backtest)
     return parser
 
 

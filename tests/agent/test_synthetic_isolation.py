@@ -477,7 +477,7 @@ class TestCommittedArtifactsDirEmpty(unittest.TestCase):
 
 
 class TestStrategiesAstImportGuard(unittest.TestCase):
-    """Wall 3 (FD-M5-8; §3): strategies/ (synthetic.py AND calibration_probe.py)
+    """Wall 3 (FD-M5-8; §3): strategies/ (including M7 directional_momentum.py)
     keeps the full M3 FD-12 closed set — no agent.broker*, no
     agent.execution_preflight, no agent.kill_switch, no agent.arming, and no
     importlib/__import__ anywhere. Mirrors the test_no_network_no_creds.py
@@ -499,7 +499,8 @@ class TestStrategiesAstImportGuard(unittest.TestCase):
         files = sorted(_STRATEGIES_DIR.glob("*.py"))
         self.assertEqual(
             sorted(path.name for path in files),
-            ["__init__.py", "calibration_probe.py", "synthetic.py"],
+            ["__init__.py", "calibration_probe.py", "directional_momentum.py",
+             "synthetic.py"],
             "strategies/ grew a file — extend the wall-3 guard consciously")
         return files
 

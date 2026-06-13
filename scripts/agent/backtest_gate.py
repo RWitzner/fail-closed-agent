@@ -18,6 +18,7 @@ metric basis all degrade to `hash_invalid`; a verified-but-stale key triple is
 import json
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from agent.serializer import row_hash
@@ -32,6 +33,135 @@ _PAYLOAD_KEYS = frozenset({
     "artifact_hash"})
 
 _REQUIRED_BASIS = "execution_realistic_pnl"    # the S9 metric pin
+_M7_STRATEGY_ID = "directional.momentum_v1"
+_V2_METRIC_KEYS = frozenset({
+    "basis", "pass", "runner_version", "strategy_version", "sample", "pnl",
+    "benchmark", "risk", "quality", "thresholds", "provenance",
+})
+_V2_SAMPLE_KEYS = frozenset({
+    "start_utc", "end_utc", "session_count", "decision_count", "trade_count",
+    "traded_session_count", "symbols",
+})
+_V2_PNL_KEYS = frozenset({
+    "gross_modeled_usd", "fees_usd", "net_execution_realistic_pnl_usd",
+    "avg_trade_bps", "profit_factor",
+})
+_V2_BENCHMARK_KEYS = frozenset({
+    "method", "benchmark_pnl_usd", "active_pnl_usd",
+})
+_V2_RISK_KEYS = frozenset({
+    "max_drawdown_usd", "max_drawdown_pct_allocated", "worst_day_usd",
+    "worst_day_pct_allocated", "p95_realism_gap_bps",
+    "max_single_fill_divergence_bps",
+})
+_V2_QUALITY_KEYS = frozenset({
+    "future_receipt_count", "missing_bar_count", "ca_blackout_skips",
+    "data_quality_skip_count", "unresolved_reconcile_drift_count",
+    "s1_canary_breach_count", "live_broker_submit_count",
+    "artifact_mismatch_count", "unhandled_exception_count",
+})
+_V2_THRESHOLD_KEYS = frozenset({
+    "min_sessions", "min_trades", "min_traded_sessions",
+    "require_positive_net_pnl", "require_positive_active_pnl",
+    "profit_factor_min", "max_drawdown_pct_allocated",
+    "worst_day_pct_allocated", "p95_realism_gap_bps_max",
+    "max_single_fill_divergence_bps",
+})
+_V2_PROVENANCE_KEYS = frozenset({
+    "input_manifest_hash", "builder_git_commit", "tier",
+})
+
+
+def _finite_decimal_string(value) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation:
+        return False
+    return parsed.is_finite()
+
+
+def _nonnegative_int(value) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and value >= 0
+
+
+def _string(value) -> bool:
+    return isinstance(value, str) and value != ""
+
+
+def _valid_v2_metrics(metrics: dict) -> bool:
+    if not isinstance(metrics, dict) or set(metrics) != _V2_METRIC_KEYS:
+        return False
+    if metrics.get("basis") != _REQUIRED_BASIS:
+        return False
+    if metrics.get("pass") is not True:
+        return False
+    if not _string(metrics.get("runner_version")):
+        return False
+    if metrics.get("strategy_version") != _M7_STRATEGY_ID:
+        return False
+
+    sample = metrics["sample"]
+    if not isinstance(sample, dict) or set(sample) != _V2_SAMPLE_KEYS:
+        return False
+    if not _string(sample["start_utc"]) or not _string(sample["end_utc"]):
+        return False
+    for key in ("session_count", "decision_count", "trade_count",
+                "traded_session_count"):
+        if not _nonnegative_int(sample[key]):
+            return False
+    symbols = sample["symbols"]
+    if (not isinstance(symbols, list) or not symbols
+            or any(not _string(symbol) for symbol in symbols)):
+        return False
+
+    pnl = metrics["pnl"]
+    if not isinstance(pnl, dict) or set(pnl) != _V2_PNL_KEYS:
+        return False
+    if any(not _finite_decimal_string(pnl[key]) for key in _V2_PNL_KEYS):
+        return False
+
+    benchmark = metrics["benchmark"]
+    if not isinstance(benchmark, dict) or set(benchmark) != _V2_BENCHMARK_KEYS:
+        return False
+    if benchmark["method"] != "exposure_matched_midbar_v1":
+        return False
+    for key in ("benchmark_pnl_usd", "active_pnl_usd"):
+        if not _finite_decimal_string(benchmark[key]):
+            return False
+
+    risk = metrics["risk"]
+    if not isinstance(risk, dict) or set(risk) != _V2_RISK_KEYS:
+        return False
+    if any(not _finite_decimal_string(risk[key]) for key in _V2_RISK_KEYS):
+        return False
+
+    quality = metrics["quality"]
+    if not isinstance(quality, dict) or set(quality) != _V2_QUALITY_KEYS:
+        return False
+    if any(not _nonnegative_int(quality[key]) for key in _V2_QUALITY_KEYS):
+        return False
+
+    thresholds = metrics["thresholds"]
+    if not isinstance(thresholds, dict) or set(thresholds) != _V2_THRESHOLD_KEYS:
+        return False
+    for key in ("min_sessions", "min_trades", "min_traded_sessions"):
+        if not _nonnegative_int(thresholds[key]):
+            return False
+    for key in ("require_positive_net_pnl", "require_positive_active_pnl"):
+        if not isinstance(thresholds[key], bool):
+            return False
+    for key in ("profit_factor_min", "max_drawdown_pct_allocated",
+                "worst_day_pct_allocated", "p95_realism_gap_bps_max",
+                "max_single_fill_divergence_bps"):
+        if not _finite_decimal_string(thresholds[key]):
+            return False
+
+    provenance = metrics["provenance"]
+    if not isinstance(provenance, dict) or set(provenance) != _V2_PROVENANCE_KEYS:
+        return False
+    return all(_string(provenance[key]) for key in _V2_PROVENANCE_KEYS)
 
 
 @dataclass(frozen=True)
@@ -96,9 +226,15 @@ def verify_artifact(strategy_id: str, *, rules_hash: str, data_pin: str,
     if computed_hash != claimed_hash:
         return _hash_invalid(path, claimed_hash)
 
+    version = payload["v"]
+    if isinstance(version, bool) or version not in (1, 2):
+        return _hash_invalid(path, claimed_hash)
+
     metrics = payload["metrics"]
     if not isinstance(metrics, dict) or metrics.get("basis") != _REQUIRED_BASIS:
         return _hash_invalid(path, claimed_hash)   # the S9 metric pin
+    if version == 2 and not _valid_v2_metrics(metrics):
+        return _hash_invalid(path, claimed_hash)
 
     if (payload["strategy_id"], payload["rules_hash"], payload["data_pin"]) != (
             strategy_id, rules_hash, data_pin):
