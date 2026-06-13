@@ -1,5 +1,5 @@
 """M5 §O.1 / M6 §E / M7 — the CLI:
-``observe | synthetic | paper | reconcile | m7-backtest``.
+``observe | synthetic | paper | reconcile | m7-backtest | m7-historical-artifact``.
 
 Import discipline (§3): this module imports ``agent.orchestrator``,
 ``agent.config`` and ``agent.secrets_runtime`` ONLY (plus stdlib). Everything
@@ -32,6 +32,8 @@ exits non-zero on a mismatch; no flag can flip a gate (§M.2 step 9).
 - ``m7-backtest`` — local deterministic fixture artifact builder for M7. Writes
   only after paper-phase criteria pass and always refuses committed
   artifacts/backtests; the historical reviewed-artifact flow is separate.
+- ``m7-historical-artifact`` — reviewed historical artifact builder over
+  normalized quote JSONL. Production writes require ``--allow-reviewed-artifact``.
 """
 import argparse
 import json
@@ -334,6 +336,53 @@ def _cmd_m7_backtest(args) -> int:
     return 0
 
 
+def _cmd_m7_historical_artifact(args) -> int:
+    from agent.backtest_historical import HistoricalArtifactWriteRefused
+    from agent.backtest_historical import load_quote_rows_jsonl
+    from agent.backtest_historical import write_m7_historical_artifact
+
+    try:
+        result = write_m7_historical_artifact(
+            artifacts_dir=args.artifacts_dir,
+            quote_rows=load_quote_rows_jsonl(args.quotes_jsonl),
+            symbol=args.symbol,
+            instrument_id=args.instrument_id,
+            rules_hash=args.rules_hash,
+            data_pin=args.data_pin,
+            dataset=args.dataset,
+            schema=args.schema,
+            created_utc=args.created_utc,
+            input_manifest_hash=args.input_manifest_hash,
+            builder_git_commit=args.builder_git_commit,
+            allow_reviewed_artifact=args.allow_reviewed_artifact,
+        )
+    except HistoricalArtifactWriteRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"m7-historical-artifact usage error: {exc}", file=sys.stderr)
+        return 2
+    if not result.criteria.passed:
+        print("criteria_failed=" + ",".join(result.criteria.failures),
+              file=sys.stderr)
+        print(
+            " ".join((
+                f"bar_count={result.backtest.bar_count}",
+                f"candidate_count={result.backtest.candidate_count}",
+                f"trade_count={len(result.backtest.trades)}",
+                f"skip_count={len(result.backtest.skips)}",
+            )),
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"artifact_path={result.artifact_path} "
+        f"artifact_hash={result.payload['artifact_hash']} "
+        f"trade_count={len(result.backtest.trades)}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -394,6 +443,27 @@ def build_parser() -> argparse.ArgumentParser:
                     dest="write_reviewed_artifact", action="store_true",
                     help="reserved; fixture builder still refuses production")
     m7.set_defaults(func=_cmd_m7_backtest)
+
+    hist = sub.add_parser(
+        "m7-historical-artifact",
+        help="build reviewed M7 historical artifact from normalized quote JSONL")
+    hist.add_argument("--quotes-jsonl", dest="quotes_jsonl", required=True)
+    hist.add_argument("--artifacts-dir", dest="artifacts_dir", required=True)
+    hist.add_argument("--symbol", required=True)
+    hist.add_argument("--instrument-id", dest="instrument_id", type=int,
+                      required=True)
+    hist.add_argument("--dataset", default="EQUS.MINI")
+    hist.add_argument("--schema", default="tbbo")
+    hist.add_argument("--rules-hash", dest="rules_hash", required=True)
+    hist.add_argument("--data-pin", dest="data_pin", required=True)
+    hist.add_argument("--created-utc", dest="created_utc", required=True)
+    hist.add_argument("--input-manifest-hash", dest="input_manifest_hash",
+                      required=True)
+    hist.add_argument("--builder-git-commit", dest="builder_git_commit",
+                      default="unknown")
+    hist.add_argument("--allow-reviewed-artifact",
+                      dest="allow_reviewed_artifact", action="store_true")
+    hist.set_defaults(func=_cmd_m7_historical_artifact)
     return parser
 
 

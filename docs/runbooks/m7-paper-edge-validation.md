@@ -5,6 +5,31 @@ artifact gate passes. M8 remains blocked until the paper phase produces all
 evidence below and the reviewed artifact still verifies against the current
 `(strategy_id, rules_hash, data_pin)`.
 
+## Historical Artifact Gate
+
+Build the reviewed historical artifact before starting paper validation:
+
+```bash
+PYTHONPATH=scripts python3 -m agent m7-historical-artifact \
+  --quotes-jsonl <normalized-historical-quotes.jsonl> \
+  --artifacts-dir artifacts/backtests \
+  --symbol <SYMBOL> \
+  --instrument-id <DATABENTO_INSTRUMENT_ID> \
+  --dataset <DATASET> \
+  --schema <SCHEMA> \
+  --rules-hash <CURRENT_ASSEMBLED_RULES_HASH> \
+  --data-pin <DATASET>:<SCHEMA>:1m:historical:<MANIFEST_HASH> \
+  --created-utc <PINNED_CREATED_UTC> \
+  --input-manifest-hash <MANIFEST_HASH> \
+  --builder-git-commit <CURRENT_COMMIT> \
+  --allow-reviewed-artifact
+```
+
+If this exits with `criteria_failed=...`, do not commit an artifact and do not
+start paper edge-validation. Production `artifacts/backtests/` must remain
+fail-closed until `verify_artifact(strategy_id, rules_hash, data_pin)` returns
+`ok` for the reviewed triple.
+
 ## Required Sample
 
 - At least 20 full RTH sessions.

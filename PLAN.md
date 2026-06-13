@@ -156,6 +156,16 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   contains no reviewed strategy artifact, so the real strategy remains unable to open from the committed/default
   artifact directory. Historical reviewed artifact tier is explicitly deferred until a separate credentialed data
   run/review produces and approves it.
+- **Historical artifact tier attempt (2026-06-13):** added a separate normalized-quote historical artifact CLI
+  (`agent m7-historical-artifact`) that keeps the fixture builder quarantined and requires
+  `--allow-reviewed-artifact` before any reviewed artifact write. A credentialed Databento Historical pull for
+  AAPL `EQUS.MINI:bbo-1m` over `2026-05-11T13:30:00` → `2026-06-09T20:00:00` produced a pinned input manifest
+  hash `57ada7d610b1f01d0ce3acb2682492492ee0e2c42018b82f3bd0919bccd308c5` (10,000 valid rows after dropping
+  78 one-sided/UNDEF rows; instrument_id `38`). Review result: **failed M7 criteria** —
+  `net_execution_realistic_pnl_usd=-197.760000`, `active_pnl_usd=-168.330000`, `profit_factor=0.713794`,
+  `avg_trade_bps=-1.558644`; no artifact was written or committed. Production `artifacts/backtests/` remains
+  `.gitkeep` only, and paper edge-validation remains blocked until a reviewed artifact verifies `ok`. Failure
+  review: `docs/superpowers/reviews/2026-06-13-M7-historical-artifact-failure-review.md`.
 
 ## Locked decisions
 
