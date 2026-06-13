@@ -86,7 +86,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   **Plan confirmed (2026-06-10): finish the remaining milestones M6→M7, then a full autonomous paper
   edge-validation phase before any M8 step** (see "Edge before live" under Locked decisions). Merge-to-main
   decision still open (nothing merged yet; branches stack m2-market-state→m3-signal→m6-reconcile).
-- **M6 IN PROGRESS on branch `m6-reconcile` (2026-06-11).**
+- **M6 IN PROGRESS on branch `m6-reconcile` (2026-06-13).**
   - **Contract FROZEN rev 6 READY-TO-BUILD, committed `1e96d5d`:**
     `docs/superpowers/specs/2026-06-10-M6-reconcile-contract.md` (1556 lines). Path: 3-architect panel
     (correctness/safety/integration) → synthesis (20 disagreements resolved in §1) → 5-lens critic pass
@@ -105,14 +105,17 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   - **W1 DONE, committed `2c2b6ed` (suite 1574 = 1520 + 54):** vocab/dataclasses/typed boundary +
     ReconcileLedger facade (§B.1a validation, v-first/rules_hash-last) + replay + latch fold (FD-M6-6,
     M6C-22, RC-8 residue lifecycle, §B.1b zero state). Builder errata in module docstrings.
-  - **W2 DISPATCHED (status UNVERIFIED — session ended near token limit):** pure diff core
-    (diff_positions + LIFO planner FD-M6-2/M6C-8/M6C-28, diff_cash telescope D25/M6C-18,
-    resolve_order_probe 14-row §3 table M6C-3/16/29/30, identity_note) + §I file-1 cases 2–20/24–26.
-    **Resume rule:** check `git status` — if W2 files are uncommitted, run the full suite + audit that ONLY
-    `scripts/agent/broker_reconcile.py` + `tests/agent/test_broker_reconcile.py` changed before committing;
-    if the tree is clean/absent, re-dispatch W2 per contract §J. Then W3 (PaperBook fold) → W4
-    (orchestrator wiring) → W5 (CLI/canary/purity, suite ≈1683) → W6 (multi-lens repro-gated adversarial
-    review, separate authoring/review). Each wave: build agent (NO git) → own suite run + git-audit → commit.
+  - **W2 DONE, committed `436f7b0` (suite 1590 = 1574 + 16):** pure diff core in
+    `scripts/agent/broker_reconcile.py` plus §I file-1 cases 2–20/24–26 in
+    `tests/agent/test_broker_reconcile.py`. Covers `diff_positions` union/absence/short semantics,
+    LIFO adjustment planning, cost tolerance + re-anchoring, deferral/immediate no-plan paths,
+    `diff_cash` exact telescope + fill-id dedupe, `resolve_order_probe` table branches, and
+    `identity_note` cent boundary. Verification: targeted broker-reconcile test file green, full
+    suite green (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`), `git diff --check`
+    clean, and W2 diff audited to exactly the two W2 files.
+  - **Next:** W3 (PaperBook fold) → W4 (orchestrator wiring) → W5 (CLI/canary/purity, suite
+    ≈1683) → W6 (multi-lens repro-gated adversarial review, separate authoring/review). Each wave:
+    build agent (NO git) → own suite run + git-audit → commit.
 
 ## Locked decisions
 
@@ -152,7 +155,8 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   ✓ **done on `m3-signal`** (`ad14cf6`, 1520 tests) — contract rev 2 (48+5 findings) → 6 TDD waves →
   5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF; nothing merged to main.
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation). ← **in progress on `m6-reconcile`** —
-  contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests); W2–W6 remain (see status above).
+  contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
+  1590 tests); W3–W6 remain (see status above).
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. The M7 contract must pin
   the paper-phase success criteria (see "Edge before live" locked decision).
 - **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned
