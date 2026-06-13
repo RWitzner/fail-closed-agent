@@ -782,5 +782,176 @@ class TestM5ExecOfflinePurityAndImportGuard(unittest.TestCase):
                              f"loader read outside the injected dir: {path}")
 
 
+class TestM6ReconcileOfflinePurityAndImportGuard(unittest.TestCase):
+    """M6 W5: the reconcile pure modules stay offline-pure and the CLI entry
+    keeps its module-scope import budget while adding `agent reconcile`."""
+
+    _PURE_RECONCILE_FILES = ("broker_reconcile.py", "reconcile_ledger.py")
+    _FORBIDDEN_MODULE_PREFIXES = (
+        "agent.broker", "agent.execution_preflight", "agent.kill_switch",
+        "agent.arming",
+    )
+    _FORBIDDEN_TOKENS = frozenset({
+        "submit_order", "mint_open_token", "mint_reduce_only_token",
+        "OrderIntent", "OpenPreflightToken", "ReduceOnlyPreflightToken",
+        "PreflightToken", "require_token", "consume", "importlib",
+        "__import__",
+    })
+    _BANNED_SYS_MODULES = ("alpaca", "databento", "exchange_calendars",
+                           "pandas", "numpy")
+
+    def _agent_dir(self) -> Path:
+        return Path(__file__).resolve().parents[2] / "scripts" / "agent"
+
+    @staticmethod
+    def _module_scope_imports(tree) -> list:
+        out = []
+
+        def walk(node, in_func):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    walk(child, True)
+                    continue
+                if not in_func and isinstance(child,
+                                              (ast.Import, ast.ImportFrom)):
+                    if isinstance(child, ast.Import):
+                        out.extend(alias.name for alias in child.names)
+                    else:
+                        module = child.module or ""
+                        if module == "agent":
+                            out.extend(f"agent.{alias.name}"
+                                       for alias in child.names)
+                        else:
+                            out.append(module)
+                walk(child, in_func)
+
+        walk(tree, False)
+        return out
+
+    def _prefix_forbidden(self, module_name: str) -> bool:
+        if not module_name:
+            return False
+        return any(module_name == prefix
+                   or module_name.startswith(prefix + ".")
+                   for prefix in self._FORBIDDEN_MODULE_PREFIXES)
+
+    def _run_isolated(self, code: str) -> None:
+        import subprocess
+
+        scripts_dir = str(Path(__file__).resolve().parents[2] / "scripts")
+        env = dict(os.environ)
+        env["PYTHONPATH"] = scripts_dir
+        argv = [sys.executable, "-c", code]
+        completed = subprocess.run(argv, env=env, capture_output=True,
+                                   text=True)
+        self.assertEqual(completed.returncode, 0,
+                         f"stdout={completed.stdout!r} "
+                         f"stderr={completed.stderr!r}")
+
+    def test_reconcile_modules_import_under_socket_block_with_no_heavy_sdk(self):
+        import importlib as _importlib
+
+        with mock.patch("socket.socket",
+                        side_effect=AssertionError("M6 must not open sockets")):
+            _importlib.import_module("agent.broker_reconcile")
+            _importlib.import_module("agent.reconcile_ledger")
+            _importlib.import_module("agent.__main__")
+        for banned in self._BANNED_SYS_MODULES:
+            self.assertNotIn(banned, sys.modules)
+
+    def test_pure_reconcile_family_forbidden_imports_and_tokens_any_scope(self):
+        for rel in self._PURE_RECONCILE_FILES:
+            source_path = self._agent_dir() / rel
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+            violations = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if self._prefix_forbidden(alias.name):
+                            violations.append(f"import {alias.name}")
+                        if alias.name == "importlib" or alias.name.startswith(
+                                "importlib."):
+                            violations.append(f"import {alias.name}")
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if self._prefix_forbidden(module):
+                        violations.append(f"from {module} import ...")
+                    if module == "importlib" or module.startswith("importlib."):
+                        violations.append(f"from {module} import ...")
+                    if module == "agent":
+                        for alias in node.names:
+                            if self._prefix_forbidden(f"agent.{alias.name}"):
+                                violations.append(
+                                    f"from agent import {alias.name}")
+                    for alias in node.names:
+                        if alias.name in self._FORBIDDEN_TOKENS:
+                            violations.append(f"imported token {alias.name}")
+                        if (alias.asname
+                                and alias.asname in self._FORBIDDEN_TOKENS):
+                            violations.append(f"alias token {alias.asname}")
+                elif isinstance(node, ast.Name):
+                    if node.id in self._FORBIDDEN_TOKENS:
+                        violations.append(f"name {node.id}")
+                elif isinstance(node, ast.Attribute):
+                    if node.attr in self._FORBIDDEN_TOKENS:
+                        violations.append(f"attribute .{node.attr}")
+            self.assertEqual(violations, [],
+                             f"{rel}: M6 pure-family violations: {violations}")
+
+    def test_reconcile_pure_family_subprocess_pulls_no_order_capable_module(self):
+        code = (
+            "import sys\n"
+            "import agent.broker_reconcile\n"
+            "import agent.reconcile_ledger\n"
+            "banned = [k for k in sys.modules\n"
+            "          if k in ('agent.execution_preflight',\n"
+            "                   'agent.kill_switch', 'agent.arming',\n"
+            "                   'alpaca')\n"
+            "          or k == 'agent.broker'\n"
+            "          or k.startswith('agent.broker.')\n"
+            "          or k.startswith('alpaca.')]\n"
+            "assert not banned, f'order-capable modules imported: {banned}'\n"
+        )
+        self._run_isolated(code)
+
+    def test_cli_module_scope_import_budget_stays_closed(self):
+        tree = ast.parse((self._agent_dir() / "__main__.py")
+                         .read_text(encoding="utf-8"))
+        allowed = {"agent.config", "agent.orchestrator",
+                   "agent.secrets_runtime"}
+        offending = []
+        for name in self._module_scope_imports(tree):
+            if not name.startswith("agent"):
+                continue
+            if not any(name == ok or name.startswith(ok + ".")
+                       for ok in allowed):
+                offending.append(name)
+        self.assertEqual(offending, [])
+
+    def test_cmd_reconcile_uses_cli_owned_explicit_secret_paths(self):
+        source = (self._agent_dir() / "__main__.py").read_text(encoding="utf-8")
+        self.assertIn('credentials_path=_SECRETS / "alpaca_paper.json"', source)
+        self.assertIn('run_gates_path=_SECRETS / "run_gates.json"', source)
+        self.assertNotIn("load_alpaca_paper_credentials()", source)
+        self.assertNotIn("load_run_gates()", source)
+
+    def test_orchestrator_still_has_no_wall_clock_or_sleep_calls(self):
+        tree = ast.parse((self._agent_dir() / "orchestrator.py")
+                         .read_text(encoding="utf-8"))
+        violations = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in {"time", "datetime"}:
+                        violations.append(f"import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module in {"time", "datetime"}:
+                    violations.append(f"from {node.module} import ...")
+            elif isinstance(node, ast.Attribute):
+                if node.attr in {"sleep", "time", "monotonic", "now", "utcnow"}:
+                    violations.append(f"attribute .{node.attr}")
+        self.assertEqual(violations, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,6 +80,7 @@ from agent.broker_reconcile import (
     NOT_FOUND,
     PROBE_FAILED,
     DriftFinding,
+    ReconcileError,
     ReconcilePassResult,
     canonical_decimal_str,
     diff_cash,
@@ -148,6 +149,7 @@ from agent.order_pricing import reduce_cap
 from agent.paper_book import PaperBook
 from agent.quote_quality import QuoteSnapshot, evaluate as evaluate_quote
 from agent.reconcile_ledger import (
+    JournalCorruption,
     ReconcileLedger,
     rehydrate_reconcile_state,
     replay_reconcile,
@@ -171,7 +173,7 @@ from agent.risk.pdt_compat import BrokerRejectionObservation, LegacyPdtCompatMod
 from agent.risk.risk_config import RiskConfig
 from agent.risk.risk_kill import RiskKillSwitch
 from agent.risk.risk_ledger import RiskLedger, replay_risk, rehydrate_risk_state
-from agent.run_lock import RunLock
+from agent.run_lock import RunLock, RunLockHeld
 from agent.secrets_runtime import (
     assemble_gates_view,
     load_alpaca_paper_credentials,
@@ -1112,7 +1114,8 @@ class Orchestrator:
 
     def run_reconcile(self, *, phase: str, ts_utc: Optional[str] = None,
                       now_ms: Optional[int] = None,
-                      trigger=None) -> ReconcilePassResult:
+                      trigger=None,
+                      rebaseline_cash: bool = False) -> ReconcilePassResult:
         """M6 SOD/EOD/CLI/immediate broker reconciliation.
 
         Observation + journal only: this method never submits, cancels, or mints
@@ -1120,6 +1123,8 @@ class Orchestrator:
         applied through PaperBook after the reconcile drift rows are written.
         """
         phase = require_phase(phase)
+        if rebaseline_cash and phase != "cli":
+            raise ReconcileError("rebaseline_cash is legal only for cli phase")
         ts = self._reconcile_ts(ts_utc)
         now = self._clock.now_ms() if now_ms is None else int(now_ms)
         session_date_et = self._calendar.session_date_for(ts)
@@ -1276,6 +1281,11 @@ class Orchestrator:
             if cash_finding is None:
                 cash_clean = True
                 self._outstanding_cash_residue = None
+            elif rebaseline_cash:
+                cash_finding = replace(cash_finding, action="rebaselined")
+                findings.append(cash_finding)
+                self._outstanding_cash_residue = None
+                cash_clean = True
             else:
                 findings.append(cash_finding)
                 self._outstanding_cash_residue = cash_finding

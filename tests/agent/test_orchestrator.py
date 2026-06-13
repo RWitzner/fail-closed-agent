@@ -1008,6 +1008,25 @@ class OrchestratorCase(unittest.TestCase):
         self.assertEqual([row["cash_usd"] for row in baselines],
                          ["40000.00", "40000.00", "40000.00"])
 
+    def test_m6_rebaseline_cash_is_cli_phase_only(self):
+        journal_dir = self.tmp / "m6-rebaseline-fence"
+        self._m6_seed_baseline(journal_dir, cash="40000.00")
+        provider = FakeAccountProvider(
+            account_payloads=[account_payload(
+                equity="39900.00", last_equity="39900.00",
+                cash="39900.00")],
+            positions_payloads=[[]])
+        pipeline = self.make_pipeline(
+            subdir="m6-rebaseline-fence", broker=SpyBroker(),
+            account_provider=provider)
+
+        with self.assertRaises(ReconcileError):
+            pipeline.orch.run_reconcile(phase="sod", rebaseline_cash=True)
+
+        rows = replay_reconcile(journal_dir / "reconcile_alerts.jsonl")
+        self.assertEqual([row["event_type"] for row in rows],
+                         ["reconcile_baseline"])
+
     def test_m6_pass_does_not_put_account_or_write_risk_snapshot(self):
         provider = FakeAccountProvider(
             account_payloads=[account_payload()],

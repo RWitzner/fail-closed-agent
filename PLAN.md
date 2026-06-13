@@ -127,8 +127,14 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
     same-tick `BrokerAdjustDetector` freeze → status row → immediate reconcile path. Verification:
     targeted orchestrator matrix green, reconcile/ledger/book/canary/offline/golden regression block
     green, and full suite green (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
-  - **Next:** W5 (CLI/canary/purity, suite ≈1683) → W6 (multi-lens repro-gated adversarial
-    review, separate authoring/review). Each wave:
+  - **W5 DONE (suite 1636 = 1611 + 25):** `agent reconcile` CLI, `--rebaseline-cash`,
+    exit-code mapping (0 clean / 1 drift-latched / 2 usage-lock / 3 cannot-reconcile),
+    `_cmd_paper` SOD mapping, RunLockHeld wrappers, journal-corruption mapping, runbook,
+    committed-config reconcile canary, offline/import purity guards, and observe/synthetic
+    golden-stability checks proving no automatic `reconcile_alerts.jsonl` stream. Verification:
+    W5 targeted block green, affected regression block green, and full suite green
+    (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
+  - **Next:** W6 (multi-lens repro-gated adversarial review, separate authoring/review). Each wave:
     build agent (NO git) → own suite run + git-audit → commit.
 
 ## Locked decisions
@@ -170,7 +176,8 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF; nothing merged to main.
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation). ← **in progress on `m6-reconcile`** —
   contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
-  1590 tests), W3 built (1599 tests), W4 built (1611 tests); W5–W6 remain (see status above).
+  1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
+  W6 adversarial review remains (see status above).
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. The M7 contract must pin
   the paper-phase success criteria (see "Edge before live" locked decision).
 - **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned

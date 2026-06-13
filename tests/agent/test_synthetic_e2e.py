@@ -79,6 +79,11 @@ class TestSyntheticGoldenE2E(unittest.TestCase):
             self.assertTrue(self.pipeline.rows(stream),
                             f"{stream}.jsonl should not be empty")
 
+    def test_reconcile_stream_absent_from_synthetic_golden(self):
+        self.assertFalse(
+            (self.journal_dir / "reconcile_alerts.jsonl").exists(),
+            "synthetic golden must not auto-run M6 reconcile")
+
     def test_open_mark_close_lifecycle(self):
         decisions = self.pipeline.rows_of("orders", "strategy_decision")
         self.assertEqual([row["action"] for row in decisions],

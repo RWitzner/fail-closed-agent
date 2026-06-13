@@ -466,5 +466,93 @@ class TestFullOrchestratorS1Canary(unittest.TestCase):
         self.assertNotIn("agent.broker.alpaca", sys.modules)
 
 
+class TestM6ReconcileCanary(unittest.TestCase):
+    """M6 W5: reconcile observes broker drift under committed gates, but the
+    pass never mutates the broker or mints open-capable preflight authority."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+
+        from agent.execution_preflight import unbind_runtime
+        from tests.agent.test_execution_preflight_m5 import (
+            purge_open_authorizations,
+        )
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="m6-canary-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(unbind_runtime)
+        purge_open_authorizations()
+        self.addCleanup(purge_open_authorizations)
+
+    @staticmethod
+    def _open_kind_authorizations():
+        from agent import execution_preflight
+        return [auth for auth in execution_preflight._authorizations.values()
+                if auth.kind == "open"]
+
+    def test_reconcile_detects_drift_with_committed_gates_off_and_no_broker_mutation(self):
+        from agent.execution_config import ExecutionConfig
+        from agent.reconcile_ledger import replay_reconcile
+        from tests.lib.exec_fixtures import (
+            ExecPipeline,
+            committed_assembled_config,
+        )
+        from tests.lib.risk_fixtures import FakeAccountProvider, account_payload
+
+        cfg = committed_assembled_config()
+        self.assertIs(cfg["agent_rules"]["enabled"], False)
+        self.assertIs(cfg["agent_rules"]["paper_trading"]["enabled"], False)
+        self.assertIs(cfg["risk_rules"]["live_trading"]["enabled"], False)
+        agent_rules_before = (_CONFIG / "agent_rules.json").read_bytes()
+        risk_rules_before = (_CONFIG / "risk_rules.json").read_bytes()
+        rules_hash_before = ExecutionConfig.from_config(cfg).rules_hash
+
+        broker = SpyBroker()
+        provider = FakeAccountProvider(
+            account_payloads=[account_payload(equity="41900.00",
+                                              last_equity="41900.00",
+                                              cash="40000.00")],
+            positions_payloads=[[{
+                "symbol": "AAPL", "qty": "10", "market_value": "1900.00",
+                "avg_entry_price": "190.00",
+            }]])
+        pipeline = ExecPipeline(
+            journal_dir=self.tmp / "drift", run_id="run-m6-canary",
+            broker=broker, account_provider=provider,
+            config=cfg)
+        try:
+            result = pipeline.orch.run_reconcile(phase="cli")
+        finally:
+            pipeline.close()
+
+        self.assertFalse(result.clean)
+        self.assertTrue(pipeline.orch.drift_latched)
+        rows = replay_reconcile(self.tmp / "drift" / "reconcile_alerts.jsonl")
+        self.assertEqual(rows[0]["kind"], "position_unknown_broker")
+        self.assertEqual(rows[0]["action"], "latched_operator")
+        self.assertEqual(rows[-1]["event_type"], "reconcile_run")
+        self.assertFalse(rows[-1]["clean"])
+        self.assertEqual(broker.calls, [])
+        self.assertEqual(broker.submitted, [])
+        self.assertEqual(broker.cancel_calls, [])
+        self.assertEqual(self._open_kind_authorizations(), [])
+        self.assertEqual((_CONFIG / "agent_rules.json").read_bytes(),
+                         agent_rules_before)
+        self.assertEqual((_CONFIG / "risk_rules.json").read_bytes(),
+                         risk_rules_before)
+        self.assertEqual(ExecutionConfig.from_config(
+            committed_assembled_config()).rules_hash, rules_hash_before)
+
+    def test_committed_config_still_blocks_can_open_before_reconcile_state(self):
+        # The existing RiskEngine canary is still the source of truth: committed
+        # config terminates at run_gates. This guards against a reconcile latch
+        # accidentally becoming a prerequisite before S1's first rung.
+        case = TestRiskRulesCanary(
+            "test_committed_config_can_open_always_terminates_at_run_gates"
+        )
+        case.test_committed_config_can_open_always_terminates_at_run_gates()
+
+
 if __name__ == "__main__":
     unittest.main()

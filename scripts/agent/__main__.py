@@ -1,4 +1,5 @@
-"""M5 §O.1 — the CLI: ``observe | synthetic | paper`` (FD-M5-4).
+"""M5 §O.1 / M6 §E — the CLI:
+``observe | synthetic | paper | reconcile`` (FD-M5-4 / FD-M6-11).
 
 Import discipline (§3): this module imports ``agent.orchestrator``,
 ``agent.config`` and ``agent.secrets_runtime`` ONLY (plus stdlib). Everything
@@ -22,10 +23,12 @@ exits non-zero on a mismatch; no flag can flip a gate (§M.2 step 9).
 - ``paper`` — committed config + optional tighten-only ``--overlay`` + the
   §O.2 run-gates view + ``.secrets/alpaca_paper.json``. Credentials are the
   ONLY broker-construction key (M5C-S3); gates govern OPENS only. Until the
-  live quote feed exists (M1-2b) this performs the startup sequence (lock,
-  config, gates provenance row, risk/exec rehydrate, broker-touching order
-  recovery) and exits cleanly — there is no live tick source to drive yet
-  (documented resolution; the §M.3 loop is feed-driven).
+  live quote feed exists (M1-2b) this performs the startup sequence, then the
+  M6 SOD reconcile pass in paper mode, and exits with reconcile's 0/1/3 code.
+- ``reconcile`` — committed config + optional tighten-only ``--overlay`` +
+  `.secrets/` paper credentials. Runs exactly one M6 CLI reconcile pass,
+  supports the operator-only ``--rebaseline-cash`` flag, and exits 0 clean,
+  1 drift/latch, 2 usage/lock, or 3 could-not-reconcile.
 """
 import argparse
 import json
@@ -94,6 +97,10 @@ def _new_run_id() -> str:
                        now_utc=datetime.now(timezone.utc))
 
 
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _build_feed(events_path, symbols, cadence_ms):
     return orch_mod.build_replay_feed(events_path, symbols=symbols,
                                       refresh_cadence_ms=cadence_ms)
@@ -102,6 +109,54 @@ def _build_feed(events_path, symbols, cadence_ms):
 def _cadence_ms(config: dict) -> int:
     raw = config["agent_rules"].get("signal", {}).get("refresh_cadence_ms", "1000")
     return int(raw)
+
+
+def _load_overlay(path):
+    return agent_config.load(path) if path else None
+
+
+def _paper_orchestrator(args) -> Orchestrator:
+    return Orchestrator(
+        journal_dir=args.journal_dir,
+        run_id=_new_run_id(),
+        clock=orch_mod._ZeroClock(),
+        quote_view=orch_mod._LatestQuoteView(),
+        bar_reader=None,
+        calendar_provider=orch_mod.schedule_provider_from_fixture(
+            args.calendar_fixture),
+        config=_committed_config(),
+        overlay=_load_overlay(args.overlay),
+        credentials_path=_SECRETS / "alpaca_paper.json",
+        run_gates_path=_SECRETS / "run_gates.json",
+    )
+
+
+def _bool_token(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _print_reconcile_summary(result, orch) -> None:
+    print(
+        " ".join((
+            f"reconcile_id={result.reconcile_id}",
+            f"phase={result.phase}",
+            f"session_date_et={result.session_date_et}",
+            f"completed={_bool_token(result.completed)}",
+            f"clean={_bool_token(result.clean)}",
+            f"drift_count={len(result.findings)}",
+            f"adjusted_count={len(result.adjustments)}",
+            f"note_count={len(result.notes)}",
+            f"latched={_bool_token(orch.drift_latched)}",
+        ))
+    )
+
+
+def _reconcile_exit_code(result, orch) -> int:
+    if not result.completed:
+        return 3
+    if result.findings or orch.drift_latched:
+        return 1
+    return 0
 
 
 def _cmd_observe(args) -> int:
@@ -194,34 +249,53 @@ def _cmd_synthetic(args) -> int:
 
 
 def _cmd_paper(args) -> int:
-    config = _committed_config()
-    overlay = None
-    if args.overlay:
-        overlay = agent_config.load(args.overlay)
-    orch = Orchestrator(
-        journal_dir=args.journal_dir,
-        run_id=_new_run_id(),
-        clock=orch_mod._ZeroClock(),
-        quote_view=orch_mod._LatestQuoteView(),
-        bar_reader=None,
-        calendar_provider=orch_mod.schedule_provider_from_fixture(
-            args.calendar_fixture),
-        config=config,
-        overlay=overlay,
-        credentials_path=_SECRETS / "alpaca_paper.json",
-        run_gates_path=_SECRETS / "run_gates.json",
-    )
+    try:
+        orch = _paper_orchestrator(args)
+    except orch_mod.RunLockHeld as exc:
+        print(f"run lock held: {exc}", file=sys.stderr)
+        return 2
+    except orch_mod.JournalCorruption as exc:
+        print(f"journal corruption: {exc}", file=sys.stderr)
+        return 3
     try:
         if orch.mode not in ("paper", "observe"):
             print(f"mode mismatch: derived {orch.mode!r}, expected 'paper' "
                   "(or its documented credentials-missing degrade)",
                   file=sys.stderr)
             return 2
-        # No live tick source exists until M1-2b (module docstring): startup,
-        # gates provenance row and order recovery have run; exit cleanly.
+        if orch.mode == "observe":
+            # Credentials-missing degrade preserves the M5 startup-only return.
+            return 0
+        result = orch.run_reconcile(
+            phase="sod", ts_utc=_now_utc_iso(), now_ms=0)
+        _print_reconcile_summary(result, orch)
+        return _reconcile_exit_code(result, orch)
     finally:
         orch.close()
-    return 0
+
+
+def _cmd_reconcile(args) -> int:
+    try:
+        orch = _paper_orchestrator(args)
+    except orch_mod.RunLockHeld as exc:
+        print(f"run lock held: {exc}", file=sys.stderr)
+        return 2
+    except orch_mod.JournalCorruption as exc:
+        print(f"journal corruption: {exc}", file=sys.stderr)
+        return 3
+    try:
+        if orch.mode not in ("paper", "observe"):
+            print(f"mode mismatch: derived {orch.mode!r}, expected 'paper' "
+                  "(or its documented credentials-missing degrade)",
+                  file=sys.stderr)
+            return 2
+        result = orch.run_reconcile(
+            phase="cli", ts_utc=_now_utc_iso(), now_ms=0,
+            rebaseline_cash=args.rebaseline_cash)
+        _print_reconcile_summary(result, orch)
+        return _reconcile_exit_code(result, orch)
+    finally:
+        orch.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -255,6 +329,17 @@ def build_parser() -> argparse.ArgumentParser:
     paper.add_argument("--calendar-fixture", dest="calendar_fixture",
                        default=str(_DEFAULT_CALENDAR))
     paper.set_defaults(func=_cmd_paper)
+
+    reconcile = sub.add_parser("reconcile",
+                               help="paper broker reconcile pass (M6)")
+    reconcile.add_argument("--overlay", default=None)
+    reconcile.add_argument("--journal-dir", dest="journal_dir",
+                           default="journal")
+    reconcile.add_argument("--calendar-fixture", dest="calendar_fixture",
+                           default=str(_DEFAULT_CALENDAR))
+    reconcile.add_argument("--rebaseline-cash", dest="rebaseline_cash",
+                           action="store_true")
+    reconcile.set_defaults(func=_cmd_reconcile)
     return parser
 
 

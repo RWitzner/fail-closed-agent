@@ -160,7 +160,8 @@ class TestObserveGoldenE2E(unittest.TestCase):
     def test_observe_journals_no_exec_or_risk_stream(self):
         """Observe mints nothing: the exec/risk ledgers never receive a row,
         so their stream files are never even created."""
-        for stream in ("orders", "fills", "positions", "risk"):
+        for stream in ("orders", "fills", "positions", "risk",
+                       "reconcile_alerts"):
             self.assertFalse(
                 (self.journal_dir / f"{stream}.jsonl").exists(),
                 f"observe wrote {stream}.jsonl")
