@@ -10,14 +10,15 @@ live`, fail-closed, "nothing opens by default") but is otherwise live-like, so t
 interfaces and code path — *not* a rebuild, though live is still a separately-validated step. Authoritative
 design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`. Build is staged M0→M8; see `PLAN.md`.
 
-**State:** M0-M7 done. **M7 OFFLINE-COMPLETE on branch `codex/m7-backtest-gate`** (1671 tests green after
-review hardening): anti-lookahead backtest primitives, v2 artifact verifier/metrics, full-triple artifact cache
+**State:** M0-M7 done. **M7 OFFLINE-COMPLETE on branch `codex/m7-backtest-gate`** (1679 tests green after
+historical-review hardening): anti-lookahead backtest primitives, v2 artifact verifier/metrics, full-triple artifact cache
 hardening, temp-only fixture builder, paper-phase criteria/runbook, and first real strategy
 `directional.momentum_v1`. Production `artifacts/backtests/` still contains only `.gitkeep`; the reviewed
-historical v2 artifact is explicitly deferred until a credentialed historical data run/review produces it. M1
-tier-2 (2b live-verified) stays deferred (no paid live realtime subscription). **Next phase is full autonomous
-paper edge-validation, not M8.** M8/live remains blocked until realized paper edge satisfies the M7-pinned
-criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
+historical v2 artifact has not passed: both the AAPL-only and broader `EQUS.MINI:bbo-1m` historical attempts
+failed M7 criteria. M1 tier-2 (2b live-verified) stays deferred (no paid live realtime subscription). **Next loop
+is strategy/universe hardening until a reviewed artifact verifies `ok`; only then can full autonomous paper
+edge-validation start.** M8/live remains blocked until passing artifact + realized paper edge satisfy the
+M7-pinned criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -39,7 +40,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 ## Commands
 
 M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
-1671 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+1679 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)

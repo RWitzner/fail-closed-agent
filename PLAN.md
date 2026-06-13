@@ -144,7 +144,8 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
     0 critical/high/medium/low issues. It specifically re-checked dirty-window latch clearing, post-adjust
     durable seeding, and newest-first lot ordering by `position_open` stream `seq`; `git diff --check`, targeted
     regressions, compile, and the full 1639-test suite were green. M6 is closed on the branch; next is M7.
-- **M7 REVIEW-HARDENED OFFLINE CLOSEOUT on branch `codex/m7-backtest-gate` (2026-06-13, 1671 tests green):**
+- **M7 REVIEW-HARDENED OFFLINE CLOSEOUT on branch `codex/m7-backtest-gate` (2026-06-13, 1679 tests green after
+  historical-review hardening):**
   anti-lookahead backtest primitives, v2 artifact verifier/metrics, artifact cache key hardening, deterministic
   temp-only fixture artifact builder CLI, paper-phase criteria evaluator/runbook, and first real strategy
   `directional.momentum_v1` are built. Review hardening fixed the M7 seams that mattered before closeout:
@@ -169,6 +170,16 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   negative, so no artifact was written or committed. Production `artifacts/backtests/` remains `.gitkeep` only,
   and paper edge-validation remains blocked until a reviewed artifact verifies `ok`. Failure review:
   `docs/superpowers/reviews/2026-06-13-M7-historical-artifact-failure-review.md`.
+- **Broader historical artifact attempt (2026-06-13):** reran the hardened `--input-manifest-json` path over a
+  predeclared large-cap/Nasdaq-leaning universe (`AAPL,MSFT,NVDA,AMZN,META,GOOGL,TSLA,AVGO,COST,NFLX`) with
+  `EQUS.MINI:bbo-1m`, the same rules hash
+  `a4298880ef6136f69a627c62ebc002d9c2c85f7d1e7ae5f3d5f3e96647c06bf6`, and the same window
+  `2026-05-11T13:30:00` → `2026-06-09T20:00:00`. Every symbol failed M7 criteria; all had negative
+  execution-realistic net PnL and negative active PnL, so no staging or production artifact verified `ok` and no
+  production artifact was written. Production `artifacts/backtests/` remains `.gitkeep` only; `verify_artifact`
+  against the reviewed triples returns `missing`. Paper edge-validation remains blocked. Next loop is
+  strategy/universe hardening, not M8. Failure review:
+  `docs/superpowers/reviews/2026-06-13-M7-broader-historical-artifact-failure-review.md`.
 
 ## Locked decisions
 
@@ -181,12 +192,12 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 - **Universe:** curated single-name US large-cap (~20–50), bounded.
 - **First strategy:** observe-only calibration probe → historical anti-lookahead backtest gate → directional.
 - **Live posture:** live-capable from day one, live-money gate OFF behind two-key arming + M8 checklist.
-- **Edge before live (locked 2026-06-10):** after M7, run a **full autonomous paper phase**; M8 is considered
-  only if that phase shows realized edge against success criteria **pinned in advance** (to be fixed in the M7
-  contract — e.g. positive modeled PnL after realistic costs over a minimum number of trading days, a
-  realism-gap ceiling between broker fills and the Databento-depth label, a drawdown bound). The paper phase is
-  the evidence gate — no go-live on vibes. Spine construction ends with M6/M7: full contract/review depth stays
-  mandatory on anything touching orders or money; no further infrastructure extensions beyond the roadmap.
+- **Edge before live (locked 2026-06-10, updated 2026-06-13):** after M7, paper edge-validation can start only
+  after a reviewed historical artifact verifies `ok` for the current `(strategy_id, rules_hash, data_pin)`. M8 is
+  considered only if that paper phase shows realized edge against the pinned criteria. Failed historical artifacts
+  route to strategy/universe hardening; no go-live on vibes. Spine construction ends with M6/M7: full
+  contract/review depth stays mandatory on anything touching orders or money; no further infrastructure
+  extensions beyond the roadmap.
 
 ## Roadmap (each milestone: its own spec → plan → review → verify; see spec §10)
 
@@ -212,11 +223,13 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
   W6 initial review blockers fixed+committed (`483ea34`, 1639 tests); separate W6 re-review clean; gates OFF.
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. ✓ **review-hardened offline
-  closeout on `codex/m7-backtest-gate`** (1671 tests): v2 artifact gate, backtest engine,
+  closeout on `codex/m7-backtest-gate`** (1679 tests after historical-review hardening): v2 artifact gate, backtest engine,
   `directional.momentum_v1`, temp-only fixture builder CLI, criteria runbook, and S9 integration are green.
-  Reviewed historical production artifact is deferred, so default committed artifact state remains fail-closed.
-- **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned
-  criteria — this run produces the "realized edge" evidence M8 requires.
+  Reviewed historical production artifact has not passed, so default committed artifact state remains fail-closed.
+- **Strategy/universe hardening loop** (current post-M7 gate): revise the strategy version or historical universe
+  until a reviewed artifact verifies `ok`; only then can paper edge-validation start.
+- **Paper edge-validation phase** (post-passing-artifact, pre-M8): full autonomous paper run measured against the
+  pre-pinned criteria — this run produces the "realized edge" evidence M8 requires.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).
 
 ## Open tracks / risks
