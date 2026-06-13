@@ -1,22 +1,24 @@
-"""M6 §I file 1 (wave-1 half) — broker_reconcile: the frozen §3 vocabularies,
-`ReconcileError`, the §A dataclasses/constants, and the `make_finding` typed
-boundary (M6C-17, FD-M6-10).
+"""M6 §I file 1 — broker_reconcile: frozen §3 vocabularies, `ReconcileError`,
+the §A dataclasses/constants, the `make_finding` typed boundary (M6C-17,
+FD-M6-10), and W2's PURE diff core.
 
 Wave-1 cases (§J W1): 1 (out-of-vocab kind/action/note/phase raise
 `ReconcileError`, nothing constructed), 21 and 22 where they apply to wave-1
 surfaces (hostile ambient Decimal context immunity of `make_finding`; the
 None-coerced sort keys, M6C-33), and 23 (ModeledUSD/float/bool/NaN into any
-money/qty slot of `make_finding` => TypeError, nothing constructed). The diff
-core (`diff_positions`/`diff_cash`/`resolve_order_probe`/`identity_note` —
-cases 2-20, 24-26) is WAVE 2 and is deliberately absent here (no placeholders).
+money/qty slot of `make_finding` => TypeError, nothing constructed). Wave 2
+adds cases 2-20 and 24-26 for `diff_positions`, `diff_cash`,
+`resolve_order_probe`, and `identity_note`.
 
 Invariants: S5, S2, DET.
 """
 import decimal
 import unittest
+from dataclasses import dataclass
 from dataclasses import FrozenInstanceError
 from decimal import Context, Decimal, ROUND_DOWN, ROUND_HALF_EVEN
 
+import agent.broker_reconcile as br
 from agent.broker_reconcile import (
     COST_TOLERANCE_PER_SHARE,
     DRIFT_KINDS,
@@ -44,8 +46,67 @@ from agent.broker_reconcile import (
     require_note,
     require_phase,
 )
+from agent.broker.order_state import BrokerOrder
 from agent.exec_reasons import ORDER_STATES, ExecError
 from agent.serializer import BrokerUSD, ModeledUSD
+from agent.risk.account_state import PortfolioRead, PositionRead
+
+
+@dataclass(frozen=True)
+class _Pos:
+    position_id: str
+    symbol: str
+    qty: Decimal
+    broker_cost_usd: BrokerUSD
+
+
+def _pos(position_id, symbol, qty, cost):
+    return _Pos(position_id=position_id, symbol=symbol, qty=Decimal(qty),
+                broker_cost_usd=BrokerUSD(cost))
+
+
+def _portfolio(*rows):
+    positions = tuple(sorted((
+        PositionRead(symbol=symbol, qty=Decimal(qty),
+                     market_value=BrokerUSD(market_value),
+                     avg_entry_price=None if avg_entry_price is None
+                     else Decimal(avg_entry_price))
+        for symbol, qty, market_value, avg_entry_price in rows
+    ), key=lambda p: p.symbol))
+    return PortfolioRead(positions=positions, source="fixture", seen_at_ms=1,
+                         stale=False)
+
+
+def _diff(local_positions, portfolio, **overrides):
+    opts = dict(frozen_symbols=frozenset(), inflight_symbols=frozenset(),
+                adjusts_allowed=True, reconcile_id="rc-test")
+    opts.update(overrides)
+    return br.diff_positions(local_positions, portfolio, **opts)
+
+
+def _order(state, *, filled_qty="0", qty="10", symbol="AAPL",
+           client_order_id="o-1", broker_order_id="bo-1",
+           ts_broker_utc="2026-06-10T14:30:00Z"):
+    return BrokerOrder(broker_order_id=broker_order_id,
+                       client_order_id=client_order_id, symbol=symbol,
+                       side="buy", state=state, raw_status=state,
+                       qty=Decimal(qty), filled_qty=Decimal(filled_qty),
+                       filled_avg_price=Decimal("10") if filled_qty != "0"
+                       else None, limit_price=None,
+                       ts_broker_utc=ts_broker_utc, source="fixture")
+
+
+def _local_order(event_type="order_submitted", *, state="accepted",
+                 order_id="o-1", decision_id="d-1", symbol="AAPL",
+                 broker_order_id="bo-1"):
+    row = {"event_type": event_type, "order_id": order_id,
+           "decision_id": decision_id, "symbol": symbol,
+           "broker_order_id": broker_order_id}
+    if state is not None:
+        row["state"] = state
+    if event_type == "order_terminal":
+        row["terminal_state"] = state
+    return row
 
 
 def _qty_finding(**over):
@@ -274,6 +335,325 @@ class TestEngineDeterminism(unittest.TestCase):
                           ("cost_unverifiable", "AAPL", "")]
         for permutation in (notes, list(reversed(notes))):
             self.assertEqual(sorted(permutation, key=_note_key), expected_notes)
+
+
+class TestDiffPositionsCore(unittest.TestCase):
+    def test_union_absence_and_short_semantics(self):
+        local = {"AAPL": (_pos("pos-a", "AAPL", "10", "100"),)}
+        portfolio = _portfolio(("MSFT", "5", "50", "10"),
+                               ("TSLA", "-5", "-50", "10"))
+        findings, plans, notes = _diff(local, portfolio)
+
+        self.assertEqual([f.kind for f in findings], [
+            "position_missing_broker",
+            "position_unknown_broker",
+            "short_unrepresentable",
+        ])
+        self.assertEqual([f.action for f in findings], [
+            "adjusted", "latched_operator", "latched_operator"])
+        self.assertEqual([(p.position_id, p.adjusted_qty) for p in plans],
+                         [("pos-a", Decimal("0"))])
+        self.assertTrue(all(p.adjusted_qty >= 0 for p in plans))
+        self.assertEqual(notes, (("cost_unverifiable", "AAPL", ""),))
+
+        empty_findings, empty_plans, empty_notes = _diff({}, _portfolio())
+        self.assertEqual((empty_findings, empty_plans, empty_notes), ((), (), ()))
+
+    def test_multi_position_lifo_cascade_and_fixpoint(self):
+        local = {
+            "AAPL": (_pos("pos-new", "AAPL", "10", "100"),
+                     _pos("pos-old", "AAPL", "5", "50")),
+        }
+        findings, plans, notes = _diff(
+            local, _portfolio(("AAPL", "3", "30", "10")))
+
+        self.assertEqual([(f.kind, f.action, f.local, f.broker)
+                          for f in findings],
+                         [("position_qty", "adjusted", "15", "3")])
+        self.assertEqual([(p.position_id, p.prev_qty, p.adjusted_qty,
+                           p.adjusted_broker_cost_usd) for p in plans],
+                         [("pos-new", Decimal("10"), Decimal("0"),
+                           BrokerUSD("0")),
+                          ("pos-old", Decimal("5"), Decimal("3"),
+                           BrokerUSD("30"))])
+        self.assertEqual(notes, ())
+
+        post = {"AAPL": (_pos("pos-old", "AAPL", "3", "30"),)}
+        self.assertEqual(_diff(post, _portfolio(("AAPL", "3", "30", "10"))),
+                         ((), (), ()))
+
+    def test_positive_delta_accrues_to_newest(self):
+        local = {
+            "AAPL": (_pos("pos-new", "AAPL", "10", "100"),
+                     _pos("pos-old", "AAPL", "5", "50")),
+        }
+        findings, plans, notes = _diff(
+            local, _portfolio(("AAPL", "20", "200", "10")))
+
+        self.assertEqual([(f.kind, f.action) for f in findings],
+                         [("position_qty", "adjusted")])
+        self.assertEqual([(p.position_id, p.adjusted_qty,
+                           p.adjusted_broker_cost_usd) for p in plans],
+                         [("pos-new", Decimal("15"), BrokerUSD("150"))])
+        self.assertEqual(notes, ())
+
+    def test_frozen_inflight_and_immediate_defer_without_plans(self):
+        local = {"AAPL": (_pos("pos-a", "AAPL", "10", "100"),)}
+        portfolio = _portfolio(("AAPL", "12", "120", "10"))
+
+        frozen = _diff(local, portfolio, frozen_symbols=frozenset({"AAPL"}))
+        self.assertEqual([(f.kind, f.action) for f in frozen[0]],
+                         [("position_qty", "latched_operator")])
+        self.assertEqual(frozen[1:], ((), ()))
+
+        inflight = _diff(local, portfolio, inflight_symbols=frozenset({"AAPL"}))
+        self.assertEqual([(f.kind, f.action) for f in inflight[0]],
+                         [("position_qty", "adjust_deferred")])
+        self.assertEqual(inflight[1], ())
+        self.assertEqual(inflight[2],
+                         (("adjust_deferred_inflight", "AAPL", ""),))
+
+        immediate = _diff(local, portfolio, adjusts_allowed=False)
+        self.assertEqual([(f.kind, f.action) for f in immediate[0]],
+                         [("position_qty", "adjust_deferred")])
+        self.assertEqual(immediate[1:], ((), ()))
+
+    def test_decimal_value_compare_and_cost_tolerance_boundary(self):
+        local = {"AAPL": (_pos("pos-a", "AAPL", "1.000000000", "100"),)}
+        self.assertEqual(_diff(local, _portfolio(("AAPL", "1", "100", "100"))),
+                         ((), (), ()))
+
+        boundary = {"AAPL": (_pos("pos-a", "AAPL", "10", "100.05"),)}
+        self.assertEqual(
+            _diff(boundary, _portfolio(("AAPL", "10", "100", "10"))),
+            ((), (), ()))
+
+        over = {"AAPL": (_pos("pos-a", "AAPL", "10", "100.0500001"),)}
+        findings, plans, notes = _diff(
+            over, _portfolio(("AAPL", "10", "100", "10")))
+        self.assertEqual([(f.kind, f.field, f.action) for f in findings],
+                         [("position_avg_cost", "avg_cost", "adjusted")])
+        self.assertEqual([(p.position_id, p.adjusted_qty,
+                           p.adjusted_broker_cost_usd) for p in plans],
+                         [("pos-a", Decimal("10"), BrokerUSD("100"))])
+        self.assertEqual(notes, ())
+
+    def test_avg_entry_none_keeps_qty_adjusts_and_notes(self):
+        local = {"AAPL": (_pos("pos-a", "AAPL", "10", "100"),)}
+        findings, plans, notes = _diff(
+            local, _portfolio(("AAPL", "12", "120", None)))
+        self.assertEqual([(f.kind, f.action) for f in findings],
+                         [("position_qty", "adjusted")])
+        self.assertEqual([(p.position_id, p.adjusted_qty,
+                           p.adjusted_broker_cost_usd) for p in plans],
+                         [("pos-a", Decimal("12"), BrokerUSD("100"))])
+        self.assertEqual(notes, (("cost_unverifiable", "AAPL", ""),))
+
+    def test_reanchor_moves_to_newest_open_lot_after_boundary_exhaustion(self):
+        local = {
+            "AAPL": (_pos("pos-new", "AAPL", "10", "100"),
+                     _pos("pos-old", "AAPL", "5", "50")),
+        }
+        findings, plans, notes = _diff(
+            local, _portfolio(("AAPL", "5", "60", "12")))
+        self.assertEqual([(f.kind, f.action) for f in findings],
+                         [("position_qty", "adjusted")])
+        self.assertEqual([(p.position_id, p.adjusted_qty,
+                           p.adjusted_broker_cost_usd) for p in plans],
+                         [("pos-new", Decimal("0"), BrokerUSD("0")),
+                          ("pos-old", Decimal("5"), BrokerUSD("60"))])
+        self.assertEqual(notes, ())
+
+    def test_no_adjusted_position_qty_finding_without_plan(self):
+        local = {"AAPL": (_pos("pos-a", "AAPL", "10", "100"),)}
+        for inflight, allowed, expected_action in (
+                (frozenset(), True, "adjusted"),
+                (frozenset({"AAPL"}), True, "adjust_deferred"),
+                (frozenset(), False, "adjust_deferred")):
+            findings, plans, _notes = _diff(
+                local, _portfolio(("AAPL", "12", "120", "10")),
+                inflight_symbols=inflight, adjusts_allowed=allowed)
+            self.assertEqual(findings[0].action, expected_action)
+            if expected_action == "adjusted":
+                self.assertGreaterEqual(len(plans), 1)
+            else:
+                self.assertEqual(plans, ())
+
+
+class TestDiffCashCore(unittest.TestCase):
+    def test_exact_telescope_and_first_fill_id_dedupe(self):
+        rows = (
+            {"event_type": "broker_fill", "seq": 11, "fill_id": "bf-1",
+             "side": "buy", "delta_cost_usd": "25"},
+            {"event_type": "broker_fill", "seq": 12, "fill_id": "bf-1",
+             "side": "buy", "delta_cost_usd": "25"},
+            {"event_type": "broker_fill", "seq": 13, "fill_id": "bf-2",
+             "side": "sell", "delta_cost_usd": "10"},
+        )
+        self.assertIsNone(br.diff_cash(baseline_cash=BrokerUSD("100"),
+                                       fill_rows_since_watermark=rows,
+                                       broker_cash=BrokerUSD("85"),
+                                       reconcile_id="rc-cash"))
+
+    def test_cash_residue_latches_with_expected_and_broker_values(self):
+        rows = ({"event_type": "broker_fill", "seq": 11, "fill_id": "bf-1",
+                 "side": "buy", "delta_cost_usd": "25"},)
+        finding = br.diff_cash(baseline_cash=BrokerUSD("100"),
+                               fill_rows_since_watermark=rows,
+                               broker_cash=BrokerUSD("70"),
+                               reconcile_id="rc-cash")
+        self.assertEqual((finding.kind, finding.field, finding.local,
+                          finding.broker, finding.diff, finding.action),
+                         ("cash", "cash", "75", "70", "-5",
+                          "latched_operator"))
+
+
+class TestResolveOrderProbeCore(unittest.TestCase):
+    def test_terminal_filled_ahead_emits_fills_and_terminal_resolution(self):
+        resolution = br.resolve_order_probe(
+            _local_order(), _order("filled", filled_qty="7"),
+            cum_filled_watermark=Decimal("5"), session_over=False,
+            flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual([(f.kind, f.action, f.local, f.broker)
+                          for f in resolution.findings],
+                         [("fills_missed", "alert_only", "5", "7"),
+                          ("order_state", "resolved_terminal", "open",
+                           "filled")])
+        self.assertEqual(resolution.terminal_resolutions,
+                         (TerminalResolution(decision_id="d-1", order_id="o-1",
+                                             terminal_state="filled",
+                                             filled_qty=Decimal("7"),
+                                             cum_notional_usd=BrokerUSD("70"),
+                                             ts_broker_utc=(
+                                                 "2026-06-10T14:30:00Z")),))
+        self.assertEqual(resolution.defer_symbols, ())
+
+    def test_terminal_and_live_order_resolution_table(self):
+        canceled = br.resolve_order_probe(
+            _local_order(), _order("canceled"),
+            cum_filled_watermark=Decimal("0"), session_over=False,
+            flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual([(f.kind, f.action) for f in canceled.findings],
+                         [("order_state", "resolved_terminal")])
+        self.assertEqual(canceled.terminal_resolutions[0].terminal_state,
+                         "canceled")
+
+        live = br.resolve_order_probe(
+            _local_order(), _order("accepted"),
+            cum_filled_watermark=Decimal("0"), session_over=False,
+            flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual(live.findings, ())
+        self.assertEqual(live.defer_symbols, ("AAPL",))
+
+        partial = br.resolve_order_probe(
+            _local_order(), _order("partially_filled", filled_qty="3"),
+            cum_filled_watermark=Decimal("1"), session_over=False,
+            flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual([(f.kind, f.action) for f in partial.findings],
+                         [("fills_missed", "alert_only")])
+        self.assertEqual(partial.terminal_resolutions, ())
+        self.assertEqual(partial.defer_symbols, ("AAPL",))
+
+    def test_not_found_branches_for_confirmed_and_unconfirmed_orders(self):
+        confirmed = br.resolve_order_probe(
+            _local_order("order_submitted"), NOT_FOUND,
+            cum_filled_watermark=Decimal("0"), session_over=True,
+            flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual([(f.kind, f.action, f.broker)
+                          for f in confirmed.findings],
+                         [("order_state", "latched_operator", "not_found")])
+        self.assertEqual(confirmed.terminal_resolutions, ())
+        self.assertEqual(confirmed.defer_symbols, ("AAPL",))
+
+        expired = br.resolve_order_probe(
+            _local_order("order_submit_unconfirmed", state="unconfirmed"),
+            NOT_FOUND, cum_filled_watermark=Decimal("2"),
+            session_over=True, flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual([(f.kind, f.action) for f in expired.findings],
+                         [("order_state", "resolved_terminal")])
+        self.assertEqual(expired.terminal_resolutions,
+                         (TerminalResolution(decision_id="d-1", order_id="o-1",
+                                             terminal_state="expired",
+                                             filled_qty=Decimal("2"),
+                                             cum_notional_usd=BrokerUSD("0"),
+                                             ts_broker_utc=None),))
+        self.assertEqual(expired.defer_symbols, ())
+
+        presumed_live = br.resolve_order_probe(
+            _local_order("order_submit_unconfirmed", state="unconfirmed"),
+            NOT_FOUND, cum_filled_watermark=Decimal("0"),
+            session_over=False, flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual(presumed_live.findings, ())
+        self.assertEqual(presumed_live.terminal_resolutions, ())
+        self.assertEqual(presumed_live.defer_symbols, ("AAPL",))
+
+    def test_unknown_probe_and_terminal_local_defensive_case(self):
+        unknown = br.resolve_order_probe(
+            _local_order(), _order("pending_cancel"),
+            cum_filled_watermark=Decimal("0"), session_over=False,
+            flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual(unknown.findings, ())
+        self.assertEqual(unknown.notes,
+                         (("order_probe_unknown", "AAPL", "pending_cancel"),))
+        self.assertEqual(unknown.defer_symbols, ("AAPL",))
+
+        defensive = br.resolve_order_probe(
+            _local_order("order_terminal", state="filled"), _order("accepted"),
+            cum_filled_watermark=Decimal("10"), session_over=False,
+            flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual([(f.kind, f.action, f.local, f.broker)
+                          for f in defensive.findings],
+                         [("order_state", "latched_operator", "filled",
+                           "accepted")])
+
+    def test_probe_failed_and_flatten_probe_rows(self):
+        failed = br.resolve_order_probe(
+            _local_order(), PROBE_FAILED, cum_filled_watermark=Decimal("0"),
+            session_over=False, flatten_symbol=None, reconcile_id="rc-order")
+        self.assertEqual(failed.findings, ())
+        self.assertEqual(failed.notes,
+                         (("order_probe_failed", "AAPL", ""),))
+        self.assertEqual(failed.defer_symbols, ("AAPL",))
+
+        flat_done = br.resolve_order_probe(
+            None, _order("filled", symbol="AAPL", client_order_id="flatten-AAPL",
+                         broker_order_id="flatten-AAPL", filled_qty="10"),
+            cum_filled_watermark=Decimal("0"), session_over=False,
+            flatten_symbol="AAPL", reconcile_id="rc-order")
+        self.assertEqual(flat_done.findings, ())
+        self.assertEqual(flat_done.terminal_resolutions, ())
+        self.assertEqual(flat_done.notes,
+                         (("flatten_probe_result", "AAPL", "AAPL:filled"),))
+        self.assertEqual(flat_done.defer_symbols, ())
+
+        flat_live = br.resolve_order_probe(
+            None, _order("accepted", symbol="AAPL",
+                         client_order_id="flatten-AAPL",
+                         broker_order_id="flatten-AAPL"),
+            cum_filled_watermark=Decimal("0"), session_over=False,
+            flatten_symbol="AAPL", reconcile_id="rc-order")
+        self.assertEqual(flat_live.defer_symbols, ("AAPL",))
+
+        flat_failed = br.resolve_order_probe(
+            None, PROBE_FAILED, cum_filled_watermark=Decimal("0"),
+            session_over=False, flatten_symbol="AAPL",
+            reconcile_id="rc-order")
+        self.assertEqual(flat_failed.notes,
+                         (("order_probe_failed", "AAPL", ""),))
+        self.assertEqual(flat_failed.defer_symbols, ("AAPL",))
+
+
+class TestIdentityNoteCore(unittest.TestCase):
+    def test_identity_note_cent_boundary(self):
+        self.assertIsNone(br.identity_note(equity=BrokerUSD("110.01"),
+                                           cash=BrokerUSD("100.00"),
+                                           market_values=(BrokerUSD("10.00"),)))
+        self.assertEqual(
+            br.identity_note(equity=BrokerUSD("110.02"),
+                             cash=BrokerUSD("100.00"),
+                             market_values=(BrokerUSD("10.00"),)),
+            ("broker_internal_inconsistency", None,
+             "equity=110.02 cash_plus_market_value=110.00 diff=0.02"))
 
 
 if __name__ == "__main__":

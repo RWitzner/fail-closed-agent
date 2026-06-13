@@ -3,19 +3,18 @@ dual-hash) — different concept, deliberately different module (FD-M6-16).
 No broker, no I/O, no clock lives here; the orchestrator feeds parsed reads in
 and takes planned actions out (FD-M6-1).
 
-Wave 1 of the M6 build: the frozen §3 vocabularies (closed sets — emitting
-out-of-vocab raises `ReconcileError(ExecError)` with NO row written), the §A
-dataclasses/constants, the `make_finding` typed boundary (M6C-17, FD-M6-10),
-the §A.2 None-coerced sort keys (M6C-33), and the probe-result sentinels.
-The PURE diff core (`diff_positions` + LIFO planner, `diff_cash`,
-`resolve_order_probe`, `identity_note`) lands with wave 2 (§J).
+Wave 1 of the M6 build landed the frozen §3 vocabularies, §A dataclasses,
+`make_finding` typed boundary (M6C-17, FD-M6-10), §A.2 None-coerced sort keys
+(M6C-33), and probe-result sentinels. Wave 2 adds the PURE diff core:
+`diff_positions` + LIFO planner, `diff_cash`, `resolve_order_probe`, and
+`identity_note`.
 """
 import json
 from dataclasses import dataclass
-from decimal import Context, Decimal, ROUND_HALF_EVEN
-from typing import Optional, Tuple
+from decimal import Context, Decimal, InvalidOperation, ROUND_HALF_EVEN
+from typing import Mapping, Optional, Sequence, Tuple
 
-from agent.exec_reasons import ExecError, ORDER_STATES
+from agent.exec_reasons import ExecError, ORDER_STATES, TERMINAL_STATES
 from agent.serializer import ModeledUSD, as_broker_usd, dumps
 
 __all__ = [
@@ -37,6 +36,10 @@ __all__ = [
     "ReconcilePassResult",
     "make_finding",
     "canonical_decimal_str",
+    "diff_positions",
+    "diff_cash",
+    "resolve_order_probe",
+    "identity_note",
     "require_phase",
     "require_kind",
     "require_action",
@@ -306,3 +309,408 @@ def _finding_key(finding: DriftFinding):
 def _note_key(note):
     """(note, symbol_or_None, detail) -> None-coerced total key (M6C-33)."""
     return (note[0], note[1] or "", note[2])
+
+
+# --- §A wave-2 PURE diff core ---------------------------------------------------
+
+_ZERO = Decimal("0")
+
+
+def _decimal(value, *, field: str) -> Decimal:
+    if isinstance(value, bool) or isinstance(value, float):
+        raise TypeError(f"{field}: bool/float not allowed in reconcile math")
+    if isinstance(value, Decimal):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation as exc:
+            raise ReconcileError(f"{field}: unparseable Decimal {value!r}") from exc
+    else:
+        raise TypeError(f"{field}: must be Decimal or Decimal string "
+                        f"(got {type(value).__name__})")
+    if not parsed.is_finite():
+        raise TypeError(f"{field}: non-finite Decimal not allowed ({value!r})")
+    return Decimal(str(parsed))
+
+
+def _ctx_sum(values) -> Decimal:
+    total = _ZERO
+    for value in values:
+        total = _DECIMAL_CTX.add(total, _decimal(value, field="sum"))
+    return total
+
+
+def _ctx_abs(value: Decimal) -> Decimal:
+    return _DECIMAL_CTX.copy_abs(value)
+
+
+def _ctx_money(value: Decimal) -> "BrokerUSD":
+    from agent.serializer import BrokerUSD
+
+    return BrokerUSD(value)
+
+
+def _attr(obj, name: str):
+    try:
+        return getattr(obj, name)
+    except AttributeError as exc:
+        raise ReconcileError(f"{name}: missing from reconcile input") from exc
+
+
+def _plan_position_adjusts(symbol: str, positions: Tuple,
+                           broker_qty: Decimal,
+                           broker_cost: Optional[Decimal]) -> Tuple[PlannedAdjust, ...]:
+    """FD-M6-13 LIFO cascade + M6C-8 cost re-anchor. `positions` is already
+    newest-first by journal seq at the orchestrator seam."""
+    local_qty = _ctx_sum(_attr(p, "qty") for p in positions)
+    delta = _DECIMAL_CTX.subtract(broker_qty, local_qty)
+    new_qty = {id(p): _decimal(_attr(p, "qty"), field="position.qty")
+               for p in positions}
+    new_cost = {id(p): as_broker_usd(_attr(p, "broker_cost_usd"))
+                for p in positions}
+    touched = []
+
+    def touch(pos) -> None:
+        key = id(pos)
+        if key not in touched:
+            touched.append(key)
+
+    if delta > 0 and positions:
+        pos = positions[0]
+        new_qty[id(pos)] = _DECIMAL_CTX.add(new_qty[id(pos)], delta)
+        touch(pos)
+    elif delta < 0:
+        remaining = _DECIMAL_CTX.copy_negate(delta)
+        for pos in positions:
+            if remaining == 0:
+                break
+            key = id(pos)
+            take = min(new_qty[key], remaining)
+            if take == 0:
+                continue
+            new_qty[key] = _DECIMAL_CTX.subtract(new_qty[key], take)
+            if new_qty[key] == 0:
+                new_cost[key] = _ctx_money(_ZERO)
+            touch(pos)
+            remaining = _DECIMAL_CTX.subtract(remaining, take)
+
+    if broker_cost is not None and broker_qty >= 0:
+        target = None
+        for pos in positions:
+            if new_qty[id(pos)] > 0:
+                target = pos
+                break
+        if target is not None:
+            other_cost = _ctx_sum(
+                new_cost[id(pos)] for pos in positions
+                if pos is not target and new_qty[id(pos)] > 0)
+            new_cost[id(target)] = _ctx_money(
+                _DECIMAL_CTX.subtract(broker_cost, other_cost))
+            touch(target)
+
+    plans = []
+    for pos in positions:
+        key = id(pos)
+        if key not in touched:
+            continue
+        prev_qty = _decimal(_attr(pos, "qty"), field="position.qty")
+        prev_cost = as_broker_usd(_attr(pos, "broker_cost_usd"))
+        if new_qty[key] == prev_qty and new_cost[key] == prev_cost:
+            continue
+        plans.append(PlannedAdjust(
+            position_id=_attr(pos, "position_id"),
+            symbol=symbol,
+            prev_qty=prev_qty,
+            adjusted_qty=new_qty[key],
+            prev_broker_cost_usd=prev_cost,
+            adjusted_broker_cost_usd=_ctx_money(new_cost[key]),
+        ))
+    return tuple(plans)
+
+
+def _position_action(symbol: str, *, frozen_symbols: frozenset,
+                     inflight_symbols: frozenset,
+                     adjusts_allowed: bool) -> str:
+    if symbol in frozen_symbols:
+        return "latched_operator"
+    if symbol in inflight_symbols or not adjusts_allowed:
+        return "adjust_deferred"
+    return "adjusted"
+
+
+def diff_positions(local_positions: Mapping[str, Tuple],
+                   portfolio, *,
+                   frozen_symbols: frozenset,
+                   inflight_symbols: frozenset,
+                   adjusts_allowed: bool,
+                   reconcile_id: str) -> Tuple[Tuple[DriftFinding, ...],
+                                               Tuple[PlannedAdjust, ...],
+                                               Tuple[tuple, ...]]:
+    del reconcile_id  # deterministic id generation is owned by the impure writer.
+    broker_by_symbol = {p.symbol: p for p in portfolio.positions}
+    symbols = sorted(set(local_positions) | set(broker_by_symbol))
+    findings = []
+    plans = []
+    notes = []
+
+    for symbol in symbols:
+        positions = tuple(local_positions.get(symbol, ()))
+        broker_pos = broker_by_symbol.get(symbol)
+        local_qty = _ctx_sum(_attr(p, "qty") for p in positions)
+        local_cost = _ctx_sum(_attr(p, "broker_cost_usd") for p in positions)
+        broker_qty = _ZERO if broker_pos is None else _decimal(
+            broker_pos.qty, field="broker.qty")
+        broker_avg = None if broker_pos is None else broker_pos.avg_entry_price
+
+        if local_qty == 0 and broker_qty == 0:
+            continue
+
+        if broker_qty < 0:
+            findings.append(make_finding(
+                kind="short_unrepresentable", symbol=symbol, field="qty",
+                local=local_qty, broker=broker_qty, action="latched_operator"))
+            continue
+
+        if local_qty == 0 and broker_qty > 0:
+            findings.append(make_finding(
+                kind="position_unknown_broker", symbol=symbol, field="qty",
+                local=_ZERO, broker=broker_qty, action="latched_operator"))
+            continue
+
+        action = _position_action(symbol, frozen_symbols=frozen_symbols,
+                                  inflight_symbols=inflight_symbols,
+                                  adjusts_allowed=adjusts_allowed)
+        if symbol in inflight_symbols and local_qty != broker_qty:
+            notes.append(("adjust_deferred_inflight", symbol, ""))
+
+        broker_cost = None
+        if broker_avg is None:
+            if positions:
+                notes.append(("cost_unverifiable", symbol, ""))
+        else:
+            broker_cost = _DECIMAL_CTX.multiply(
+                _decimal(broker_avg, field="broker.avg_entry_price"),
+                broker_qty)
+
+        if local_qty != broker_qty:
+            kind = ("position_missing_broker" if broker_qty == 0
+                    else "position_qty")
+            findings.append(make_finding(
+                kind=kind, symbol=symbol, field="qty", local=local_qty,
+                broker=broker_qty, action=action))
+            if action == "adjusted":
+                plans.extend(_plan_position_adjusts(symbol, positions,
+                                                    broker_qty, broker_cost))
+            continue
+
+        if broker_cost is None:
+            continue
+        tolerance = _DECIMAL_CTX.multiply(
+            _ctx_abs(broker_qty), COST_TOLERANCE_PER_SHARE)
+        cost_diff = _ctx_abs(_DECIMAL_CTX.subtract(local_cost, broker_cost))
+        if cost_diff > tolerance:
+            findings.append(make_finding(
+                kind="position_avg_cost", symbol=symbol, field="avg_cost",
+                local=_ctx_money(local_cost), broker=_ctx_money(broker_cost),
+                action=action,
+                position_id=_attr(positions[0], "position_id") if positions
+                else None))
+            if action == "adjusted":
+                plans.extend(_plan_position_adjusts(symbol, positions,
+                                                    broker_qty, broker_cost))
+            elif symbol in inflight_symbols:
+                notes.append(("adjust_deferred_inflight", symbol, ""))
+
+    return (tuple(sorted(findings, key=_finding_key)), tuple(plans),
+            tuple(sorted(set(notes), key=_note_key)))
+
+
+def diff_cash(*, baseline_cash: "BrokerUSD",
+              fill_rows_since_watermark: Sequence[Mapping],
+              broker_cash: "BrokerUSD",
+              reconcile_id: str) -> Optional[DriftFinding]:
+    del reconcile_id
+    expected = as_broker_usd(baseline_cash)
+    seen_fill_ids = set()
+    for row in fill_rows_since_watermark:
+        if row.get("event_type") != "broker_fill":
+            continue
+        fill_id = row.get("fill_id")
+        if not isinstance(fill_id, str) or not fill_id:
+            raise ReconcileError("fill_id: missing from broker_fill row")
+        if fill_id in seen_fill_ids:
+            continue
+        seen_fill_ids.add(fill_id)
+        side = row.get("side")
+        cost = _decimal(row.get("delta_cost_usd"), field="delta_cost_usd")
+        if side == "buy":
+            expected = _ctx_money(_DECIMAL_CTX.subtract(expected, cost))
+        elif side == "sell":
+            expected = _ctx_money(_DECIMAL_CTX.add(expected, cost))
+        else:
+            raise ReconcileError(f"side: out-of-vocab broker fill side {side!r}")
+    broker_cash = as_broker_usd(broker_cash)
+    if expected == broker_cash:
+        return None
+    return make_finding(kind="cash", symbol=None, field="cash",
+                        local=_ctx_money(expected), broker=broker_cash,
+                        action="latched_operator")
+
+
+def _local_state(local_row: Mapping) -> str:
+    event_type = local_row.get("event_type")
+    if event_type == "order_submit_unconfirmed":
+        return "unconfirmed"
+    if event_type == "order_terminal":
+        return local_row.get("terminal_state", "filled")
+    state = local_row.get("state")
+    if state in TERMINAL_STATES:
+        return state
+    return "open"
+
+
+def _resolution_notional(probe_result) -> "BrokerUSD":
+    filled_qty = _decimal(_attr(probe_result, "filled_qty"),
+                          field="broker.filled_qty")
+    avg = _attr(probe_result, "filled_avg_price")
+    if avg is None or filled_qty == 0:
+        return _ctx_money(_ZERO)
+    return _ctx_money(_DECIMAL_CTX.multiply(
+        filled_qty, _decimal(avg, field="broker.filled_avg_price")))
+
+
+def _terminal_resolution(local_row: Mapping, terminal_state: str,
+                         filled_qty: Decimal, cum_notional_usd,
+                         ts_broker_utc: Optional[str]) -> TerminalResolution:
+    return TerminalResolution(
+        decision_id=local_row.get("decision_id"),
+        order_id=local_row.get("order_id"),
+        terminal_state=terminal_state,
+        filled_qty=filled_qty,
+        cum_notional_usd=_ctx_money(cum_notional_usd),
+        ts_broker_utc=ts_broker_utc,
+    )
+
+
+def resolve_order_probe(local_row: Optional[Mapping], probe_result, *,
+                        cum_filled_watermark: Decimal,
+                        session_over: bool,
+                        flatten_symbol: Optional[str],
+                        reconcile_id: str) -> ProbeResolution:
+    del reconcile_id
+    cum_filled_watermark = _decimal(cum_filled_watermark,
+                                    field="cum_filled_watermark")
+    if local_row is None:
+        if not isinstance(flatten_symbol, str) or not flatten_symbol:
+            raise ReconcileError("flatten_symbol required for flatten probe")
+        symbol = flatten_symbol
+        if probe_result is PROBE_FAILED:
+            return ProbeResolution((), (("order_probe_failed", symbol, ""),),
+                                   (), (symbol,))
+        if probe_result is NOT_FOUND:
+            return ProbeResolution(
+                (), (("flatten_probe_result", symbol,
+                      f"{symbol}:not_found"),), (), ())
+        state = _attr(probe_result, "state")
+        if state in TERMINAL_STATES:
+            return ProbeResolution(
+                (), (("flatten_probe_result", symbol, f"{symbol}:{state}"),),
+                (), ())
+        return ProbeResolution((), (), (), (symbol,))
+
+    symbol = local_row.get("symbol")
+    order_id = local_row.get("order_id")
+    local_state = _local_state(local_row)
+    notes = []
+    findings = []
+    resolutions = []
+    defer = set()
+
+    if probe_result is PROBE_FAILED:
+        return ProbeResolution((), (("order_probe_failed", symbol, ""),), (),
+                               (symbol,))
+
+    if probe_result is NOT_FOUND:
+        if local_state == "unconfirmed":
+            if session_over:
+                findings.append(make_finding(
+                    kind="order_state", symbol=symbol, field="order_state",
+                    local="unconfirmed", broker="not_found",
+                    action="resolved_terminal", local_order_id=order_id))
+                resolutions.append(_terminal_resolution(
+                    local_row, "expired", cum_filled_watermark,
+                    _ZERO, None))
+            else:
+                defer.add(symbol)
+        elif local_state in TERMINAL_STATES:
+            pass
+        else:
+            findings.append(make_finding(
+                kind="order_state", symbol=symbol, field="order_state",
+                local="open", broker="not_found", action="latched_operator",
+                local_order_id=order_id))
+            defer.add(symbol)
+        return ProbeResolution(tuple(sorted(findings, key=_finding_key)),
+                               tuple(sorted(notes, key=_note_key)),
+                               tuple(resolutions), tuple(sorted(defer)))
+
+    broker_state = _attr(probe_result, "state")
+    broker_order_id = _attr(probe_result, "broker_order_id")
+    broker_filled = _decimal(_attr(probe_result, "filled_qty"),
+                             field="broker.filled_qty")
+
+    if local_state in TERMINAL_STATES and broker_state not in TERMINAL_STATES:
+        findings.append(make_finding(
+            kind="order_state", symbol=symbol, field="order_state",
+            local=local_state, broker=broker_state, action="latched_operator",
+            local_order_id=order_id, broker_order_id=broker_order_id))
+        defer.add(symbol)
+    elif broker_state in TERMINAL_STATES:
+        if broker_state == "filled" and broker_filled > cum_filled_watermark:
+            findings.append(make_finding(
+                kind="fills_missed", symbol=symbol, field="fills",
+                local=cum_filled_watermark, broker=broker_filled,
+                action="alert_only", local_order_id=order_id,
+                broker_order_id=broker_order_id))
+        findings.append(make_finding(
+            kind="order_state", symbol=symbol, field="order_state",
+            local=local_state, broker=broker_state, action="resolved_terminal",
+            local_order_id=order_id, broker_order_id=broker_order_id))
+        resolutions.append(_terminal_resolution(
+            local_row, broker_state, broker_filled,
+            _resolution_notional(probe_result),
+            _attr(probe_result, "ts_broker_utc")))
+    elif broker_state == "partially_filled":
+        if broker_filled > cum_filled_watermark:
+            findings.append(make_finding(
+                kind="fills_missed", symbol=symbol, field="fills",
+                local=cum_filled_watermark, broker=broker_filled,
+                action="alert_only", local_order_id=order_id,
+                broker_order_id=broker_order_id))
+        defer.add(symbol)
+    elif broker_state in {"accepted"}:
+        defer.add(symbol)
+    else:
+        notes.append(("order_probe_unknown", symbol, broker_state))
+        defer.add(symbol)
+
+    return ProbeResolution(tuple(sorted(findings, key=_finding_key)),
+                           tuple(sorted(notes, key=_note_key)),
+                           tuple(resolutions), tuple(sorted(defer)))
+
+
+def identity_note(*, equity, cash, market_values) -> Optional[tuple]:
+    equity = as_broker_usd(equity)
+    cash = as_broker_usd(cash)
+    total = cash
+    for value in market_values:
+        total = _ctx_money(_DECIMAL_CTX.add(total, as_broker_usd(value)))
+    diff = _DECIMAL_CTX.subtract(equity, total)
+    if _ctx_abs(diff) <= IDENTITY_TOLERANCE_USD:
+        return None
+    return ("broker_internal_inconsistency", None,
+            "equity="
+            f"{canonical_decimal_str(equity)} cash_plus_market_value="
+            f"{canonical_decimal_str(total)} diff="
+            f"{canonical_decimal_str(diff)}")
