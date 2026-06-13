@@ -9,14 +9,17 @@ Polymarket agent: it starts **paper-only with "nothing opens by default"** and i
 live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
 **Current state:** M0-M7 are done. **M7 (backtest gate + first directional strategy) is review-hardened and
-closed offline on branch `codex/m7-backtest-gate`** (1679 tests green). M1 tier-2 (2b live-verified) remains
+closed offline on branch `codex/m7-backtest-gate`** (1683 tests green). M1 tier-2 (2b live-verified) remains
 deferred pending the unprovisioned live realtime subscription. M7 adds deterministic anti-lookahead backtest
 primitives, v2 artifact verifier/metrics, full-triple artifact cache hardening, a temp-only fixture builder,
 paper-phase criteria/runbook, and `directional.momentum_v1`. Production `artifacts/backtests/` still contains
-only `.gitkeep`; the AAPL-only and broader historical reviewed-artifact attempts both failed M7 criteria. Next
-loop is **strategy/universe hardening until a reviewed artifact verifies `ok`**, then paper edge-validation. M8 is
-blocked until passing artifact + positive realized paper edge satisfy the pinned criteria. See `PLAN.md` for live
-status.
+only `.gitkeep`; the AAPL-only, broader, and earlier holdout historical reviewed-artifact attempts all failed M7
+criteria. The broader rerun also hardened the historical input contract against impossible receive-before-event
+quote rows; future reviewed manifests must also hash-bind the predeclared universe hypothesis to block
+cherry-picking.
+Next loop is **strategy/universe hardening until a reviewed artifact verifies `ok`**, then paper edge-validation.
+M8 is blocked until passing artifact + positive realized paper edge satisfy the pinned criteria. See `PLAN.md` for
+live status.
 
 ## Scope
 

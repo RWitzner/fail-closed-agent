@@ -144,7 +144,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
     0 critical/high/medium/low issues. It specifically re-checked dirty-window latch clearing, post-adjust
     durable seeding, and newest-first lot ordering by `position_open` stream `seq`; `git diff --check`, targeted
     regressions, compile, and the full 1639-test suite were green. M6 is closed on the branch; next is M7.
-- **M7 REVIEW-HARDENED OFFLINE CLOSEOUT on branch `codex/m7-backtest-gate` (2026-06-13, 1679 tests green after
+- **M7 REVIEW-HARDENED OFFLINE CLOSEOUT on branch `codex/m7-backtest-gate` (2026-06-13, 1683 tests green after
   historical-review hardening):**
   anti-lookahead backtest primitives, v2 artifact verifier/metrics, artifact cache key hardening, deterministic
   temp-only fixture artifact builder CLI, paper-phase criteria evaluator/runbook, and first real strategy
@@ -170,16 +170,30 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   negative, so no artifact was written or committed. Production `artifacts/backtests/` remains `.gitkeep` only,
   and paper edge-validation remains blocked until a reviewed artifact verifies `ok`. Failure review:
   `docs/superpowers/reviews/2026-06-13-M7-historical-artifact-failure-review.md`.
-- **Broader historical artifact attempt (2026-06-13):** reran the hardened `--input-manifest-json` path over a
-  predeclared large-cap/Nasdaq-leaning universe (`AAPL,MSFT,NVDA,AMZN,META,GOOGL,TSLA,AVGO,COST,NFLX`) with
-  `EQUS.MINI:bbo-1m`, the same rules hash
+- **Broader historical artifact attempt + causal-time input hardening (2026-06-13):** reran the hardened
+  `--input-manifest-json` path over a predeclared large-cap/Nasdaq-leaning universe
+  (`AAPL,MSFT,NVDA,AMZN,META,GOOGL,TSLA,AVGO,COST,NFLX`) with `EQUS.MINI:bbo-1m`, the same rules hash
   `a4298880ef6136f69a627c62ebc002d9c2c85f7d1e7ae5f3d5f3e96647c06bf6`, and the same window
-  `2026-05-11T13:30:00` → `2026-06-09T20:00:00`. Every symbol failed M7 criteria; all had negative
-  execution-realistic net PnL and negative active PnL, so no staging or production artifact verified `ok` and no
-  production artifact was written. Production `artifacts/backtests/` remains `.gitkeep` only; `verify_artifact`
-  against the reviewed triples returns `missing`. Paper edge-validation remains blocked. Next loop is
-  strategy/universe hardening, not M8. Failure review:
+  `2026-05-11T13:30:00` → `2026-06-09T20:00:00`. The first broader evidence pass exposed impossible
+  receive-before-event quote rows in the normalized input, so the historical manifest contract now rejects
+  `ts_recv_utc < ts_event_utc` and a new pinned v2-causal run recomputed every manifest hash/data pin after
+  dropping those rows. Every symbol still failed M7 criteria; all had negative execution-realistic net PnL and
+  negative active PnL, so no staging or production artifact verified `ok` and no production artifact was written.
+  Production `artifacts/backtests/` remains `.gitkeep` only; `verify_artifact` against the reviewed triples
+  returns `missing`. Paper edge-validation remains blocked. Next loop is strategy/universe hardening, not M8.
+  Failure review:
   `docs/superpowers/reviews/2026-06-13-M7-broader-historical-artifact-failure-review.md`.
+- **Strategy/universe manifest hardening (2026-06-13):** the historical reviewed-artifact manifest now requires a
+  predeclared `universe` block (`hypothesis_id`, `selection_rule`, ordered `symbols` including the artifact
+  symbol), and v2 artifact provenance carries that block forward. This keeps future strategy/universe reruns
+  hash-bound to the reviewed hypothesis instead of allowing post-run symbol cherry-picking. No thresholds changed,
+  no production artifact was written, and M8/paper edge-validation remain blocked.
+- **Holdout historical artifact attempt (2026-06-13):** reran the same broader universe over an earlier,
+  non-overlapping `EQUS.MINI:bbo-1m` window (`2026-04-09T13:30:00` → `2026-05-08T20:00:00`) with hash-bound
+  universe manifests. Every symbol again failed M7 criteria; all had negative execution-realistic net PnL and
+  negative active PnL, and most also breached one or both realism-gap gates. No staging artifact verified `ok`,
+  no production artifact was written, and `artifacts/backtests/` remains `.gitkeep` only. Failure review:
+  `docs/superpowers/reviews/2026-06-13-M7-holdout-historical-artifact-failure-review.md`.
 
 ## Locked decisions
 
@@ -223,7 +237,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
   W6 initial review blockers fixed+committed (`483ea34`, 1639 tests); separate W6 re-review clean; gates OFF.
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. ✓ **review-hardened offline
-  closeout on `codex/m7-backtest-gate`** (1679 tests after historical-review hardening): v2 artifact gate, backtest engine,
+  closeout on `codex/m7-backtest-gate`** (1683 tests after historical-review hardening): v2 artifact gate, backtest engine,
   `directional.momentum_v1`, temp-only fixture builder CLI, criteria runbook, and S9 integration are green.
   Reviewed historical production artifact has not passed, so default committed artifact state remains fail-closed.
 - **Strategy/universe hardening loop** (current post-M7 gate): revise the strategy version or historical universe

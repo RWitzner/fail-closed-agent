@@ -73,7 +73,8 @@ _V2_PROVENANCE_REQUIRED_KEYS = frozenset({
 _V2_PROVENANCE_OPTIONAL_KEYS = frozenset({
     "normalizer_id", "calendar_pin", "fee_model_version",
     "pricing_model_version", "realism_gap_model_version",
-    "latency_budget_ms", "slippage_cap_bps",
+    "latency_budget_ms", "slippage_cap_bps", "universe_hypothesis_id",
+    "universe_selection_rule", "universe_symbols",
 })
 _PINNED_MIN_SESSIONS = 20
 _PINNED_MIN_TRADES = 30
@@ -205,7 +206,16 @@ def _valid_v2_metrics(metrics: dict) -> bool:
         return False
     if keys - (_V2_PROVENANCE_REQUIRED_KEYS | _V2_PROVENANCE_OPTIONAL_KEYS):
         return False
-    return all(_string(provenance[key]) for key in keys)
+    for key in keys:
+        if key == "universe_symbols":
+            symbols = provenance[key]
+            if (not isinstance(symbols, list) or not symbols
+                    or any(not _string(symbol) for symbol in symbols)):
+                return False
+            continue
+        if not _string(provenance[key]):
+            return False
+    return True
 
 
 @dataclass(frozen=True)

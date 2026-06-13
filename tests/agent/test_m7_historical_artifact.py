@@ -111,6 +111,11 @@ def _manifest(rows, *, schema="tbbo", blackouts=()):
             "one_sided": 0,
             "undef": 0,
         },
+        "universe": {
+            "hypothesis_id": "unit-test-aapl-only-v1",
+            "selection_rule": "unit test fixture predeclares AAPL",
+            "symbols": ["AAPL"],
+        },
         "calendar": {
             "calendar_pin": "unit-test-calendar-v1",
             "sessions": {
@@ -209,6 +214,14 @@ class TestHistoricalArtifactFlow(unittest.TestCase):
                 result.payload["metrics"]["provenance"]["pricing_model_version"],
                 "m7-historical-quote-a-b-spread-v1",
             )
+            self.assertEqual(
+                result.payload["metrics"]["provenance"]["universe_hypothesis_id"],
+                "unit-test-aapl-only-v1",
+            )
+            self.assertEqual(
+                result.payload["metrics"]["provenance"]["universe_symbols"],
+                ["AAPL"],
+            )
             self.assertEqual(result.artifact_path,
                              Path(tmp) / f"{_STRATEGY_ID}.json")
             self.assertEqual(
@@ -266,6 +279,59 @@ class TestHistoricalArtifactFlow(unittest.TestCase):
 
         self.assertIn("quote_rows_sha256", str(ctx.exception))
 
+    def test_manifest_must_pin_predeclared_universe_hypothesis(self):
+        rows = _historical_rows()
+        manifest = _manifest(rows)
+        del manifest["universe"]
+        manifest["manifest_hash"] = row_hash({
+            key: value for key, value in manifest.items()
+            if key != "manifest_hash"
+        })
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                write_m7_historical_artifact(
+                    artifacts_dir=tmp,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    allow_reviewed_artifact=True,
+                )
+
+        self.assertIn("input_manifest.universe", str(ctx.exception))
+
+    def test_manifest_universe_must_include_symbol(self):
+        rows = _historical_rows()
+        manifest = _manifest(rows)
+        manifest["universe"] = {
+            **manifest["universe"],
+            "symbols": ["MSFT"],
+        }
+        manifest["manifest_hash"] = row_hash({
+            key: value for key, value in manifest.items()
+            if key != "manifest_hash"
+        })
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                write_m7_historical_artifact(
+                    artifacts_dir=tmp,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    allow_reviewed_artifact=True,
+                )
+
+        self.assertIn("input_manifest.universe.symbols", str(ctx.exception))
+
     def test_zero_size_quote_rows_are_rejected_before_snapshot(self):
         rows = list(_historical_rows())
         rows[0] = {**rows[0], "bid_sz": "0"}
@@ -286,6 +352,31 @@ class TestHistoricalArtifactFlow(unittest.TestCase):
                 )
 
         self.assertIn("bid_sz", str(ctx.exception))
+
+    def test_quote_rows_with_receive_before_event_are_rejected(self):
+        rows = list(_historical_rows())
+        rows[0] = {
+            **rows[0],
+            "ts_event_utc": "2026-06-01T14:30:00.000000Z",
+            "ts_recv_utc": "2026-06-01T14:29:59.999999Z",
+        }
+        manifest = _manifest(rows)
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                write_m7_historical_artifact(
+                    artifacts_dir=tmp,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    allow_reviewed_artifact=True,
+                )
+
+        self.assertIn("ts_recv_utc must be >= ts_event_utc", str(ctx.exception))
 
     def test_runner_does_not_use_half_gross_benchmark_proxy(self):
         rows = _historical_rows()

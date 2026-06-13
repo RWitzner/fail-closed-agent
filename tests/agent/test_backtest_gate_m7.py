@@ -79,6 +79,9 @@ def _v2_metrics(**overrides):
             "input_manifest_hash": "mh-abc123",
             "builder_git_commit": "test",
             "tier": "fixture",
+            "universe_hypothesis_id": "unit-test-aapl-only-v1",
+            "universe_selection_rule": "unit test fixture predeclares AAPL",
+            "universe_symbols": ["AAPL"],
         },
     }
     metrics.update(overrides)
@@ -206,3 +209,14 @@ class TestBacktestGateV2(unittest.TestCase):
             self.assertEqual(
                 self._verify(tmp, data_pin="EQUS.MINI:tbbo:1m:other").status,
                 "key_mismatch")
+
+    def test_v2_universe_provenance_symbols_must_be_string_list(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _v2_metrics()
+            metrics["provenance"] = dict(
+                metrics["provenance"],
+                universe_symbols="AAPL",
+            )
+            _write_artifact(tmp, _artifact_payload(metrics=metrics))
+
+            self.assertEqual(self._verify(tmp).status, "hash_invalid")

@@ -30,8 +30,10 @@ canonical JSON object whose `manifest_hash` recomputes from the body and whose
 `quote_rows_sha256` recomputes over the normalized JSONL rows. Required manifest
 contents include the dataset/schema/interval/symbol/instrument id, row count,
 source window, normalizer id, drop counts/reasons, calendar session windows,
-corporate-action blackout dates, latency budget, slippage cap, fee model,
-pricing model, and realism-gap model. The `data_pin` must equal
+corporate-action blackout dates, a predeclared universe hypothesis
+(`hypothesis_id`, `selection_rule`, and ordered `symbols` including the artifact
+symbol), latency budget, slippage cap, fee model, pricing model, and
+realism-gap model. The `data_pin` must equal
 `<DATASET>:<SCHEMA>:1m:historical:<manifest_hash>`.
 
 `EQUS.MINI:bbo-1m` normalized rows are acceptable only as an explicitly declared

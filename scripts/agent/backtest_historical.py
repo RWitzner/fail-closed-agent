@@ -86,6 +86,9 @@ class HistoricalInputManifest:
     fee_model_version: str
     pricing_model_version: str
     realism_gap_model_version: str
+    universe_hypothesis_id: str
+    universe_selection_rule: str
+    universe_symbols: Tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -186,6 +189,14 @@ def _validate_quote_row_quality(rows: Tuple[dict, ...], *, dataset: str,
         matched += 1
         if row.get("dataset") != dataset:
             raise ValueError(f"quote row {line_no} dataset does not match manifest")
+        ts_event = row.get("ts_event_utc")
+        ts_recv = row.get("ts_recv_utc")
+        if not isinstance(ts_event, str) or not isinstance(ts_recv, str):
+            raise ValueError(
+                f"quote row {line_no} missing ts_event_utc/ts_recv_utc")
+        if _parse_utc(ts_recv) < _parse_utc(ts_event):
+            raise ValueError(
+                f"quote row {line_no} ts_recv_utc must be >= ts_event_utc")
         for field in ("bid_sz", "ask_sz"):
             value = _parse_manifest_decimal(
                 row.get(field), path=f"quote row {line_no}.{field}")
@@ -194,6 +205,34 @@ def _validate_quote_row_quality(rows: Tuple[dict, ...], *, dataset: str,
                     f"quote row {line_no}.{field} must be positive")
     if matched == 0:
         raise ValueError("historical quote input has no rows matching manifest")
+
+
+def _validate_universe_manifest(
+        manifest: Mapping[str, object], *, symbol: str
+        ) -> tuple[str, str, Tuple[str, ...]]:
+    universe = manifest.get("universe")
+    if not isinstance(universe, Mapping):
+        raise ValueError("input_manifest.universe must be an object")
+    hypothesis_id = universe.get("hypothesis_id")
+    selection_rule = universe.get("selection_rule")
+    raw_symbols = universe.get("symbols")
+    if not isinstance(hypothesis_id, str) or not hypothesis_id:
+        raise ValueError(
+            "input_manifest.universe.hypothesis_id must be a non-empty string")
+    if not isinstance(selection_rule, str) or not selection_rule:
+        raise ValueError(
+            "input_manifest.universe.selection_rule must be a non-empty string")
+    if (not isinstance(raw_symbols, list) or not raw_symbols
+            or any(not isinstance(item, str) or not item
+                   for item in raw_symbols)):
+        raise ValueError(
+            "input_manifest.universe.symbols must be a non-empty list of strings")
+    symbols = tuple(raw_symbols)
+    if len(set(symbols)) != len(symbols):
+        raise ValueError("input_manifest.universe.symbols must be unique")
+    if symbol not in symbols:
+        raise ValueError("input_manifest.universe.symbols must include CLI symbol")
+    return hypothesis_id, selection_rule, symbols
 
 
 def validate_historical_input_manifest(
@@ -244,6 +283,8 @@ def validate_historical_input_manifest(
         source_id_prefix=source_id_prefix, manifest_hash=manifest_hash)
     if data_pin != expected_pin:
         raise ValueError("data_pin does not match input manifest hash")
+    universe_hypothesis_id, universe_selection_rule, universe_symbols = (
+        _validate_universe_manifest(manifest, symbol=symbol))
 
     calendar = manifest.get("calendar")
     if not isinstance(calendar, dict):
@@ -320,6 +361,9 @@ def validate_historical_input_manifest(
         fee_model_version=fee_model_version,
         pricing_model_version=pricing_model_version,
         realism_gap_model_version=realism_gap_model_version,
+        universe_hypothesis_id=universe_hypothesis_id,
+        universe_selection_rule=universe_selection_rule,
+        universe_symbols=universe_symbols,
     )
 
 
@@ -754,6 +798,9 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
             "fee_model_version": manifest.fee_model_version,
             "pricing_model_version": manifest.pricing_model_version,
             "realism_gap_model_version": manifest.realism_gap_model_version,
+            "universe_hypothesis_id": manifest.universe_hypothesis_id,
+            "universe_selection_rule": manifest.universe_selection_rule,
+            "universe_symbols": list(manifest.universe_symbols),
             "latency_budget_ms": str(manifest.latency_budget_ms),
             "slippage_cap_bps": str(manifest.slippage_cap_bps),
         },
