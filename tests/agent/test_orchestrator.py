@@ -30,7 +30,11 @@ from agent.exec_ledger import ExecLedger
 from agent.execution_preflight import unbind_runtime
 from agent.journal import replay
 from agent.paper_book import PaperBook
-from agent.reconcile_ledger import ReconcileLedger, replay_reconcile
+from agent.reconcile_ledger import (
+    ReconcileLedger,
+    rehydrate_reconcile_state,
+    replay_reconcile,
+)
 from agent.risk.risk_ledger import RiskLedger
 from agent.serializer import BrokerUSD, row_hash
 from recorder.persistence import EventWriter
@@ -1083,6 +1087,37 @@ class OrchestratorCase(unittest.TestCase):
         self.assertIsNotNone(portfolio)
         self.assertFalse(portfolio.unreconciled_drift)
 
+    def test_m6_clean_reconcile_does_not_clear_trailing_drift_window(self):
+        journal_dir = self.tmp / "m6-trailing-drift-window"
+        journal_dir.mkdir(parents=True, exist_ok=True)
+        prior = ReconcileLedger(
+            EventWriter(journal_dir / "reconcile_alerts.jsonl", "run-prior",
+                        clock=_ROW_CLOCK),
+            rules_hash="0" * 64)
+        prior.record_reconcile(
+            reconcile_id="rc-prior", drift_id="rd-prior",
+            kind="position_qty", symbol="AAPL", field="qty",
+            local="10", broker="12", diff="2", action="adjusted",
+            position_id=None, local_order_id=None, broker_order_id=None)
+        provider = FakeAccountProvider(
+            account_payloads=[account_payload()],
+            positions_payloads=[[]])
+        pipeline = self.make_pipeline(
+            subdir="m6-trailing-drift-window", broker=SpyBroker(),
+            account_provider=provider)
+        self.assertTrue(pipeline.orch.drift_latched)
+
+        result = pipeline.orch.run_reconcile(phase="sod")
+
+        self.assertTrue(result.clean)
+        self.assertTrue(pipeline.orch.drift_latched)
+        portfolio = pipeline.orch._portfolio_read(pipeline.clock.now_ms())
+        self.assertIsNotNone(portfolio)
+        self.assertTrue(portfolio.unreconciled_drift)
+        state = rehydrate_reconcile_state(
+            replay_reconcile(journal_dir / "reconcile_alerts.jsonl"))
+        self.assertTrue(state["latched"])
+
     def test_m6_eod_reconcile_hook_is_paper_mode_only(self):
         api = ScriptedOrderApi({
             "submit": [_ack],
@@ -1230,6 +1265,71 @@ class OrchestratorCase(unittest.TestCase):
                          [("10", "12", "frozen_immediate")])
         self.assertTrue(pipeline.orch.drift_latched)
         self.assertEqual(pipeline.rows_of("positions", "position_adjust"), [])
+
+    def test_m6_adjusted_pass_seeds_durable_after_reconcile(self):
+        journal_dir = self.tmp / "m6-durable-adjust-seed"
+        self._m6_open_prior_position(journal_dir, qty="10")
+        durable = self._m6_durable()
+        provider = FakeAccountProvider(
+            account_payloads=[
+                account_payload(equity="42400.00", last_equity="42400.00",
+                                cash="40000.00"),
+                account_payload(equity="42800.00", last_equity="42800.00",
+                                cash="40000.00"),
+            ],
+            positions_payloads=[
+                [self._m6_broker_position(qty="12")],
+                [self._m6_broker_position(qty="14")],
+            ])
+        pipeline = self.make_pipeline(
+            subdir="m6-durable-adjust-seed", broker=SpyBroker(),
+            account_provider=provider, durable_ids={"AAPL": durable})
+
+        result = pipeline.orch.run_reconcile(phase="sod")
+
+        self.assertTrue(result.completed)
+        self.assertFalse(result.clean)
+        adjusts = pipeline.rows_of("positions", "position_adjust")
+        self.assertEqual([(row["adjusted_qty"],
+                           row["adjusted_broker_cost_usd"]) for row in adjusts],
+                         [("12", "2400.00")])
+        baselines = [row for row in replay_reconcile(
+            journal_dir / "reconcile_alerts.jsonl")
+            if row["event_type"] == "reconcile_baseline"]
+        self.assertEqual(baselines[-1]["durable_seeded"], [durable.key()])
+
+        pipeline.tick_on_bar(50)
+
+        status = pipeline.rows_of("status", "broker_adjust_freeze")
+        self.assertEqual(len(status), 1)
+        self.assertEqual(status[0]["durable_key"], durable.key())
+
+    def test_m6_multi_position_adjusts_lifo_by_position_open_seq(self):
+        journal_dir = self.tmp / "m6-lifo-seq"
+        old_position = self._m6_open_prior_position(journal_dir, qty="1")
+        new_position = self._m6_open_prior_position(journal_dir, qty="2")
+        provider = FakeAccountProvider(
+            account_payloads=[account_payload(
+                equity="40200.00", last_equity="40200.00",
+                cash="40000.00")],
+            positions_payloads=[[self._m6_broker_position(qty="1")]])
+        pipeline = self.make_pipeline(
+            subdir="m6-lifo-seq", broker=SpyBroker(),
+            account_provider=provider)
+
+        result = pipeline.orch.run_reconcile(phase="sod")
+
+        self.assertTrue(result.completed)
+        adjusts = pipeline.rows_of("positions", "position_adjust")
+        self.assertEqual([(row["position_id"], row["prev_qty"],
+                           row["adjusted_qty"],
+                           row["adjusted_broker_cost_usd"]) for row in adjusts],
+                         [(new_position, "2", "0", "0")])
+        positions = pipeline.orch._book._positions
+        self.assertEqual(positions[old_position].qty, Decimal("1"))
+        self.assertEqual(positions[old_position].status, "open")
+        self.assertEqual(positions[new_position].qty, Decimal("0"))
+        self.assertEqual(positions[new_position].status, "closed")
 
     # ------------------------------------------------------------- golden smoke
 

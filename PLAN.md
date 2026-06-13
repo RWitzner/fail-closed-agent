@@ -134,8 +134,13 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
     golden-stability checks proving no automatic `reconcile_alerts.jsonl` stream. Verification:
     W5 targeted block green, affected regression block green, and full suite green
     (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
-  - **Next:** W6 (multi-lens repro-gated adversarial review, separate authoring/review). Each wave:
-    build agent (NO git) → own suite run + git-audit → commit.
+  - **W6 INITIAL REVIEW FIXES APPLIED (suite 1639 = 1636 + 3):** fixed the three repro-gated
+    review blockers: in-process drift-latch clear now respects dirty journal windows; durable detector
+    seeding now happens after `position_adjust` at the reconciled point; multi-lot allocation now feeds
+    `diff_positions` newest-first by `position_open` stream `seq`, not `position_id`. Verification:
+    new RED→GREEN regressions, affected M6 block green, compile green, `git diff --check` clean, and full
+    suite green (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
+  - **Next:** W6 re-review/closeout (separate review lane over the fixed diff) → commit if still green.
 
 ## Locked decisions
 
@@ -177,7 +182,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation). ← **in progress on `m6-reconcile`** —
   contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
   1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
-  W6 adversarial review remains (see status above).
+  W6 initial review blockers fixed locally (1639 tests); W6 re-review/closeout remains (see status above).
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. The M7 contract must pin
   the paper-phase success criteria (see "Edge before live" locked decision).
 - **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned

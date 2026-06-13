@@ -43,7 +43,8 @@ from recorder.persistence import EventWriter
 _CLOCK = lambda: "2026-06-10T20:00:00.000000+00:00"  # noqa: E731 — byte-determinism
 
 _ZERO_STATE = {"latched": False, "latest_baseline": None,
-               "outstanding_cash_residue": None, "pass_count": 0}
+               "outstanding_cash_residue": None, "pass_count": 0,
+               "drift_in_window": 0}
 
 
 def _ledger(tmpdir, run_id="run-1"):
@@ -560,6 +561,7 @@ class TestRehydrateFold(unittest.TestCase):
             state = self._fold(path)
             self.assertIs(state["latched"], True)
             self.assertEqual(state["pass_count"], 0)
+            self.assertEqual(state["drift_in_window"], 1)
 
     def test_set_clear_set_sequence(self):
         with TemporaryDirectory() as tmpdir:

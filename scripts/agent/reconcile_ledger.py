@@ -400,8 +400,11 @@ def rehydrate_reconcile_state(rows) -> dict:
                                              # into a DriftFinding at step 6.5 (RC-14) — inside the
                                              # orchestrator the field is ALWAYS
                                              # Optional[DriftFinding], one shape on every path
-        "pass_count": int}                   # ALL prior reconcile_run rows, completed or not
-                                             # (occurrence input, §C/M6C-12)"""
+        "pass_count": int,                   # ALL prior reconcile_run rows, completed or not
+                                             # (occurrence input, §C/M6C-12)
+        "drift_in_window": int}              # reconcile rows after the last summary; lets
+                                             # in-process clear obey the same crash-window
+                                             # rule as this fold"""
     latched = False
     latest_baseline = None
     outstanding_cash_residue = None
@@ -450,4 +453,5 @@ def rehydrate_reconcile_state(rows) -> dict:
         "latest_baseline": latest_baseline,
         "outstanding_cash_residue": outstanding_cash_residue,
         "pass_count": pass_count,
+        "drift_in_window": drift_in_window,
     }

@@ -642,6 +642,7 @@ class Orchestrator:
         reconcile_state = rehydrate_reconcile_state(reconcile_rows)
         self._latest_baseline = reconcile_state["latest_baseline"]
         self._pass_count = reconcile_state["pass_count"]
+        self._reconcile_drift_in_window = reconcile_state["drift_in_window"]
         self._outstanding_cash_residue = _residue_from_row(
             reconcile_state["outstanding_cash_residue"])
         self._reconciled_eod_sessions: set = set()
@@ -798,15 +799,29 @@ class Orchestrator:
                 or "1970-01-01T00:00:00.000000Z")
 
     def _open_positions_by_symbol(self) -> Dict[str, Tuple]:
+        open_seq = self._position_open_seq_by_id()
         grouped: Dict[str, List[object]] = {}
         for position in self._book._positions.values():
             if getattr(position, "status", None) != "open":
                 continue
             grouped.setdefault(position.symbol, []).append(position)
         return {symbol: tuple(sorted(positions,
-                                     key=lambda p: p.position_id,
+                                     key=lambda p: (
+                                         open_seq.get(p.position_id, -1),
+                                         p.position_id),
                                      reverse=True))
                 for symbol, positions in grouped.items()}
+
+    def _position_open_seq_by_id(self) -> Dict[str, int]:
+        seq_by_id: Dict[str, int] = {}
+        for row in journal_replay(self._journal_dir / "positions.jsonl"):
+            if row.get("event_type") != "position_open":
+                continue
+            position_id = row.get("position_id")
+            seq = row.get("seq")
+            if isinstance(position_id, str) and isinstance(seq, int):
+                seq_by_id[position_id] = seq
+        return seq_by_id
 
     def _fill_rows(self) -> List[dict]:
         return journal_replay(self._journal_dir / "fills.jsonl")
@@ -1038,11 +1053,13 @@ class Orchestrator:
                                session_date_et: str, trigger_durable_key,
                                broker_source: str, checked_symbols,
                                findings, adjustments, resolutions, notes,
-                               completed: bool, wrote_baseline=None
+                               completed: bool, wrote_baseline=None,
+                               durable_seed_context=None
                                ) -> ReconcilePassResult:
         findings = tuple(sorted(findings, key=_finding_key))
         adjustments = tuple(adjustments)
         notes = tuple(sorted(set(notes), key=_note_key))
+        window_had_drift = bool(self._reconcile_drift_in_window or findings)
 
         for finding in findings:
             self._reconcile_ledger.record_reconcile(
@@ -1079,6 +1096,15 @@ class Orchestrator:
                 reconcile_id=reconcile_id, note=note, symbol=symbol,
                 detail=detail)
 
+        durable_portfolio = None
+        durable_seeded = []
+        if wrote_baseline is not None:
+            durable_seeded = list(wrote_baseline["durable_seeded"])
+            if durable_seed_context is not None:
+                durable_portfolio, durable_defer = durable_seed_context
+                durable_seeded = self._durable_seed_candidates(
+                    durable_portfolio, durable_defer, phase)
+
         if wrote_baseline is not None:
             self._latest_baseline = self._reconcile_ledger.record_reconcile_baseline(
                 reconcile_id=reconcile_id,
@@ -1088,7 +1114,7 @@ class Orchestrator:
                 buying_power_usd=wrote_baseline["buying_power_usd"],
                 fills_seq_watermark=wrote_baseline["fills_seq_watermark"],
                 positions=wrote_baseline["positions"],
-                durable_seeded=wrote_baseline["durable_seeded"])
+                durable_seeded=durable_seeded)
 
         clean = bool(completed and not findings)
         self._reconcile_ledger.record_reconcile_run(
@@ -1103,8 +1129,14 @@ class Orchestrator:
 
         if findings:
             self._drift_latch = True
-        elif completed and phase != "immediate" and not self._frozen_symbols():
+        elif (completed and phase != "immediate" and not window_had_drift
+              and not self._frozen_symbols()):
             self._drift_latch = False
+        self._reconcile_drift_in_window = 0
+
+        if (completed and wrote_baseline is not None
+                and durable_portfolio is not None):
+            self._commit_durable_seeds(durable_portfolio, durable_seeded)
 
         return ReconcilePassResult(
             reconcile_id=reconcile_id, phase=phase,
@@ -1307,15 +1339,13 @@ class Orchestrator:
             else:
                 cash_usd = BrokerUSD(Decimal(self._latest_baseline["cash_usd"]))
                 watermark = int(self._latest_baseline["fills_seq_watermark"])
-            durable_seeded = self._durable_seed_candidates(
-                portfolio, defer, phase)
             wrote_baseline = {
                 "cash_usd": as_broker_usd(cash_usd),
                 "equity_usd": parsed_account.equity,
                 "buying_power_usd": parsed_account.buying_power,
                 "fills_seq_watermark": watermark,
                 "positions": self._baseline_positions(portfolio),
-                "durable_seeded": durable_seeded,
+                "durable_seeded": [],
             }
 
         result = self._finish_reconcile_pass(
@@ -1325,10 +1355,8 @@ class Orchestrator:
             broker_source=self._account_source, checked_symbols=checked_symbols,
             findings=findings, adjustments=plans, resolutions=resolutions,
             notes=notes,
-            completed=completed, wrote_baseline=wrote_baseline)
-        if completed and wrote_baseline is not None:
-            self._commit_durable_seeds(
-                portfolio, wrote_baseline["durable_seeded"])
+            completed=completed, wrote_baseline=wrote_baseline,
+            durable_seed_context=(portfolio, defer))
         return result
 
     def write_report(self, path, *, generated_ts_utc: str, bins: int = 10) -> dict:
