@@ -7,6 +7,7 @@ the pinned criteria pass.
 """
 import json
 import hashlib
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -97,6 +98,19 @@ class HistoricalArtifactBuildResult:
     payload: dict
     criteria: CriteriaVerdict
     backtest: HistoricalBacktestResult
+
+
+@dataclass(frozen=True)
+class HistoricalDiagnosticExportResult:
+    output_path: Path
+    payload: dict
+    backtest: HistoricalBacktestResult
+
+
+@dataclass(frozen=True)
+class HistoricalDiagnosticIndexResult:
+    output_path: Path
+    payload: dict
 
 
 class _BacktestClock:
@@ -482,6 +496,728 @@ def _quantize_bps(value: Decimal) -> Decimal:
     return value.quantize(_BPS_QUANTUM, rounding=ROUND_HALF_EVEN)
 
 
+def _decimal_string(value: Decimal, quantum: Decimal = _USD_QUANTUM) -> str:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError(f"diagnostic value must be a finite Decimal: {value!r}")
+    return str(value.quantize(quantum, rounding=ROUND_HALF_EVEN))
+
+
+def _optional_decimal_string(value: Decimal | None,
+                             quantum: Decimal = _USD_QUANTUM) -> str | None:
+    if value is None:
+        return None
+    return _decimal_string(value, quantum)
+
+
+def _positive_int(value: int, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a nonnegative int")
+    return value
+
+
+def _spread_bps(bar: MidBar) -> Decimal:
+    if bar.mid <= 0:
+        return Decimal("0.000000")
+    return _quantize_bps(((bar.ask - bar.bid) / bar.mid) * Decimal("10000"))
+
+
+def _feature_decimal(features: Mapping[str, object], name: str) -> Decimal | None:
+    raw = features.get(name)
+    if not isinstance(raw, str):
+        return None
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        return None
+    if not value.is_finite():
+        return None
+    return value
+
+
+def _trade_notional(trade: BacktestTrade) -> Decimal:
+    return trade.entry_mid * trade.qty
+
+
+def _trade_bps(trade: BacktestTrade) -> Decimal:
+    notional = _trade_notional(trade)
+    if notional <= 0:
+        return Decimal("0.000000")
+    return _quantize_bps(
+        (trade.net_execution_realistic_pnl_usd / notional) * Decimal("10000")
+    )
+
+
+def _active_pnl(trade: BacktestTrade) -> Decimal:
+    return _quantize_usd(
+        trade.net_execution_realistic_pnl_usd - trade.benchmark_pnl_usd
+    )
+
+
+def _avg_decimal(total: Decimal, count: int) -> Decimal:
+    if count <= 0:
+        return Decimal("0.000000")
+    return _quantize_usd(total / Decimal(count))
+
+
+def _ratio_string(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "0.000000"
+    value = (Decimal(numerator) / Decimal(denominator)).quantize(
+        _BPS_QUANTUM, rounding=ROUND_HALF_EVEN)
+    return str(value)
+
+
+def _distribution(values, *, quantum: Decimal = _USD_QUANTUM) -> dict:
+    finite = sorted(value for value in values
+                    if isinstance(value, Decimal) and value.is_finite())
+
+    def rank(percentile: int) -> str | None:
+        if not finite:
+            return None
+        index = max(0, ((len(finite) * percentile + 99) // 100) - 1)
+        return _decimal_string(finite[index], quantum)
+
+    return {
+        "count": len(finite),
+        "min": rank(0),
+        "p25": rank(25),
+        "median": rank(50),
+        "p75": rank(75),
+        "p90": rank(90),
+        "p95": rank(95),
+        "p99": rank(99),
+        "max": rank(100),
+    }
+
+
+def _trade_summary(trades) -> dict:
+    trades_t = tuple(trades)
+    count = len(trades_t)
+    gross = sum((trade.gross_modeled_usd for trade in trades_t), Decimal("0"))
+    fees = sum((trade.fees_usd for trade in trades_t), Decimal("0"))
+    net = sum(
+        (trade.net_execution_realistic_pnl_usd for trade in trades_t),
+        Decimal("0"),
+    )
+    benchmark = sum(
+        (trade.benchmark_pnl_usd for trade in trades_t),
+        Decimal("0"),
+    )
+    active = _quantize_usd(net - benchmark)
+    wins = sum(1 for trade in trades_t
+               if trade.net_execution_realistic_pnl_usd > 0)
+    return {
+        "trade_count": count,
+        "gross_modeled_usd": _decimal_string(gross),
+        "fees_usd": _decimal_string(fees),
+        "net_execution_realistic_pnl_usd": _decimal_string(net),
+        "benchmark_pnl_usd": _decimal_string(benchmark),
+        "active_pnl_usd": _decimal_string(active),
+        "friction_proxy_usd": _decimal_string(_quantize_usd(benchmark - net)),
+        "avg_active_pnl_per_trade": _decimal_string(_avg_decimal(active, count)),
+        "avg_net_pnl_per_trade": _decimal_string(_avg_decimal(net, count)),
+        "win_rate": _ratio_string(wins, count),
+        "net_pnl_distribution": _distribution(
+            (trade.net_execution_realistic_pnl_usd for trade in trades_t)),
+    }
+
+
+def _rank_quintile_labels(values) -> list[str | None]:
+    pairs = [
+        (value, index)
+        for index, value in enumerate(values)
+        if isinstance(value, Decimal) and value.is_finite()
+    ]
+    labels: list[str | None] = [None] * len(values)
+    pairs.sort(key=lambda item: (item[0], item[1]))
+    count = len(pairs)
+    if count == 0:
+        return labels
+    for rank, (_, index) in enumerate(pairs):
+        labels[index] = f"q{min(5, (rank * 5) // count + 1)}"
+    return labels
+
+
+def _bucket_summary(trades, labels) -> dict:
+    buckets: dict[str, list[BacktestTrade]] = {}
+    for trade, label in zip(trades, labels):
+        if not label:
+            continue
+        buckets.setdefault(label, []).append(trade)
+    rows = {}
+    for label in sorted(buckets):
+        bucket_trades = tuple(buckets[label])
+        summary = _trade_summary(bucket_trades)
+        summary["symbols"] = sorted({trade.symbol for trade in bucket_trades})
+        summary["symbol_count"] = len(summary["symbols"])
+        rows[label] = summary
+    return rows
+
+
+def _fixed_bps_regime(value: Decimal | None, *,
+                      low_bps: Decimal, high_bps: Decimal) -> str | None:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        return None
+    if value <= low_bps:
+        return f"lte_{_decimal_string(low_bps, _BPS_QUANTUM)}_bps"
+    if value <= high_bps:
+        return f"lte_{_decimal_string(high_bps, _BPS_QUANTUM)}_bps"
+    return f"gt_{_decimal_string(high_bps, _BPS_QUANTUM)}_bps"
+
+
+def _entry_utc_hour_bucket(trade: BacktestTrade) -> str:
+    return f"entry_utc_hour_{trade.entry_bar_end_utc[11:13]}"
+
+
+def _diagnostic_buckets(trades) -> dict:
+    trades_t = tuple(trades)
+    gaps = [_realism_gap_bps(trade) for trade in trades_t]
+    entry_spreads = [trade.entry_spread_bps for trade in trades_t]
+    vol_values = [trade.decision_realized_vol_21 for trade in trades_t]
+    gap_labels = _rank_quintile_labels(gaps)
+    spread_labels = _rank_quintile_labels(entry_spreads)
+    vol_labels = _rank_quintile_labels(vol_values)
+    combined = [
+        f"spread_{spread}_gap_{gap}" if spread and gap else None
+        for spread, gap in zip(spread_labels, gap_labels)
+    ]
+    return {
+        "gap_quintile": _bucket_summary(trades_t, gap_labels),
+        "entry_spread_quintile": _bucket_summary(trades_t, spread_labels),
+        "combined_entry_spread_x_gap_quintile": _bucket_summary(
+            trades_t, combined),
+        "volatility_quintile": _bucket_summary(trades_t, vol_labels),
+    }
+
+
+def _regime_buckets(trades) -> dict:
+    trades_t = tuple(trades)
+    gap_labels = [
+        _fixed_bps_regime(_realism_gap_bps(trade),
+                          low_bps=Decimal("5.000000"),
+                          high_bps=Decimal("15.000000"))
+        for trade in trades_t
+    ]
+    spread_labels = [
+        _fixed_bps_regime(trade.entry_spread_bps,
+                          low_bps=Decimal("2.000000"),
+                          high_bps=Decimal("5.000000"))
+        for trade in trades_t
+    ]
+    time_labels = [_entry_utc_hour_bucket(trade) for trade in trades_t]
+    return {
+        "gap_regime": _bucket_summary(trades_t, gap_labels),
+        "entry_spread_regime": _bucket_summary(trades_t, spread_labels),
+        "entry_utc_hour": _bucket_summary(trades_t, time_labels),
+    }
+
+
+def _diagnostic_trade_row(index: int, trade: BacktestTrade) -> dict:
+    return {
+        "row_index": index,
+        "symbol": trade.symbol,
+        "instrument_id": trade.instrument_id,
+        "decision_bar_end_utc": trade.decision_bar_end_utc,
+        "entry_bar_end_utc": trade.entry_bar_end_utc,
+        "exit_bar_end_utc": trade.exit_bar_end_utc,
+        "qty": _decimal_string(trade.qty),
+        "decision_mid": _optional_decimal_string(trade.decision_mid),
+        "entry_mid": _decimal_string(trade.entry_mid),
+        "exit_mid": _decimal_string(trade.exit_mid),
+        "notional_usd": _decimal_string(_trade_notional(trade)),
+        "gross_modeled_usd": _decimal_string(trade.gross_modeled_usd),
+        "fees_usd": _decimal_string(trade.fees_usd),
+        "net_execution_realistic_pnl_usd": _decimal_string(
+            trade.net_execution_realistic_pnl_usd),
+        "benchmark_pnl_usd": _decimal_string(trade.benchmark_pnl_usd),
+        "active_pnl_usd": _decimal_string(_active_pnl(trade)),
+        "trade_bps": _decimal_string(_trade_bps(trade), _BPS_QUANTUM),
+        "realism_gap_bps": _decimal_string(
+            _realism_gap_bps(trade), _BPS_QUANTUM),
+        "decision_spread_bps": _optional_decimal_string(
+            trade.decision_spread_bps, _BPS_QUANTUM),
+        "entry_spread_bps": _optional_decimal_string(
+            trade.entry_spread_bps, _BPS_QUANTUM),
+        "exit_spread_bps": _optional_decimal_string(
+            trade.exit_spread_bps, _BPS_QUANTUM),
+        "adverse_entry_move_bps": _optional_decimal_string(
+            trade.adverse_entry_move_bps, _BPS_QUANTUM),
+        "decision_realized_vol_21": _optional_decimal_string(
+            trade.decision_realized_vol_21, _BPS_QUANTUM),
+        "decision_z_ret_21": _optional_decimal_string(
+            trade.decision_z_ret_21, _BPS_QUANTUM),
+    }
+
+
+def _diagnostic_skip_row(index: int, skip: BacktestSkip) -> dict:
+    detail = {
+        key: value for key, value in skip.detail.items()
+        if key in {"symbol", "strategy_id", "reasons",
+                   "pricing_reasons", "pricing_error"}
+    }
+    return {
+        "row_index": index,
+        "symbol": detail.get("symbol"),
+        "bucket_end_utc": skip.bucket_end_utc,
+        "reason": skip.reason,
+        "detail": detail,
+    }
+
+
+def _build_diagnostic_payload(*, backtest: HistoricalBacktestResult,
+                              manifest: HistoricalInputManifest,
+                              strategy_id: str, rules_hash: str,
+                              data_pin: str, created_utc: str,
+                              builder_git_commit: str,
+                              max_trade_rows: int,
+                              max_skip_rows: int) -> dict:
+    trades = backtest.trades
+    skips = backtest.skips
+    skip_counts = Counter(skip.reason for skip in skips)
+    notional = sum((_trade_notional(trade) for trade in trades), Decimal("0"))
+    trade_summary = _trade_summary(trades)
+    avg_trade_bps = (
+        _quantize_bps((
+            sum((trade.net_execution_realistic_pnl_usd for trade in trades),
+                Decimal("0")) / notional
+        ) * Decimal("10000"))
+        if notional > 0 else Decimal("0.000000")
+    )
+    return {
+        "v": 1,
+        "kind": "m7_historical_diagnostic_export",
+        "created_utc": created_utc,
+        "builder_git_commit": builder_git_commit,
+        "strategy_id": strategy_id,
+        "rules_hash": rules_hash,
+        "data_pin": data_pin,
+        "manifest": {
+            "manifest_hash": manifest.manifest_hash,
+            "dataset": manifest.dataset,
+            "schema": manifest.schema,
+            "interval": manifest.interval,
+            "symbol": manifest.symbol,
+            "instrument_id": manifest.instrument_id,
+            "calendar_pin": manifest.calendar_pin,
+            "universe_hypothesis_id": manifest.universe_hypothesis_id,
+            "universe_selection_rule": manifest.universe_selection_rule,
+            "universe_symbols": list(manifest.universe_symbols),
+            "latency_budget_ms": manifest.latency_budget_ms,
+            "slippage_cap_bps": _decimal_string(
+                manifest.slippage_cap_bps, _BPS_QUANTUM),
+        },
+        "summary": {
+            "bar_count": backtest.bar_count,
+            "candidate_count": backtest.candidate_count,
+            "trade_count": len(trades),
+            "skip_count": len(skips),
+            "gross_modeled_usd": trade_summary["gross_modeled_usd"],
+            "fees_usd": trade_summary["fees_usd"],
+            "net_execution_realistic_pnl_usd": (
+                trade_summary["net_execution_realistic_pnl_usd"]),
+            "benchmark_pnl_usd": trade_summary["benchmark_pnl_usd"],
+            "active_pnl_usd": trade_summary["active_pnl_usd"],
+            "friction_proxy_usd": trade_summary["friction_proxy_usd"],
+            "avg_active_pnl_per_trade": (
+                trade_summary["avg_active_pnl_per_trade"]),
+            "avg_net_pnl_per_trade": trade_summary["avg_net_pnl_per_trade"],
+            "win_rate": trade_summary["win_rate"],
+            "avg_trade_bps": _decimal_string(avg_trade_bps, _BPS_QUANTUM),
+            "p95_realism_gap_bps": _decimal_string(
+                backtest.p95_realism_gap_bps, _BPS_QUANTUM),
+            "max_single_fill_divergence_bps": _decimal_string(
+                backtest.max_single_fill_divergence_bps, _BPS_QUANTUM),
+            "ca_blackout_skip_count": backtest.ca_blackout_skip_count,
+            "data_quality_skip_count": backtest.data_quality_skip_count,
+        },
+        "skip_reason_counts": {
+            reason: skip_counts[reason] for reason in sorted(skip_counts)
+        },
+        "skip_reason_percentages": {
+            reason: _ratio_string(skip_counts[reason], len(skips))
+            for reason in sorted(skip_counts)
+        },
+        "distributions": {
+            "net_pnl_usd": trade_summary["net_pnl_distribution"],
+            "active_pnl_usd": _distribution(
+                (_active_pnl(trade) for trade in trades)),
+            "realism_gap_bps": _distribution(
+                (_realism_gap_bps(trade) for trade in trades),
+                quantum=_BPS_QUANTUM),
+            "decision_spread_bps": _distribution(
+                (trade.decision_spread_bps for trade in trades),
+                quantum=_BPS_QUANTUM),
+            "entry_spread_bps": _distribution(
+                (trade.entry_spread_bps for trade in trades),
+                quantum=_BPS_QUANTUM),
+            "exit_spread_bps": _distribution(
+                (trade.exit_spread_bps for trade in trades),
+                quantum=_BPS_QUANTUM),
+            "adverse_entry_move_bps": _distribution(
+                (trade.adverse_entry_move_bps for trade in trades),
+                quantum=_BPS_QUANTUM),
+            "decision_realized_vol_21": _distribution(
+                (trade.decision_realized_vol_21 for trade in trades),
+                quantum=_BPS_QUANTUM),
+        },
+        "friction_buckets": _diagnostic_buckets(trades),
+        "time_buckets": {
+            "entry_utc_hour": _regime_buckets(trades)["entry_utc_hour"],
+        },
+        "regime_buckets": {
+            key: value
+            for key, value in _regime_buckets(trades).items()
+            if key != "entry_utc_hour"
+        },
+        "data_quality": {
+            "ca_blackout_skip_count": backtest.ca_blackout_skip_count,
+            "data_quality_skip_count": backtest.data_quality_skip_count,
+            "candidate_to_trade_rate": _ratio_string(
+                len(trades), backtest.candidate_count),
+            "unresolved_flags_present": (
+                backtest.data_quality_skip_count > 0
+                or backtest.ca_blackout_skip_count > 0
+            ),
+        },
+        "trade_rows": [
+            _diagnostic_trade_row(index, trade)
+            for index, trade in enumerate(trades[:max_trade_rows])
+        ],
+        "skip_rows": [
+            _diagnostic_skip_row(index, skip)
+            for index, skip in enumerate(skips[:max_skip_rows])
+        ],
+        "trade_rows_truncated": len(trades) > max_trade_rows,
+        "skip_rows_truncated": len(skips) > max_skip_rows,
+        "bounded_export": {
+            "max_trade_rows": max_trade_rows,
+            "max_skip_rows": max_skip_rows,
+            "trade_rows_written": min(len(trades), max_trade_rows),
+            "skip_rows_written": min(len(skips), max_skip_rows),
+            "trade_rows_truncated": len(trades) > max_trade_rows,
+            "skip_rows_truncated": len(skips) > max_skip_rows,
+        },
+    }
+
+
+def _parse_diagnostic_decimal(value, *, name: str) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError(f"{name} must be a Decimal string or null")
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation:
+        raise ValueError(f"{name} must parse as Decimal: {value!r}")
+    if not parsed.is_finite():
+        raise ValueError(f"{name} must be finite")
+    return parsed
+
+
+def _require_diagnostic_decimal(value, *, name: str) -> Decimal:
+    parsed = _parse_diagnostic_decimal(value, name=name)
+    if parsed is None:
+        raise ValueError(f"{name} must not be null")
+    return parsed
+
+
+def _load_diagnostic_payload(path) -> dict:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if payload.get("kind") != "m7_historical_diagnostic_export":
+        raise ValueError(f"not an M7 historical diagnostic export: {path}")
+    return payload
+
+
+def _diagnostic_row_to_trade(row: Mapping[str, object]) -> BacktestTrade:
+    return BacktestTrade(
+        symbol=str(row["symbol"]),
+        instrument_id=int(row["instrument_id"]),
+        qty=_require_diagnostic_decimal(row["qty"], name="qty"),
+        entry_bar_end_utc=str(row["entry_bar_end_utc"]),
+        exit_bar_end_utc=str(row["exit_bar_end_utc"]),
+        entry_mid=_require_diagnostic_decimal(row["entry_mid"], name="entry_mid"),
+        exit_mid=_require_diagnostic_decimal(row["exit_mid"], name="exit_mid"),
+        gross_modeled_usd=_require_diagnostic_decimal(
+            row["gross_modeled_usd"], name="gross_modeled_usd"),
+        fees_usd=_require_diagnostic_decimal(row["fees_usd"], name="fees_usd"),
+        net_execution_realistic_pnl_usd=_require_diagnostic_decimal(
+            row["net_execution_realistic_pnl_usd"],
+            name="net_execution_realistic_pnl_usd"),
+        benchmark_pnl_usd=_require_diagnostic_decimal(
+            row["benchmark_pnl_usd"], name="benchmark_pnl_usd"),
+        decision_bar_end_utc=(
+            str(row["decision_bar_end_utc"])
+            if row.get("decision_bar_end_utc") is not None else None),
+        decision_mid=_parse_diagnostic_decimal(
+            row.get("decision_mid"), name="decision_mid"),
+        decision_spread_bps=_parse_diagnostic_decimal(
+            row.get("decision_spread_bps"), name="decision_spread_bps"),
+        entry_spread_bps=_parse_diagnostic_decimal(
+            row.get("entry_spread_bps"), name="entry_spread_bps"),
+        exit_spread_bps=_parse_diagnostic_decimal(
+            row.get("exit_spread_bps"), name="exit_spread_bps"),
+        adverse_entry_move_bps=_parse_diagnostic_decimal(
+            row.get("adverse_entry_move_bps"), name="adverse_entry_move_bps"),
+        decision_realized_vol_21=_parse_diagnostic_decimal(
+            row.get("decision_realized_vol_21"), name="decision_realized_vol_21"),
+        decision_z_ret_21=_parse_diagnostic_decimal(
+            row.get("decision_z_ret_21"), name="decision_z_ret_21"),
+    )
+
+
+def _summary_decimal(summary: Mapping[str, object], key: str) -> Decimal:
+    return _require_diagnostic_decimal(summary[key], name=key)
+
+
+def _aggregate_diagnostic_summaries(payloads) -> dict:
+    count = sum(int(payload["summary"]["trade_count"]) for payload in payloads)
+    gross = sum((_summary_decimal(payload["summary"], "gross_modeled_usd")
+                 for payload in payloads), Decimal("0"))
+    fees = sum((_summary_decimal(payload["summary"], "fees_usd")
+                for payload in payloads), Decimal("0"))
+    net = sum((_summary_decimal(
+        payload["summary"], "net_execution_realistic_pnl_usd")
+               for payload in payloads), Decimal("0"))
+    benchmark = sum((_summary_decimal(payload["summary"], "benchmark_pnl_usd")
+                     for payload in payloads), Decimal("0"))
+    active = _quantize_usd(net - benchmark)
+    return {
+        "symbol_count": len(payloads),
+        "bar_count": sum(int(payload["summary"]["bar_count"])
+                         for payload in payloads),
+        "candidate_count": sum(int(payload["summary"]["candidate_count"])
+                               for payload in payloads),
+        "trade_count": count,
+        "skip_count": sum(int(payload["summary"]["skip_count"])
+                          for payload in payloads),
+        "gross_modeled_usd": _decimal_string(gross),
+        "fees_usd": _decimal_string(fees),
+        "net_execution_realistic_pnl_usd": _decimal_string(net),
+        "benchmark_pnl_usd": _decimal_string(benchmark),
+        "active_pnl_usd": _decimal_string(active),
+        "friction_proxy_usd": _decimal_string(_quantize_usd(benchmark - net)),
+        "avg_active_pnl_per_trade": _decimal_string(_avg_decimal(active, count)),
+        "avg_net_pnl_per_trade": _decimal_string(_avg_decimal(net, count)),
+    }
+
+
+def _share(value: Decimal, total: Decimal) -> str:
+    if total == 0:
+        return "0.000000"
+    return str((value / total).quantize(_BPS_QUANTUM, rounding=ROUND_HALF_EVEN))
+
+
+def _symbol_concentration(payloads, trades) -> dict:
+    symbols = []
+    total_trades = sum(int(payload["summary"]["trade_count"])
+                       for payload in payloads)
+    total_notional = sum((_trade_notional(trade) for trade in trades),
+                         Decimal("0"))
+    total_abs_active = sum((
+        abs(_summary_decimal(payload["summary"], "active_pnl_usd"))
+        for payload in payloads
+    ), Decimal("0"))
+    total_abs_net = sum((
+        abs(_summary_decimal(payload["summary"],
+                             "net_execution_realistic_pnl_usd"))
+        for payload in payloads
+    ), Decimal("0"))
+    trade_shares = []
+    notional_by_symbol = {}
+    for trade in trades:
+        notional_by_symbol[trade.symbol] = (
+            notional_by_symbol.get(trade.symbol, Decimal("0"))
+            + _trade_notional(trade)
+        )
+    for payload in payloads:
+        symbol = payload["manifest"]["symbol"]
+        summary = payload["summary"]
+        trade_count = int(summary["trade_count"])
+        active = _summary_decimal(summary, "active_pnl_usd")
+        net = _summary_decimal(summary, "net_execution_realistic_pnl_usd")
+        trade_share = (
+            Decimal(trade_count) / Decimal(total_trades)
+            if total_trades else Decimal("0")
+        )
+        trade_shares.append(trade_share)
+        symbols.append({
+            "symbol": symbol,
+            "trade_count": trade_count,
+            "trade_share": _share(Decimal(trade_count), Decimal(total_trades)),
+            "gross_exposure_share": _share(
+                notional_by_symbol.get(symbol, Decimal("0")), total_notional),
+            "active_pnl_abs_share": _share(abs(active), total_abs_active),
+            "net_pnl_abs_share": _share(abs(net), total_abs_net),
+            "active_pnl_usd": _decimal_string(active),
+            "net_execution_realistic_pnl_usd": _decimal_string(net),
+        })
+    sorted_trade_shares = sorted(trade_shares, reverse=True)
+    herfindahl = sum((share * share for share in trade_shares), Decimal("0"))
+    top_1 = sorted_trade_shares[0] if sorted_trade_shares else Decimal("0")
+    top_2 = sum(sorted_trade_shares[:2], Decimal("0"))
+    return {
+        "symbols": sorted(symbols, key=lambda row: row["symbol"]),
+        "top_1_symbol_trade_share": _decimal_string(top_1, _BPS_QUANTUM),
+        "top_2_symbol_trade_share": _decimal_string(top_2, _BPS_QUANTUM),
+        "trade_share_herfindahl": _decimal_string(herfindahl, _BPS_QUANTUM),
+        "symbols_with_at_least_2_trades": sum(
+            1 for payload in payloads
+            if int(payload["summary"]["trade_count"]) >= 2),
+        "symbols_with_positive_active_pnl": sum(
+            1 for payload in payloads
+            if _summary_decimal(payload["summary"], "active_pnl_usd") > 0),
+        "symbols_with_positive_net_pnl": sum(
+            1 for payload in payloads
+            if _summary_decimal(
+                payload["summary"], "net_execution_realistic_pnl_usd") > 0),
+    }
+
+
+def _diagnostic_reconciliation(payloads, source_summary_path) -> dict:
+    if source_summary_path is None:
+        return {"status": "not_checked", "reason": "no_source_summary_path"}
+    source_path = Path(source_summary_path)
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    strategy_id = payloads[0]["strategy_id"] if payloads else None
+    if source.get("strategy_id") != strategy_id:
+        return {
+            "status": "not_checked_strategy_mismatch",
+            "source_summary_path": str(source_path),
+            "source_strategy_id": source.get("strategy_id"),
+            "diagnostic_strategy_id": strategy_id,
+        }
+    source_symbols = source.get("symbols")
+    if not isinstance(source_symbols, dict):
+        return {
+            "status": "failed",
+            "source_summary_path": str(source_path),
+            "reason": "source summary has no symbol map",
+        }
+    mismatches = []
+    for payload in payloads:
+        symbol = payload["manifest"]["symbol"]
+        source_symbol = source_symbols.get(symbol)
+        if not isinstance(source_symbol, dict):
+            mismatches.append({"symbol": symbol, "reason": "missing_source_symbol"})
+            continue
+        source_metrics = source_symbol.get("metrics", {})
+        checks = {
+            "trade_count": (
+                int(source_symbol.get("trade_count", -1))
+                == int(payload["summary"]["trade_count"])),
+            "net_execution_realistic_pnl_usd": (
+                source_metrics.get("net_execution_realistic_pnl_usd")
+                == payload["summary"]["net_execution_realistic_pnl_usd"]),
+            "active_pnl_usd": (
+                source_metrics.get("active_pnl_usd")
+                == payload["summary"]["active_pnl_usd"]),
+        }
+        failed = [key for key, ok in checks.items() if not ok]
+        if failed:
+            mismatches.append({"symbol": symbol, "failed": failed})
+    return {
+        "status": "ok" if not mismatches else "failed",
+        "source_summary_path": str(source_path),
+        "mismatches": mismatches,
+    }
+
+
+def _diagnostic_index_payload(*, payloads, diagnostic_paths, created_utc: str,
+                              source_run_id: str | None,
+                              source_summary_path: str | None,
+                              sample_window_id: str | None,
+                              holdout_window_id: str | None) -> dict:
+    if not payloads:
+        raise ValueError("at least one diagnostic payload is required")
+    strategy_ids = sorted({payload["strategy_id"] for payload in payloads})
+    rules_hashes = sorted({payload["rules_hash"] for payload in payloads})
+    if len(strategy_ids) != 1:
+        raise ValueError(f"diagnostic payloads disagree on strategy_id: {strategy_ids}")
+    if len(rules_hashes) != 1:
+        raise ValueError(f"diagnostic payloads disagree on rules_hash: {rules_hashes}")
+    trades = tuple(
+        _diagnostic_row_to_trade(row)
+        for payload in payloads
+        for row in payload.get("trade_rows", ())
+    )
+    skip_counts = Counter()
+    for payload in payloads:
+        skip_counts.update(payload.get("skip_reason_counts", {}))
+    truncation = {
+        "any_trade_rows_truncated": any(
+            payload.get("trade_rows_truncated") for payload in payloads),
+        "any_skip_rows_truncated": any(
+            payload.get("skip_rows_truncated") for payload in payloads),
+        "trade_rows_available": len(trades),
+        "skip_rows_available": sum(
+            len(payload.get("skip_rows", ())) for payload in payloads),
+    }
+    regimes = _regime_buckets(trades)
+    return {
+        "v": 1,
+        "kind": "m7_historical_diagnostic_index",
+        "created_utc": created_utc,
+        "strategy_id": strategy_ids[0],
+        "rules_hash": rules_hashes[0],
+        "source_run_id": source_run_id,
+        "source_summary_path": source_summary_path,
+        "sample_window_id": sample_window_id,
+        "holdout_window_id": holdout_window_id,
+        "source_universe": list(payloads[0]["manifest"]["universe_symbols"]),
+        "diagnostic_paths": [str(path) for path in diagnostic_paths],
+        "data_pins": {
+            payload["manifest"]["symbol"]: payload["data_pin"]
+            for payload in payloads
+        },
+        "manifest_hashes": {
+            payload["manifest"]["symbol"]: payload["manifest"]["manifest_hash"]
+            for payload in payloads
+        },
+        "bounded_export": truncation,
+        "reconciliation": _diagnostic_reconciliation(
+            payloads, source_summary_path),
+        "aggregate": _aggregate_diagnostic_summaries(payloads),
+        "row_based_distribution_coverage": (
+            "complete" if not truncation["any_trade_rows_truncated"]
+            else "bounded_sample"),
+        "distributions": {
+            "net_pnl_usd": _distribution(
+                (trade.net_execution_realistic_pnl_usd for trade in trades)),
+            "active_pnl_usd": _distribution(
+                (_active_pnl(trade) for trade in trades)),
+            "realism_gap_bps": _distribution(
+                (_realism_gap_bps(trade) for trade in trades),
+                quantum=_BPS_QUANTUM),
+            "entry_spread_bps": _distribution(
+                (trade.entry_spread_bps for trade in trades),
+                quantum=_BPS_QUANTUM),
+            "decision_realized_vol_21": _distribution(
+                (trade.decision_realized_vol_21 for trade in trades),
+                quantum=_BPS_QUANTUM),
+        },
+        "friction_buckets": _diagnostic_buckets(trades),
+        "time_buckets": {"entry_utc_hour": regimes["entry_utc_hour"]},
+        "regime_buckets": {
+            key: value for key, value in regimes.items()
+            if key != "entry_utc_hour"
+        },
+        "skip_reason_counts": {
+            reason: skip_counts[reason] for reason in sorted(skip_counts)
+        },
+        "concentration": _symbol_concentration(payloads, trades),
+        "symbols": [
+            {
+                "symbol": payload["manifest"]["symbol"],
+                "diagnostics_path": str(path),
+                **payload["summary"],
+                "trade_rows_truncated": payload.get("trade_rows_truncated"),
+                "skip_rows_truncated": payload.get("skip_rows_truncated"),
+            }
+            for payload, path in zip(payloads, diagnostic_paths)
+        ],
+    }
+
+
 def _simulate_historical_long_trade(*, reader: MidBarSeriesReader, symbol: str,
                                     instrument_id: int,
                                     decision_bar_end_utc: str,
@@ -551,14 +1287,20 @@ def _simulate_historical_long_trade(*, reader: MidBarSeriesReader, symbol: str,
         symbol=symbol,
         instrument_id=instrument_id,
         qty=qty,
+        decision_bar_end_utc=decision.bucket_end_utc,
         entry_bar_end_utc=entry.bucket_end_utc,
         exit_bar_end_utc=exit_bar.bucket_end_utc,
+        decision_mid=decision.mid,
         entry_mid=entry.mid,
         exit_mid=exit_bar.mid,
         gross_modeled_usd=gross,
         fees_usd=fees_q,
         net_execution_realistic_pnl_usd=net,
         benchmark_pnl_usd=benchmark,
+        decision_spread_bps=_spread_bps(decision),
+        entry_spread_bps=_spread_bps(entry),
+        exit_spread_bps=_spread_bps(exit_bar),
+        adverse_entry_move_bps=cap.adverse_move_bps,
     )
 
 
@@ -707,7 +1449,13 @@ def run_historical_backtest(*, quote_rows: Iterable[dict], symbol: str,
         if isinstance(result, BacktestSkip):
             skips.append(result)
         else:
-            trades.append(result)
+            trades.append(replace(
+                result,
+                decision_realized_vol_21=_feature_decimal(
+                    feature.features, "realized_vol_21"),
+                decision_z_ret_21=_feature_decimal(
+                    feature.features, "z_ret_21"),
+            ))
 
     trades_t = tuple(trades)
     skips_t = tuple(skips)
@@ -722,6 +1470,114 @@ def run_historical_backtest(*, quote_rows: Iterable[dict], symbol: str,
         ca_blackout_skip_count=ca_blackout_skip_count,
         data_quality_skip_count=len(skips_t),
     )
+
+
+def write_m7_historical_diagnostic_export(
+        *, output_path, quote_rows: Iterable[dict], symbol: str,
+        instrument_id: int, rules_hash: str, data_pin: str,
+        dataset: str = "EQUS.MINI", schema: str = "tbbo",
+        created_utc: str, input_manifest: Mapping[str, object],
+        builder_git_commit: str, strategy_id: str = STRATEGY_ID,
+        agent_rules_path=None, max_trade_rows: int = 2000,
+        max_skip_rows: int = 2000,
+        production_artifacts_dir=None) -> HistoricalDiagnosticExportResult:
+    """Write a bounded M7 diagnostic export without raw quote rows or artifacts."""
+    max_trade_rows = _positive_int(max_trade_rows, name="max_trade_rows")
+    max_skip_rows = _positive_int(max_skip_rows, name="max_skip_rows")
+    quote_rows_t = tuple(quote_rows)
+    manifest = validate_historical_input_manifest(
+        input_manifest,
+        quote_rows=quote_rows_t,
+        symbol=symbol,
+        instrument_id=instrument_id,
+        dataset=dataset,
+        schema=schema,
+        data_pin=data_pin,
+    )
+    strategy_for_id(strategy_id)
+    output = Path(output_path)
+    production_dir = (
+        Path(production_artifacts_dir).resolve()
+        if production_artifacts_dir is not None
+        else PRODUCTION_ARTIFACTS_DIR
+    )
+    try:
+        output.resolve().relative_to(production_dir)
+    except ValueError:
+        pass
+    else:
+        raise HistoricalArtifactWriteRefused(
+            "historical diagnostic exports must not write under artifacts/backtests")
+
+    backtest = run_historical_backtest(
+        quote_rows=quote_rows_t,
+        symbol=symbol,
+        instrument_id=instrument_id,
+        rules_hash=rules_hash,
+        data_pin=data_pin,
+        dataset=dataset,
+        schema=schema,
+        agent_rules_path=agent_rules_path,
+        input_manifest=input_manifest,
+        strategy_id=strategy_id,
+    )
+    payload = _build_diagnostic_payload(
+        backtest=backtest,
+        manifest=manifest,
+        strategy_id=strategy_id,
+        rules_hash=rules_hash,
+        data_pin=data_pin,
+        created_utc=created_utc,
+        builder_git_commit=builder_git_commit,
+        max_trade_rows=max_trade_rows,
+        max_skip_rows=max_skip_rows,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(dumps(payload), encoding="utf-8")
+    return HistoricalDiagnosticExportResult(
+        output_path=output,
+        payload=payload,
+        backtest=backtest,
+    )
+
+
+def write_m7_historical_diagnostic_index(
+        *, output_path, diagnostic_paths: Iterable[object], created_utc: str,
+        source_run_id: str | None = None,
+        source_summary_path: str | None = None,
+        sample_window_id: str | None = None,
+        holdout_window_id: str | None = None,
+        production_artifacts_dir=None) -> HistoricalDiagnosticIndexResult:
+    """Write a bounded cross-symbol diagnostic index outside artifact storage."""
+    output = Path(output_path)
+    production_dir = (
+        Path(production_artifacts_dir).resolve()
+        if production_artifacts_dir is not None
+        else PRODUCTION_ARTIFACTS_DIR
+    )
+    try:
+        output.resolve().relative_to(production_dir)
+    except ValueError:
+        pass
+    else:
+        raise HistoricalArtifactWriteRefused(
+            "historical diagnostic indexes must not write under artifacts/backtests")
+    paths = tuple(Path(path) for path in diagnostic_paths)
+    if not paths:
+        raise ValueError("diagnostic_paths must contain at least one path")
+    payloads = tuple(_load_diagnostic_payload(path) for path in paths)
+    payload = _diagnostic_index_payload(
+        payloads=payloads,
+        diagnostic_paths=paths,
+        created_utc=created_utc,
+        source_run_id=source_run_id,
+        source_summary_path=source_summary_path,
+        sample_window_id=sample_window_id,
+        holdout_window_id=holdout_window_id,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(dumps(payload), encoding="utf-8")
+    return HistoricalDiagnosticIndexResult(output_path=output, payload=payload)
 
 
 def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],

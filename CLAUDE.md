@@ -19,11 +19,13 @@ failed M7 criteria; an earlier non-overlapping holdout over the same broader uni
 rerun hardened the historical input contract against impossible receive-before-event quote rows, and follow-up
 hardening now requires future reviewed manifests to hash-bind the predeclared universe hypothesis. M1 tier-2 (2b
 live-verified) stays deferred (no paid live realtime subscription).
-M7b added `directional.momentum_v2` plus explicit historical `strategy_id` selection (1688 tests green); valid holdout replay still
-failed every symbol, and a diagnostic broader replay also failed.
-**Next loop is strategy/universe hardening until a reviewed artifact verifies `ok`; only then can full autonomous
-paper edge-validation start.** M8/live remains blocked until passing artifact + realized paper edge satisfy the
-M7-pinned criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
+M7b added `directional.momentum_v2` plus explicit historical `strategy_id` selection; valid holdout replay still
+failed every symbol, and a diagnostic broader replay also failed. The bounded diagnostic closeout rejects an M7c
+gap/adverse-selection gate and closes the current L1/BBO 1-minute long-only momentum family for M7 (1693 tests green).
+**Next loop is a new predeclared strategy/universe family until a reviewed artifact verifies `ok`; only then can
+full autonomous paper edge-validation start.** M8/live remains blocked until passing artifact + realized paper edge
+satisfy the M7-pinned criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still
+open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 

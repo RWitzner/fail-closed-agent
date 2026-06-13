@@ -1,5 +1,7 @@
 """M5 §O.1 / M6 §E / M7 — the CLI:
-``observe | synthetic | paper | reconcile | m7-backtest | m7-historical-artifact``.
+``observe | synthetic | paper | reconcile | m7-backtest |
+m7-historical-artifact | m7-historical-diagnostics |
+m7-historical-diagnostics-index``.
 
 Import discipline (§3): this module imports ``agent.orchestrator``,
 ``agent.config`` and ``agent.secrets_runtime`` ONLY (plus stdlib). Everything
@@ -35,6 +37,10 @@ exits non-zero on a mismatch; no flag can flip a gate (§M.2 step 9).
 - ``m7-historical-artifact`` — reviewed historical artifact builder over
   normalized quote JSONL plus a hash-bound input manifest. Production writes
   require ``--allow-reviewed-artifact``.
+- ``m7-historical-diagnostics`` — bounded, non-artifact trade/skip diagnostic
+  export over the same historical input path. It never writes raw quote rows.
+- ``m7-historical-diagnostics-index`` — bounded, non-artifact cross-symbol
+  diagnostic index over per-symbol diagnostic exports.
 """
 import argparse
 import json
@@ -386,6 +392,72 @@ def _cmd_m7_historical_artifact(args) -> int:
     return 0
 
 
+def _cmd_m7_historical_diagnostics(args) -> int:
+    from agent.backtest_historical import HistoricalArtifactWriteRefused
+    from agent.backtest_historical import load_input_manifest_json
+    from agent.backtest_historical import load_quote_rows_jsonl
+    from agent.backtest_historical import write_m7_historical_diagnostic_export
+
+    try:
+        result = write_m7_historical_diagnostic_export(
+            output_path=args.output_path,
+            quote_rows=load_quote_rows_jsonl(args.quotes_jsonl),
+            symbol=args.symbol,
+            instrument_id=args.instrument_id,
+            rules_hash=args.rules_hash,
+            data_pin=args.data_pin,
+            dataset=args.dataset,
+            schema=args.schema,
+            created_utc=args.created_utc,
+            input_manifest=load_input_manifest_json(args.input_manifest_json),
+            builder_git_commit=args.builder_git_commit,
+            strategy_id=args.strategy_id,
+            max_trade_rows=args.max_trade_rows,
+            max_skip_rows=args.max_skip_rows,
+        )
+    except HistoricalArtifactWriteRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"m7-historical-diagnostics usage error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"diagnostics_path={result.output_path} "
+        f"trade_count={len(result.backtest.trades)} "
+        f"skip_count={len(result.backtest.skips)}"
+    )
+    return 0
+
+
+def _cmd_m7_historical_diagnostics_index(args) -> int:
+    from agent.backtest_historical import HistoricalArtifactWriteRefused
+    from agent.backtest_historical import write_m7_historical_diagnostic_index
+
+    try:
+        result = write_m7_historical_diagnostic_index(
+            output_path=args.output_path,
+            diagnostic_paths=args.diagnostics_path,
+            created_utc=args.created_utc,
+            source_run_id=args.source_run_id,
+            source_summary_path=args.source_summary_path,
+            sample_window_id=args.sample_window_id,
+            holdout_window_id=args.holdout_window_id,
+        )
+    except HistoricalArtifactWriteRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"m7-historical-diagnostics-index usage error: {exc}",
+              file=sys.stderr)
+        return 2
+    print(
+        f"diagnostics_index_path={result.output_path} "
+        f"symbol_count={len(result.payload['symbols'])} "
+        f"trade_count={result.payload['aggregate']['trade_count']}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -469,6 +541,44 @@ def build_parser() -> argparse.ArgumentParser:
     hist.add_argument("--allow-reviewed-artifact",
                       dest="allow_reviewed_artifact", action="store_true")
     hist.set_defaults(func=_cmd_m7_historical_artifact)
+
+    diag = sub.add_parser(
+        "m7-historical-diagnostics",
+        help="write bounded M7 historical trade/skip diagnostics")
+    diag.add_argument("--quotes-jsonl", dest="quotes_jsonl", required=True)
+    diag.add_argument("--input-manifest-json", dest="input_manifest_json",
+                      required=True)
+    diag.add_argument("--output-path", dest="output_path", required=True)
+    diag.add_argument("--symbol", required=True)
+    diag.add_argument("--instrument-id", dest="instrument_id", type=int,
+                      required=True)
+    diag.add_argument("--dataset", default="EQUS.MINI")
+    diag.add_argument("--schema", default="tbbo")
+    diag.add_argument("--rules-hash", dest="rules_hash", required=True)
+    diag.add_argument("--data-pin", dest="data_pin", required=True)
+    diag.add_argument("--created-utc", dest="created_utc", required=True)
+    diag.add_argument("--builder-git-commit", dest="builder_git_commit",
+                      default="unknown")
+    diag.add_argument("--strategy-id", dest="strategy_id",
+                      default="directional.momentum_v1")
+    diag.add_argument("--max-trade-rows", dest="max_trade_rows", type=int,
+                      default=2000)
+    diag.add_argument("--max-skip-rows", dest="max_skip_rows", type=int,
+                      default=2000)
+    diag.set_defaults(func=_cmd_m7_historical_diagnostics)
+
+    diag_index = sub.add_parser(
+        "m7-historical-diagnostics-index",
+        help="write a bounded cross-symbol M7 diagnostic index")
+    diag_index.add_argument("--output-path", dest="output_path", required=True)
+    diag_index.add_argument("--diagnostics-path", dest="diagnostics_path",
+                            action="append", required=True)
+    diag_index.add_argument("--created-utc", dest="created_utc", required=True)
+    diag_index.add_argument("--source-run-id", dest="source_run_id")
+    diag_index.add_argument("--source-summary-path", dest="source_summary_path")
+    diag_index.add_argument("--sample-window-id", dest="sample_window_id")
+    diag_index.add_argument("--holdout-window-id", dest="holdout_window_id")
+    diag_index.set_defaults(func=_cmd_m7_historical_diagnostics_index)
     return parser
 
 

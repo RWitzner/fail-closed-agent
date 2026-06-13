@@ -202,6 +202,15 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   broader replay also failed every symbol. No production artifact was written, `artifacts/backtests/` remains
   `.gitkeep` only, and paper/M8 remain blocked. Failure review:
   `docs/superpowers/reviews/2026-06-13-M7b-momentum-v2-failure-review.md`.
+- **M7b diagnostic family closeout (2026-06-13, 1693 tests green):** added bounded historical trade/skip diagnostic exports plus a
+  cross-symbol index for failed reviewed-artifact attempts. The holdout v2 diagnostic index
+  (`reports/m7_historical_runs/2026-06-13-holdout-bbo1m-v2-diagnostics/index.json`) showed aggregate
+  net execution-realistic PnL -409.060000, active PnL -142.165000, 0/10 symbols net-positive, and no row
+  truncation. The only simple net-positive gap bucket was tiny, holdout-derived, failed symbol breadth, and became
+  negative excluding NVDA. Closeout decision: do not implement an M7c gap/adverse-selection gate; close the current
+  L1/BBO 1-minute long-only momentum family for M7. No production artifact was written, `artifacts/backtests/`
+  remains `.gitkeep` only, and paper/M8 remain blocked. Closeout review:
+  `docs/superpowers/reviews/2026-06-13-M7b-diagnostic-family-closeout-review.md`.
 
 ## Locked decisions
 
@@ -248,8 +257,9 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   closeout on `codex/m7-backtest-gate`** (1683 tests after historical-review hardening): v2 artifact gate, backtest engine,
   `directional.momentum_v1`, temp-only fixture builder CLI, criteria runbook, and S9 integration are green.
   Reviewed historical production artifact has not passed, so default committed artifact state remains fail-closed.
-- **Strategy/universe hardening loop** (current post-M7 gate): revise the strategy version or historical universe
-  until a reviewed artifact verifies `ok`; only then can paper edge-validation start.
+- **Strategy/universe hardening loop** (current post-M7 gate): start a new predeclared strategy/universe family
+  after the M7b no-trade closeout; do not continue with a gap/adverse-selection M7c on the current 1-minute
+  long-only momentum family. Only a reviewed artifact verifying `ok` can unlock paper edge-validation.
 - **Paper edge-validation phase** (post-passing-artifact, pre-M8): full autonomous paper run measured against the
   pre-pinned criteria — this run produces the "realized edge" evidence M8 requires.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).

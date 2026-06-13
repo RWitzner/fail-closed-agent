@@ -7,7 +7,7 @@ returns immutable in-memory results for artifact builders.
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_EVEN
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 from agent.bar_series import MidBar, MidBarSeriesReader, MissingBar
 from agent.bar_series import _canonical_utc, _parse_utc
@@ -53,6 +53,14 @@ class BacktestTrade:
     fees_usd: Decimal
     net_execution_realistic_pnl_usd: Decimal
     benchmark_pnl_usd: Decimal
+    decision_bar_end_utc: Optional[str] = None
+    decision_mid: Optional[Decimal] = None
+    decision_spread_bps: Optional[Decimal] = None
+    entry_spread_bps: Optional[Decimal] = None
+    exit_spread_bps: Optional[Decimal] = None
+    adverse_entry_move_bps: Optional[Decimal] = None
+    decision_realized_vol_21: Optional[Decimal] = None
+    decision_z_ret_21: Optional[Decimal] = None
 
 
 def _skip(reason: str, bucket_end_utc: str, symbol: str) -> BacktestSkip:

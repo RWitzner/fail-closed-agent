@@ -14,10 +14,13 @@ from unittest.mock import patch
 from agent.__main__ import main
 from agent.backtest_gate import verify_artifact
 from agent.backtest_engine import BacktestTrade
+from agent.backtest_engine import BacktestSkip
 from agent.backtest_historical import (
     HistoricalBacktestResult,
     HistoricalArtifactWriteRefused,
     run_historical_backtest,
+    write_m7_historical_diagnostic_export,
+    write_m7_historical_diagnostic_index,
     write_m7_historical_artifact,
 )
 from agent.serializer import dumps, row_hash
@@ -181,6 +184,43 @@ def _passing_backtest_result():
         candidate_count=30,
         p95_realism_gap_bps=Decimal("4.000000"),
         max_single_fill_divergence_bps=Decimal("8.000000"),
+    )
+
+
+def _diagnostic_backtest_result():
+    trade = BacktestTrade(
+        symbol="AAPL",
+        instrument_id=1001,
+        qty=Decimal("10"),
+        entry_bar_end_utc="2026-06-01T14:31:00.000000Z",
+        exit_bar_end_utc="2026-06-01T14:36:00.000000Z",
+        entry_mid=Decimal("100.000000"),
+        exit_mid=Decimal("100.250000"),
+        gross_modeled_usd=Decimal("2.300000"),
+        fees_usd=Decimal("0.020000"),
+        net_execution_realistic_pnl_usd=Decimal("2.280000"),
+        benchmark_pnl_usd=Decimal("1.000000"),
+        decision_bar_end_utc="2026-06-01T14:30:00.000000Z",
+        decision_mid=Decimal("99.900000"),
+        decision_spread_bps=Decimal("1.000000"),
+        entry_spread_bps=Decimal("2.000000"),
+        exit_spread_bps=Decimal("3.000000"),
+        adverse_entry_move_bps=Decimal("0.500000"),
+        decision_realized_vol_21=Decimal("0.010000"),
+        decision_z_ret_21=Decimal("0.250000"),
+    )
+    skip = BacktestSkip(
+        reason="latency_lost_edge",
+        bucket_end_utc="2026-06-01T14:40:00.000000Z",
+        detail={"symbol": "AAPL", "pricing_reasons": ("latency_lost_edge",)},
+    )
+    return HistoricalBacktestResult(
+        trades=(trade,),
+        skips=(skip,),
+        bar_count=120,
+        candidate_count=2,
+        p95_realism_gap_bps=Decimal("3.000000"),
+        max_single_fill_divergence_bps=Decimal("3.000000"),
     )
 
 
@@ -504,6 +544,131 @@ class TestHistoricalArtifactFlow(unittest.TestCase):
 
             self.assertFalse((nested / f"{_STRATEGY_ID}.json").exists())
 
+    def test_historical_diagnostic_export_is_bounded_and_omits_raw_quotes(self):
+        with TemporaryDirectory() as tmp:
+            rows = _historical_rows()
+            manifest = _manifest(rows)
+            diagnostics_path = Path(tmp) / "diagnostics" / "aapl.json"
+            with patch("agent.backtest_historical.run_historical_backtest",
+                       return_value=_diagnostic_backtest_result()):
+                result = write_m7_historical_diagnostic_export(
+                    output_path=diagnostics_path,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    strategy_id=_STRATEGY_ID_V2,
+                    max_trade_rows=1,
+                    max_skip_rows=1,
+                )
+
+            self.assertEqual(result.output_path, diagnostics_path)
+            self.assertTrue(diagnostics_path.exists())
+            self.assertFalse((Path(tmp) / f"{_STRATEGY_ID_V2}.json").exists())
+
+            payload = result.payload
+            self.assertEqual(payload["kind"], "m7_historical_diagnostic_export")
+            self.assertEqual(payload["strategy_id"], _STRATEGY_ID_V2)
+            self.assertEqual(payload["manifest"]["manifest_hash"],
+                             manifest["manifest_hash"])
+            self.assertEqual(payload["summary"]["trade_count"], 1)
+            self.assertEqual(payload["summary"]["skip_count"], 1)
+            self.assertEqual(payload["skip_reason_counts"],
+                             {"latency_lost_edge": 1})
+            self.assertEqual(payload["trade_rows"][0]["trade_bps"], "22.800000")
+            self.assertEqual(payload["skip_rows"][0]["reason"],
+                             "latency_lost_edge")
+            self.assertEqual(payload["trade_rows"][0]["entry_spread_bps"],
+                             "2.000000")
+            self.assertEqual(payload["trade_rows"][0]["notional_usd"],
+                             "1000.000000")
+            self.assertEqual(payload["distributions"]["entry_spread_bps"]["p95"],
+                             "2.000000")
+            self.assertIn("entry_spread_quintile",
+                          payload["friction_buckets"])
+            self.assertIn("entry_utc_hour", payload["time_buckets"])
+            self.assertFalse(payload["trade_rows_truncated"])
+            self.assertFalse(payload["skip_rows_truncated"])
+
+            raw_output = diagnostics_path.read_text(encoding="utf-8")
+            self.assertNotIn("bid_px", raw_output)
+            self.assertNotIn("ask_px", raw_output)
+            self.assertNotIn("quote_rows", raw_output)
+
+    def test_historical_diagnostic_export_refuses_production_artifact_dir(self):
+        with TemporaryDirectory() as tmp:
+            production = Path(tmp) / "artifacts" / "backtests"
+            rows = _historical_rows()
+            manifest = _manifest(rows)
+
+            with self.assertRaises(HistoricalArtifactWriteRefused):
+                write_m7_historical_diagnostic_export(
+                    output_path=production / "AAPL.json",
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    production_artifacts_dir=production,
+                )
+
+            self.assertFalse((production / "AAPL.json").exists())
+
+    def test_historical_diagnostic_index_summarizes_cross_symbol_exports(self):
+        with TemporaryDirectory() as tmp:
+            rows = _historical_rows()
+            manifest = _manifest(rows)
+            diagnostics_path = Path(tmp) / "diagnostics" / "aapl.json"
+            index_path = Path(tmp) / "diagnostics" / "index.json"
+            with patch("agent.backtest_historical.run_historical_backtest",
+                       return_value=_diagnostic_backtest_result()):
+                write_m7_historical_diagnostic_export(
+                    output_path=diagnostics_path,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    strategy_id=_STRATEGY_ID_V2,
+                    max_trade_rows=10,
+                    max_skip_rows=10,
+                )
+
+            result = write_m7_historical_diagnostic_index(
+                output_path=index_path,
+                diagnostic_paths=(diagnostics_path,),
+                created_utc="2026-06-13T12:01:00.000000Z",
+                source_run_id="unit-diagnostic-run",
+                holdout_window_id="unit-holdout",
+            )
+
+            self.assertTrue(index_path.exists())
+            payload = result.payload
+            self.assertEqual(payload["kind"], "m7_historical_diagnostic_index")
+            self.assertEqual(payload["strategy_id"], _STRATEGY_ID_V2)
+            self.assertEqual(payload["aggregate"]["trade_count"], 1)
+            self.assertEqual(payload["aggregate"]["net_execution_realistic_pnl_usd"],
+                             "2.280000")
+            self.assertEqual(
+                payload["concentration"]["symbols_with_positive_net_pnl"], 1)
+            self.assertEqual(
+                payload["concentration"]["top_1_symbol_trade_share"],
+                "1.000000")
+            self.assertEqual(payload["bounded_export"]["any_trade_rows_truncated"],
+                             False)
+            self.assertIn("entry_spread_quintile",
+                          payload["friction_buckets"])
+
 
 class TestHistoricalArtifactCli(unittest.TestCase):
     def test_cli_writes_reviewed_historical_artifact(self):
@@ -541,6 +706,76 @@ class TestHistoricalArtifactCli(unittest.TestCase):
                 ).status,
                 "ok",
             )
+
+    def test_cli_writes_bounded_historical_diagnostics(self):
+        with TemporaryDirectory() as tmp:
+            quotes = Path(tmp) / "quotes.jsonl"
+            rows = _historical_rows()
+            manifest = _manifest(rows)
+            manifest_path = Path(tmp) / "manifest.json"
+            diagnostics_path = Path(tmp) / "diagnostics" / "aapl.json"
+            _write_jsonl(quotes, rows)
+            manifest_path.write_text(dumps(manifest), encoding="utf-8")
+            with patch("agent.backtest_historical.run_historical_backtest",
+                       return_value=_diagnostic_backtest_result()):
+                rc = main([
+                    "m7-historical-diagnostics",
+                    "--quotes-jsonl", str(quotes),
+                    "--input-manifest-json", str(manifest_path),
+                    "--output-path", str(diagnostics_path),
+                    "--symbol", "AAPL",
+                    "--instrument-id", "1001",
+                    "--rules-hash", _RULES_HASH,
+                    "--data-pin", _data_pin(manifest),
+                    "--created-utc", "2026-06-13T12:00:00.000000Z",
+                    "--builder-git-commit", "test-commit",
+                    "--strategy-id", _STRATEGY_ID_V2,
+                    "--max-trade-rows", "1",
+                    "--max-skip-rows", "1",
+                ])
+
+            self.assertEqual(rc, 0)
+            self.assertTrue(diagnostics_path.exists())
+            raw_output = diagnostics_path.read_text(encoding="utf-8")
+            self.assertIn("m7_historical_diagnostic_export", raw_output)
+            self.assertNotIn("bid_px", raw_output)
+            self.assertNotIn("ask_px", raw_output)
+
+    def test_cli_writes_bounded_historical_diagnostics_index(self):
+        with TemporaryDirectory() as tmp:
+            rows = _historical_rows()
+            manifest = _manifest(rows)
+            diagnostics_path = Path(tmp) / "diagnostics" / "aapl.json"
+            index_path = Path(tmp) / "diagnostics" / "index.json"
+            with patch("agent.backtest_historical.run_historical_backtest",
+                       return_value=_diagnostic_backtest_result()):
+                write_m7_historical_diagnostic_export(
+                    output_path=diagnostics_path,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash=_RULES_HASH,
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    strategy_id=_STRATEGY_ID_V2,
+                )
+
+            rc = main([
+                "m7-historical-diagnostics-index",
+                "--output-path", str(index_path),
+                "--diagnostics-path", str(diagnostics_path),
+                "--created-utc", "2026-06-13T12:01:00.000000Z",
+                "--source-run-id", "unit-diagnostic-run",
+                "--holdout-window-id", "unit-holdout",
+            ])
+
+            self.assertEqual(rc, 0)
+            self.assertTrue(index_path.exists())
+            raw_output = index_path.read_text(encoding="utf-8")
+            self.assertIn("m7_historical_diagnostic_index", raw_output)
+            self.assertIn("concentration", raw_output)
 
 
 if __name__ == "__main__":
