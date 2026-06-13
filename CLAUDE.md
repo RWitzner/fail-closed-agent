@@ -21,11 +21,19 @@ hardening now requires future reviewed manifests to hash-bind the predeclared un
 live-verified) stays deferred (no paid live realtime subscription).
 M7b added `directional.momentum_v2` plus explicit historical `strategy_id` selection; valid holdout replay still
 failed every symbol, and a diagnostic broader replay also failed. The bounded diagnostic closeout rejects an M7c
-gap/adverse-selection gate and closes the current L1/BBO 1-minute long-only momentum family for M7 (1693 tests green).
-**Next loop is a new predeclared strategy/universe family until a reviewed artifact verifies `ok`; only then can
-full autonomous paper edge-validation start.** M8/live remains blocked until passing artifact + realized paper edge
-satisfy the M7-pinned criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still
-open.
+gap/adverse-selection gate and closes the current L1/BBO 1-minute long-only momentum family for M7 (1693 tests).
+**M7c is the next predeclared family, proxy-first**
+(`docs/superpowers/specs/2026-06-13-M7c-relative-strength-research-packet.md`, rev 2, reviewed APPROVE): phase 1 is
+`relative_strength.long_only_proxy_v1`, a long-only cross-sectional gating probe; phase 2 (true market-neutral,
+multi-leg/short-side) is conditional on a predeclared Phase Gate. A two-family search-budget stop rule in `PLAN.md`
+forces a substrate decision (longer horizon / L2 depth / wider universe) over a third same-substrate family if M7c
+also nulls. **The phase-1 strategy unit is BUILT** (pure ranking + proxy + `universe_equal_weight_long_v1`
+benchmark id + contract + TDD tests, reviewed APPROVE; **1702 tests green**); still pending before any edge
+verdict are the multi-symbol historical-runner harness wiring and the credentialed clean-window run + Phase Gate,
+so no reviewed artifact verifies `ok` yet. Production `artifacts/backtests/` still contains only `.gitkeep`; paper
+edge-validation cannot start until a reviewed artifact verifies `ok`. M8/live remains blocked until passing
+artifact + realized paper edge satisfy the M7-pinned criteria plus the separate two-key/live runbook requirements.
+Merge-to-main decision still open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -47,7 +55,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 ## Commands
 
 M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
-1683 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+1702 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)

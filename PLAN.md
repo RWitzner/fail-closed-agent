@@ -225,6 +225,20 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   revised sequencing; rev 2 was re-reviewed before commit. It fixes the ordered 10-symbol universe and clean-window
   rule, never labels phase 1 market-neutral, and does not authorize threshold relaxation, production artifact
   writes, paper edge-validation, M8, or gate flips.
+- **M7c phase-1 proxy build (2026-06-13, 1702 tests green, commit `3a1a7f2`):** built the phase-1 gating probe
+  `relative_strength.long_only_proxy_v1` (`scripts/agent/strategies/relative_strength.py`) — a pure cross-sectional
+  ranking over the valid decision set at one decision instant (rs_score with the packet weights), top-2
+  equal-notional whole-share long-only BUY candidates, `do_nothing` below 8 valid symbols, deterministic
+  (rs_score desc → predeclared universe order → symbol). Added the `universe_equal_weight_long_v1` benchmark id to
+  `backtest_metrics` (additional metric/provenance; pinned verifier benchmark unchanged) and registered the new
+  module in the wall-3 strategies AST guard. Contract:
+  `docs/superpowers/specs/2026-06-13-M7c-phase1-proxy-contract.md`; RED→GREEN tests:
+  `tests/agent/test_relative_strength_proxy_m7c.py` (9). Reviewed APPROVE (contract-conformance + adversarial
+  lenses); positional score keying + symbol tie-break hardening applied. **Still pending before any edge verdict:**
+  (1) the multi-symbol same-timestamp historical-runner harness wiring + `universe_equal_weight_long_v1`
+  attribution + one-artifact aggregation, (2) the credentialed clean-window run + Phase Gate go/no-go. No
+  production artifact written; `artifacts/backtests/` remains `.gitkeep`; paper/M8 blocked; run gates and pinned
+  criteria unchanged.
 
 ## Locked decisions
 
