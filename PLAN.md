@@ -5,7 +5,7 @@
 Build an autonomous US-equities trading agent, paper-first but live-like, reusing the Polymarket engineering
 spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-## Current status (2026-06-09)
+## Current status (2026-06-13)
 
 - Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
   workflow), reconciled. All external facts verified against primary sources.
@@ -86,7 +86,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   **Plan confirmed (2026-06-10): finish the remaining milestones M6→M7, then a full autonomous paper
   edge-validation phase before any M8 step** (see "Edge before live" under Locked decisions). Merge-to-main
   decision still open (nothing merged yet; branches stack m2-market-state→m3-signal→m6-reconcile).
-- **M6 IN PROGRESS on branch `m6-reconcile` (2026-06-13).**
+- **M6 DONE on branch `m6-reconcile` (2026-06-13, 1639 tests green; separate W6 re-review clean).**
   - **Contract FROZEN rev 6 READY-TO-BUILD, committed `1e96d5d`:**
     `docs/superpowers/specs/2026-06-10-M6-reconcile-contract.md` (1556 lines). Path: 3-architect panel
     (correctness/safety/integration) → synthesis (20 disagreements resolved in §1) → 5-lens critic pass
@@ -134,13 +134,16 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
     golden-stability checks proving no automatic `reconcile_alerts.jsonl` stream. Verification:
     W5 targeted block green, affected regression block green, and full suite green
     (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
-  - **W6 INITIAL REVIEW FIXES APPLIED (suite 1639 = 1636 + 3):** fixed the three repro-gated
-    review blockers: in-process drift-latch clear now respects dirty journal windows; durable detector
-    seeding now happens after `position_adjust` at the reconciled point; multi-lot allocation now feeds
+  - **W6 INITIAL REVIEW FIXES APPLIED + COMMITTED (`483ea34`, suite 1639 = 1636 + 3):** fixed the three
+    repro-gated review blockers: in-process drift-latch clear now respects dirty journal windows; durable
+    detector seeding now happens after `position_adjust` at the reconciled point; multi-lot allocation now feeds
     `diff_positions` newest-first by `position_open` stream `seq`, not `position_id`. Verification:
     new RED→GREEN regressions, affected M6 block green, compile green, `git diff --check` clean, and full
     suite green (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
-  - **Next:** W6 re-review/closeout (separate review lane over the fixed diff) → commit if still green.
+  - **W6 RE-REVIEW / CLOSEOUT CLEAN (2026-06-13):** separate read-only re-review over the fixed diff found
+    0 critical/high/medium/low issues. It specifically re-checked dirty-window latch clearing, post-adjust
+    durable seeding, and newest-first lot ordering by `position_open` stream `seq`; `git diff --check`, targeted
+    regressions, compile, and the full 1639-test suite were green. M6 is closed on the branch; next is M7.
 
 ## Locked decisions
 
@@ -179,10 +182,10 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).
   ✓ **done on `m3-signal`** (`ad14cf6`, 1520 tests) — contract rev 2 (48+5 findings) → 6 TDD waves →
   5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF; nothing merged to main.
-- **M6** Reconcile hardening (SOD/EOD broker reconciliation). ← **in progress on `m6-reconcile`** —
+- **M6** Reconcile hardening (SOD/EOD broker reconciliation). ✓ **done on `m6-reconcile`** —
   contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
   1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
-  W6 initial review blockers fixed locally (1639 tests); W6 re-review/closeout remains (see status above).
+  W6 initial review blockers fixed+committed (`483ea34`, 1639 tests); separate W6 re-review clean; gates OFF.
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. The M7 contract must pin
   the paper-phase success criteria (see "Edge before live" locked decision).
 - **Paper edge-validation phase** (post-M7, pre-M8): full autonomous paper run measured against the pre-pinned

@@ -8,13 +8,14 @@ An autonomous **US-equities** trading agent built with the same `observe → pap
 Polymarket agent: it starts **paper-only with "nothing opens by default"** and is otherwise live-like (live data,
 live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-**Current state:** **M2 (market-state) built, hardened, and green** (532 tests, gates OFF; branch
-`m2-market-state`). M0/M1 are done; M1 tier-2 (2b live-verified) remains deferred pending the unprovisioned live
-realtime subscription. M2 adds pure tradability reads under `scripts/agent/market_calendar.py`,
-`scripts/agent/market_state.py`, `scripts/agent/market_state_cache.py`, `scripts/agent/status_ledger.py`,
-`scripts/agent/session_liveness.py`, and fail-closed corporate actions in `scripts/agent/corporate_actions.py`.
-It submits no orders, mints no preflight tokens, imports no heavy SDK at module scope, and keeps live/run gates
-OFF. Next milestone is **M3**: signal + observe-only calibration probe. See `PLAN.md` for live status.
+**Current state:** M0-M6 are done. **M6 (reconcile hardening) is closed on branch `m6-reconcile`**
+(`483ea34` + docs closeout; 1639 tests green; separate W6 re-review clean). M1 tier-2 (2b live-verified)
+remains deferred pending the unprovisioned live realtime subscription. M6 adds deterministic SOD/EOD/immediate
+broker reconciliation, `journal/reconcile_alerts.jsonl`, explicit `position_adjust` folds, drift latching into
+`portfolio_unreconciled`, and CLI exit mapping. It submits no orders, mints no preflight tokens, imports no heavy
+SDK at module scope, and keeps live/run gates OFF. Next milestone is **M7**: anti-lookahead backtest gate + first
+paper-eligible directional strategy with the paper-phase success criteria pinned in advance. See `PLAN.md` for
+live status.
 
 ## Scope
 
