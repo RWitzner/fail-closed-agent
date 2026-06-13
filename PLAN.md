@@ -211,6 +211,20 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   L1/BBO 1-minute long-only momentum family for M7. No production artifact was written, `artifacts/backtests/`
   remains `.gitkeep` only, and paper/M8 remain blocked. Closeout review:
   `docs/superpowers/reviews/2026-06-13-M7b-diagnostic-family-closeout-review.md`.
+- **M7c predeclared relative-strength research packet (2026-06-13, rev 2 proxy-first):** wrote
+  `docs/superpowers/specs/2026-06-13-M7c-relative-strength-research-packet.md` before any code or reviewed
+  artifact loop. A direction review revised the original draft (which named true market-neutral the preferred
+  phase-1 target) to **proxy-first**: phase 1 is `relative_strength.long_only_proxy_v1`, a long-only
+  cross-sectional gating probe that reuses the existing single-leg fill/exit machinery and adds only a
+  cross-sectional ranking/decision harness (no short-side, locate/SSR, multi-leg-preflight, or basket work), to
+  answer "is there cross-sectional residual signal on this substrate at all?" before any short-side build. Phase 2
+  (`relative_strength.market_neutral_v1`, long-short, multi-leg, short-side locate/borrow/SSR, basket metrics, the
+  second benchmark) is conditional on a predeclared go/no-go: it is built only if the phase-1 artifact verifies
+  `ok`. A broad phase-1 null routes to a **substrate** decision (longer horizon, L2/MBP-10 depth, or a wider
+  liquidity-screened universe), not a sixth strategy family. The rev-1 approval does not carry forward to the
+  revised sequencing; rev 2 was re-reviewed before commit. It fixes the ordered 10-symbol universe and clean-window
+  rule, never labels phase 1 market-neutral, and does not authorize threshold relaxation, production artifact
+  writes, paper edge-validation, M8, or gate flips.
 
 ## Locked decisions
 
@@ -259,7 +273,17 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   Reviewed historical production artifact has not passed, so default committed artifact state remains fail-closed.
 - **Strategy/universe hardening loop** (current post-M7 gate): start a new predeclared strategy/universe family
   after the M7b no-trade closeout; do not continue with a gap/adverse-selection M7c on the current 1-minute
-  long-only momentum family. Only a reviewed artifact verifying `ok` can unlock paper edge-validation.
+  long-only momentum family. The active family is the M7c relative-strength packet, proxy-first: build and review
+  `relative_strength.long_only_proxy_v1` before any short-side/market-neutral work. Only a reviewed artifact
+  verifying `ok` can unlock paper edge-validation.
+- **Search-budget stop rule** (bounds the hardening loop so "start a new family" cannot recurse indefinitely):
+  the strategy search is allowed at most **two** distinct predeclared (strategy, universe) families on a fixed
+  data substrate (the L1 `EQUS.MINI` 1-minute top-of-book mega-cap substrate) before a substrate-level decision is
+  forced. The failed momentum family was family 1; the M7c relative-strength family (proxy then conditional
+  neutral) is family 2. If family 2 produces a broad reviewed null, the next decision is NOT a third same-substrate
+  family — it is an explicit substrate decision (a longer decision/holding horizon, an L2/MBP-10 depth-aware fill
+  tier, or a wider liquidity-screened universe) or a documented stop. No-edge on a fixed substrate is a substrate
+  conclusion, not an invitation to keep reskinning the strategy.
 - **Paper edge-validation phase** (post-passing-artifact, pre-M8): full autonomous paper run measured against the
   pre-pinned criteria — this run produces the "realized edge" evidence M8 requires.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).
