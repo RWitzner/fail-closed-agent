@@ -27,18 +27,27 @@ gap/adverse-selection gate and closes the current L1/BBO 1-minute long-only mome
 `relative_strength.long_only_proxy_v1`, a long-only cross-sectional gating probe; phase 2 (true market-neutral,
 multi-leg/short-side) is conditional on a predeclared Phase Gate. A two-family search-budget stop rule in `PLAN.md`
 forces a substrate decision (longer horizon / L2 depth / wider universe) over a third same-substrate family if M7c
-also nulls. **The phase-1 strategy unit AND the multi-symbol harness are BUILT** (first the pure ranking + proxy +
-`universe_equal_weight_long_v1` benchmark id + contract + TDD tests, reviewed APPROVE; then the multi-symbol
-same-timestamp cross-sectional decision harness `run_historical_cross_sectional_backtest` in `backtest_historical.py`
-— timestamp alignment across the universe, top-2 long, 30-bar horizon, M7 quote-B latency, no-overlap per symbol,
-both legs aggregated under one artifact, exposure-matched `universe_equal_weight_long_v1` attribution + diagnostics,
-reusing `_simulate_historical_long_trade` unchanged; read-only adversarial review passed; **1715 tests green**,
-uncommitted on `codex/m7-backtest-gate`). Still pending before any edge verdict: the multi-symbol manifest + CLI +
-production-artifact-writer plumbing, and the credentialed clean-window run + Phase Gate go/no-go — so no reviewed
-artifact verifies `ok` yet. Production `artifacts/backtests/` still contains only `.gitkeep`; paper
-edge-validation cannot start until a reviewed artifact verifies `ok`. M8/live remains blocked until passing
-artifact + realized paper edge satisfy the M7-pinned criteria plus the separate two-key/live runbook requirements.
-Merge-to-main decision still open.
+also nulls. **The phase-1 strategy unit, the multi-symbol harness, AND the step-5 artifact plumbing are BUILT** (committed
+`b9a8756` on `codex/m7-backtest-gate`, **1740 tests green**): the pure ranking + proxy +
+`universe_equal_weight_long_v1` benchmark id + contract + TDD tests (reviewed APPROVE); the multi-symbol
+same-timestamp cross-sectional decision harness `run_historical_cross_sectional_backtest`
+(`backtest_historical.py` — timestamp alignment across the universe, top-2 long, 30-bar horizon, M7 quote-B
+latency, no-overlap per symbol, both legs aggregated under one artifact, exposure-matched
+`universe_equal_weight_long_v1` attribution, reusing `_simulate_historical_long_trade` unchanged); and now
+(packet step 5) `validate_historical_cross_sectional_manifest` + `write_m7_historical_cross_sectional_artifact` +
+the `m7-historical-cross-sectional-artifact` CLI. One hash-bound multi-symbol manifest binds the predeclared
+universe block + a per-symbol data binding (`{instrument_id,row_count,quote_rows_sha256}`); the per-symbol
+`data_pin` is derived from `manifest_hash:symbol` (no circular hash) and `horizon` is hash-bound + validated (not
+silently defaulted). Both long legs aggregate into one `(strategy_id,rules_hash,data_pin)` v2 artifact (FD-P1-10)
+with the equal-weight-long attribution + a canonical-JSON breadth/leg diagnostics string in provenance (FD-P1-9);
+`verify_artifact` was widened on its OPTIONAL provenance allow-set only (pinned benchmark, floors, required keys,
+metric schema unchanged). Same fail-closed write guard as single-symbol; only `relative_strength.long_only_proxy_v1`
+accepted. A 5-dimension adversarial read-only review (each finding independently verified) returned
+`changes_required`; both must-fixes were applied. **Still pending before any edge verdict: the credentialed
+clean-window run + Phase Gate go/no-go — so no reviewed artifact verifies `ok` yet.** Production
+`artifacts/backtests/` still contains only `.gitkeep`; paper edge-validation cannot start until a reviewed artifact
+verifies `ok`. M8/live remains blocked until passing artifact + realized paper edge satisfy the M7-pinned criteria
+plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -60,7 +69,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 ## Commands
 
 M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
-1715 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+1740 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)

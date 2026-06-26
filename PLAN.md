@@ -255,10 +255,28 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   `tests/agent/test_m7c_cross_sectional_runner.py` (13). Read-only adversarial review passed (adopted: benchmark
   fill/skip counters + qty-floor-to-0 and sparse-symbol edge tests; verified as misreads: the no-overlap inequality,
   the ET-date schedule source, and the fractional benchmark-leg qty). `_market_state`/`_schedule` refactored to
-  blackout-set / session-window helpers with the single-symbol path behavior preserved. **Still pending before any
-  edge verdict:** (1) the multi-symbol manifest + CLI + production-artifact-writer plumbing (packet step 5), (2) the
-  credentialed clean-window run + Phase Gate go/no-go. No production artifact written; `artifacts/backtests/` remains
-  `.gitkeep`; paper/M8 blocked; run gates and pinned criteria unchanged.
+  blackout-set / session-window helpers with the single-symbol path behavior preserved. Committed `869e20c`.
+- **M7c phase-1 step-5 manifest + cross-sectional artifact writer + CLI (2026-06-26, 1740 tests green, committed
+  `b9a8756`):** built the production-artifact-writer plumbing on top of the harness (packet step 5).
+  `validate_historical_cross_sectional_manifest` binds ONE hash-bound multi-symbol manifest — predeclared universe
+  block + per-symbol `{instrument_id,row_count,quote_rows_sha256}` data binding; universe symbols == symbols-block
+  keys == quote-row keys exactly; per-symbol `data_pin` is DERIVED from `manifest_hash:symbol` (never stored → no
+  circular hash); `horizon` is hash-bound + validated (not silently defaulted). `write_m7_historical_cross_sectional_artifact`
+  runs the harness over the manifest, aggregates both long legs into ONE `(strategy_id,rules_hash,data_pin)` v2
+  artifact (FD-P1-10), and carries the `universe_equal_weight_long_v1` attribution + a canonical-JSON breadth/leg
+  diagnostics string in provenance (FD-P1-9). Same fail-closed write guard as single-symbol (exact `artifacts/backtests`
+  dir + `--allow-reviewed-artifact`); only `relative_strength.long_only_proxy_v1` accepted; no broker/preflight surface.
+  New CLI `m7-historical-cross-sectional-artifact` (`--symbol-quotes SYMBOL=path` repeated). `verify_artifact` extended
+  the OPTIONAL provenance allow-set ONLY (equal-weight keys, `horizon`, diagnostics blob) — pinned benchmark, floors,
+  required keys, and metric schema unchanged. Refactor: extracted `_parse_calendar_block`/`_parse_blackout_dates`/
+  `_parse_execution_block`/`_guard_production_artifact_dir`, shared by both writers (single-symbol behavior preserved).
+  RED→GREEN TDD: `tests/agent/test_m7c_cross_sectional_artifact.py` (25). Adversarial read-only review (5 dimensions,
+  each independently verified) returned `changes_required`; both must-fixes applied (horizon hash-binding/pass-through;
+  bool-as-int / duplicate-symbol / empty-symbols-block / horizon tamper tests). Deferred nice-to-haves: enforce that the
+  manifest `calendar.sessions` covers every session date in the quote rows (the harness falls back to 13:30–20:00 for
+  missing dates; tz-derivation from UTC rows is cleaner to add against the real backfill manifest). **Still pending
+  before any edge verdict:** the credentialed clean-window run + Phase Gate go/no-go. No production artifact written;
+  `artifacts/backtests/` remains `.gitkeep`; paper/M8 blocked; run gates and pinned criteria unchanged.
 
 ## Locked decisions
 
