@@ -274,9 +274,28 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   each independently verified) returned `changes_required`; both must-fixes applied (horizon hash-binding/pass-through;
   bool-as-int / duplicate-symbol / empty-symbols-block / horizon tamper tests). Deferred nice-to-haves: enforce that the
   manifest `calendar.sessions` covers every session date in the quote rows (the harness falls back to 13:30–20:00 for
-  missing dates; tz-derivation from UTC rows is cleaner to add against the real backfill manifest). **Still pending
-  before any edge verdict:** the credentialed clean-window run + Phase Gate go/no-go. No production artifact written;
-  `artifacts/backtests/` remains `.gitkeep`; paper/M8 blocked; run gates and pinned criteria unchanged.
+  missing dates; tz-derivation from UTC rows is cleaner to add against the real backfill manifest). Committed `b9a8756`.
+- **M7c historical backfill + cross-sectional input-manifest builder (2026-06-26, 1761 tests green, committed
+  `e45c2c0`):** new module `scripts/agent/historical_backfill.py` — the data-production half of the credentialed run.
+  PURE + offline-complete: `normalize_quote_event(s)` (recorder `QuoteEvent` → canonical quote row),
+  `derive_session_windows` / `instrument_ids_from_rows`, `build_cross_sectional_input_manifest` (emits a manifest the
+  step-5 validator accepts; per-symbol `quote_rows_sha256` + body `manifest_hash` use the SAME primitives the validator
+  recomputes with — the **build→validate→write→run round-trip is pinned** against the real harness),
+  `cross_sectional_data_pin`, `write_quote_rows_jsonl`. LIVE seam (tier-2b): `pull_normalized_window` orchestration is
+  offline-tested through an injected `quote_event_source`; the real `databento` `timeseries.get_range` + DBN `bbo-1m`
+  decode (`_dbn_bbo1m_record_to_event_dict`) is lazily imported, **fails closed**, and is flagged tier-2b-UNVERIFIED
+  (`NotImplementedError`) until verified against the live record layout. No offline path imports `databento` or reads
+  `.secrets`. Adversarial review (4 dims, each verified) → `changes_required`; applied: custom-sessions coverage guard +
+  zero-row guard in the pure builder; fail-closed live adapter (None/float/bool/non-positive rejects, `vendor_seq`+ISO
+  `ts_recv` per the recorder `parse` contract, no silent `ts_recv` fallback). RED→GREEN:
+  `tests/agent/test_m7c_historical_backfill.py` (21).
+  **Window decision (Robin):** use a completed 20+-full-RTH-session FORWARD window after 2026-06-13 (the packet's
+  preferred `2026-03-10→2026-04-08` was not chosen). As of 2026-06-26 only ~10 sessions have completed after
+  2026-06-13, so a complete forward window is not available until ~mid-July 2026 — the paid pull waits on the window
+  closing. **Still pending before any edge verdict:** (1) wire the real `get_range` + verify `_dbn_bbo1m_record_to_event_dict`
+  against the live API (tier-2b) + a thin backfill CLI, built close to the July pull; (2) the credentialed forward-window
+  pull → reviewed artifact → Phase Gate go/no-go. No production artifact written; `artifacts/backtests/` remains
+  `.gitkeep`; paper/M8 blocked; run gates and pinned criteria unchanged.
 
 ## Locked decisions
 

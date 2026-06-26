@@ -42,12 +42,20 @@ silently defaulted). Both long legs aggregate into one `(strategy_id,rules_hash,
 with the equal-weight-long attribution + a canonical-JSON breadth/leg diagnostics string in provenance (FD-P1-9);
 `verify_artifact` was widened on its OPTIONAL provenance allow-set only (pinned benchmark, floors, required keys,
 metric schema unchanged). Same fail-closed write guard as single-symbol; only `relative_strength.long_only_proxy_v1`
-accepted. A 5-dimension adversarial read-only review (each finding independently verified) returned
-`changes_required`; both must-fixes were applied. **Still pending before any edge verdict: the credentialed
-clean-window run + Phase Gate go/no-go — so no reviewed artifact verifies `ok` yet.** Production
-`artifacts/backtests/` still contains only `.gitkeep`; paper edge-validation cannot start until a reviewed artifact
-verifies `ok`. M8/live remains blocked until passing artifact + realized paper edge satisfy the M7-pinned criteria
-plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
+accepted. The data-production half is also BUILT + COMMITTED (`e45c2c0`): `scripts/agent/historical_backfill.py`
+— `build_cross_sectional_input_manifest` (+ `normalize_quote_event`, `derive_session_windows`,
+`instrument_ids_from_rows`, `cross_sectional_data_pin`), whose build→validate→write→run round-trip is pinned against
+the real harness, plus a tier-2b live-pull seam (`pull_normalized_window`) that is offline-tested via an injected
+source and **fails closed**; the real `databento` `get_range` + DBN `bbo-1m` decode is lazily imported and flagged
+tier-2b-UNVERIFIED (raises) until verified against the live API. Two adversarial reviews (5- and 4-dimension, each
+finding independently verified) returned `changes_required`; all must-fixes were applied (**1761 tests green**).
+**Window decision (Robin): a completed 20+-session FORWARD window after 2026-06-13 — not available until ~mid-July
+2026, so the paid pull waits on the window closing. Still pending before any edge verdict: (1) wire the real
+`get_range` + verify the DBN decode against the live API (tier-2b) + a thin backfill CLI, built close to the July
+pull; (2) the credentialed forward-window pull → reviewed artifact → Phase Gate go/no-go — so no reviewed artifact
+verifies `ok` yet.** Production `artifacts/backtests/` still contains only `.gitkeep`; paper edge-validation cannot
+start until a reviewed artifact verifies `ok`. M8/live remains blocked until passing artifact + realized paper edge
+satisfy the M7-pinned criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -69,7 +77,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 ## Commands
 
 M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
-1740 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+1761 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)
