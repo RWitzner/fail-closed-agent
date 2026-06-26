@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Iterable, Mapping as TypingMapping, Sequence, Tuple
 
 from agent.backtest_builder import PRODUCTION_ARTIFACTS_DIR, STRATEGY_ID
 from agent.backtest_engine import BacktestSkip, BacktestTrade
@@ -40,6 +40,7 @@ from agent.serializer import dumps, row_hash
 from agent.signal_config import SignalConfig
 from agent.signal_snapshot import SignalSnapshot, assemble, horizon_gate
 from agent.strategies.directional_momentum import strategy_for_id
+from agent.strategies import relative_strength as _rs
 from agent.strategy import ScanContext
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -387,11 +388,9 @@ def _signal_config(*, rules_hash: str, agent_rules_path=None) -> SignalConfig:
     return replace(SignalConfig.from_config(config), rules_hash=rules_hash)
 
 
-def _market_state(bar: MidBar, manifest: HistoricalInputManifest | None) -> Verdict:
-    ca_blackout = (
-        manifest is not None
-        and bar.session_date_et in manifest.ca_blackout_session_dates_et
-    )
+def _market_state_from_blackouts(bar: MidBar,
+                                 ca_blackout_dates: "frozenset[str]") -> Verdict:
+    ca_blackout = bar.session_date_et in ca_blackout_dates
     return Verdict(
         symbol=bar.symbol,
         instrument_id=bar.instrument_id,
@@ -408,6 +407,12 @@ def _market_state(bar: MidBar, manifest: HistoricalInputManifest | None) -> Verd
         ca_blackout=ca_blackout,
         session_date_et=bar.session_date_et,
     )
+
+
+def _market_state(bar: MidBar, manifest: HistoricalInputManifest | None) -> Verdict:
+    dates = (manifest.ca_blackout_session_dates_et if manifest is not None
+             else frozenset())
+    return _market_state_from_blackouts(bar, dates)
 
 
 def _quote_size(bar: MidBar, field: str) -> Decimal:
@@ -442,12 +447,10 @@ def _rth_close_utc(session_date_et: str, close_time_utc: str) -> str:
     return f"{session_date_et}T{close_time_utc}"
 
 
-def _schedule(session_date_et: str, close_time_utc: str,
-              manifest: HistoricalInputManifest | None) -> SessionSchedule:
-    window = (
-        manifest.session_windows.get(session_date_et)
-        if manifest is not None else None
-    )
+def _schedule_from_windows(session_date_et: str, close_time_utc: str,
+                           session_windows: TypingMapping[str, TypingMapping[str, str]]
+                           | None) -> SessionSchedule:
+    window = session_windows.get(session_date_et) if session_windows else None
     rth_open = (
         window["rth_open_utc"] if window is not None
         else f"{session_date_et}T13:30:00.000000Z"
@@ -465,6 +468,12 @@ def _schedule(session_date_et: str, close_time_utc: str,
         rth_close_utc=rth_close,
         post_close_utc=f"{session_date_et}T23:59:59.000000Z",
     )
+
+
+def _schedule(session_date_et: str, close_time_utc: str,
+              manifest: HistoricalInputManifest | None) -> SessionSchedule:
+    windows = manifest.session_windows if manifest is not None else None
+    return _schedule_from_windows(session_date_et, close_time_utc, windows)
 
 
 def _add_minutes(ts_utc: str, minutes: int) -> str:
@@ -1469,6 +1478,264 @@ def run_historical_backtest(*, quote_rows: Iterable[dict], symbol: str,
         max_single_fill_divergence_bps=max_gap,
         ca_blackout_skip_count=ca_blackout_skip_count,
         data_quality_skip_count=len(skips_t),
+    )
+
+
+@dataclass(frozen=True)
+class HistoricalCrossSectionalResult:
+    """Aggregated result of the M7c phase-1 multi-symbol, same-timestamp harness.
+
+    Every selected long leg across the universe aggregates into ``trades``/``skips``
+    so the two held positions score under one ``(strategy_id, rules_hash, data_pin)``
+    artifact (FD-P1-10). The ``universe_equal_weight_long_v1`` attribution is carried
+    alongside as additional metric/provenance (FD-P1-9); the pinned verifier benchmark
+    (``exposure_matched_midbar_v1``, via ``trade.benchmark_pnl_usd``) is unchanged.
+    """
+    trades: Tuple[BacktestTrade, ...]
+    skips: Tuple[BacktestSkip, ...]
+    bar_count: int
+    candidate_count: int
+    p95_realism_gap_bps: Decimal
+    max_single_fill_divergence_bps: Decimal
+    ca_blackout_skip_count: int
+    data_quality_skip_count: int
+    decision_count: int
+    acting_decision_count: int
+    insufficient_valid_decision_count: int
+    overlap_suppressed_leg_count: int
+    exclusion_reason_counts: TypingMapping[str, int]
+    per_symbol_leg_counts: TypingMapping[str, int]
+    benchmark_leg_fill_count: int
+    benchmark_leg_skip_count: int
+    equal_weight_long_benchmark_net_usd: Decimal
+    equal_weight_long_active_pnl_usd: Decimal
+
+
+def run_historical_cross_sectional_backtest(
+        *, symbol_quote_rows: TypingMapping[str, Iterable[dict]],
+        universe: Sequence[str], instrument_ids: TypingMapping[str, int],
+        rules_hash: str, symbol_data_pins: TypingMapping[str, str],
+        dataset: str = "EQUS.MINI", schema: str = "tbbo", agent_rules_path=None,
+        strategy_id: str = _rs.STRATEGY_ID, latency_ms: int = 250,
+        slippage_cap_bps: Decimal = Decimal("25"), horizon: str = "30m",
+        rth_close_time_utc: str = _DEFAULT_RTH_CLOSE_UTC,
+        session_windows: TypingMapping[str, TypingMapping[str, str]] | None = None,
+        ca_blackout_session_dates_et: "frozenset[str]" = frozenset(),
+        ) -> HistoricalCrossSectionalResult:
+    """M7c phase-1 cross-sectional decision harness (research packet step 2).
+
+    For each aligned decision instant it assembles every universe symbol's
+    point-in-time ``SignalSnapshot``, ranks the valid decision set with the proxy,
+    selects the top ``TOP_N`` long names, and reuses ``_simulate_historical_long_trade``
+    per leg. The single-leg fill/exit machinery is unchanged; the only new logic is the
+    same-timestamp assembly + ranking + no-overlap selection + the equal-weight-long
+    benchmark. It writes nothing and imports no broker/preflight surface.
+    """
+    if strategy_id != _rs.STRATEGY_ID:
+        raise ValueError(
+            f"cross-sectional runner only supports {_rs.STRATEGY_ID!r}, "
+            f"got {strategy_id!r}")
+    if (isinstance(latency_ms, bool) or not isinstance(latency_ms, int)
+            or latency_ms < 250):
+        raise ValueError("latency_ms must be an int >= 250")
+    if (not isinstance(slippage_cap_bps, Decimal) or not slippage_cap_bps.is_finite()
+            or slippage_cap_bps <= 0):
+        raise ValueError("slippage_cap_bps must be a positive finite Decimal")
+    universe_t = tuple(universe)
+    if len(set(universe_t)) != len(universe_t):
+        raise ValueError("universe must not contain duplicate symbols")
+    missing_meta = [
+        sym for sym in universe_t
+        if sym not in instrument_ids or sym not in symbol_data_pins
+    ]
+    if missing_meta:
+        raise ValueError(
+            f"instrument_ids/symbol_data_pins missing for {sorted(missing_meta)}")
+
+    config = _signal_config(rules_hash=rules_hash, agent_rules_path=agent_rules_path)
+    if horizon not in config.horizons:
+        raise ValueError(
+            f"horizon {horizon!r} not in configured horizons {config.horizons}")
+
+    proxy = _rs.strategy_for_id(strategy_id)
+    clock = _BacktestClock()
+    ca_blackout_dates = frozenset(ca_blackout_session_dates_et)
+
+    readers: dict = {}
+    engines: dict = {}
+    bars_by_end: dict = {}
+    total_bar_count = 0
+    for symbol in universe_t:
+        iid = instrument_ids[symbol]
+        rows = tuple(symbol_quote_rows.get(symbol, ()))
+        bars, missing = resample_midbars(
+            rows, symbol=symbol, instrument_id=iid, interval=config.interval,
+            dataset=dataset, schema=schema, data_pin=symbol_data_pins[symbol])
+        readers[symbol] = MidBarSeriesReader(bars, missing)
+        engines[symbol] = FeatureEngine(reader=readers[symbol], config=config,
+                                        clock=clock)
+        bars_by_end[symbol] = {bar.bucket_end_utc: bar for bar in bars}
+        total_bar_count += len(bars)
+
+    timeline = sorted({
+        end for symbol in universe_t for end in bars_by_end[symbol]
+    })
+
+    trades: list = []
+    skips: list = []
+    candidate_count = 0
+    acting_decision_count = 0
+    insufficient_valid_decision_count = 0
+    overlap_suppressed_leg_count = 0
+    ca_blackout_skip_count = 0
+    exclusion_counts: dict = {}
+    per_symbol_leg_counts: dict = {}
+    open_until: dict = {}            # symbol -> exit instant of the last opened leg
+    benchmark_net = Decimal("0")
+    benchmark_leg_fill_count = 0
+    benchmark_leg_skip_count = 0
+
+    for index, decision_ts in enumerate(timeline):
+        now_ms = index * 60_000
+        clock.set(now_ms)
+        assembled: list = []         # (symbol, snapshot, feature)
+        for symbol in universe_t:
+            bar = bars_by_end[symbol].get(decision_ts)
+            if bar is None:
+                continue
+            iid = instrument_ids[symbol]
+            market_state = _market_state_from_blackouts(bar, ca_blackout_dates)
+            if market_state.ca_blackout:
+                ca_blackout_skip_count += 1
+                exclusion_counts["ca_blackout"] = (
+                    exclusion_counts.get("ca_blackout", 0) + 1)
+                continue
+            feature = engines[symbol].compute(
+                symbol=symbol, instrument_id=iid, as_of_utc=decision_ts)
+            snapshot = assemble(
+                symbol=symbol, instrument_id=iid, decision_ts_utc=decision_ts,
+                decision_seen_at_ms=now_ms, event_start_bar_end_utc=decision_ts,
+                feature=feature, quote=_quote_snapshot(bar, seen_at_ms=now_ms),
+                market_state=market_state, calendar_pin="historical-reviewed-v1",
+                config=config, now_ms=now_ms)
+            if not isinstance(snapshot, SignalSnapshot):
+                reasons = getattr(snapshot, "reasons", ())
+                reason = reasons[0] if reasons else getattr(
+                    snapshot, "stage", "excluded")
+                exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+                continue
+            assembled.append((symbol, snapshot, feature))
+
+        valid_snaps = [snapshot for _, snapshot, _ in assembled]
+        feature_by_symbol = {symbol: feat for symbol, _, feat in assembled}
+        ranking = _rs.rank_decision_set(valid_snaps, universe_order=universe_t)
+        if ranking.valid_count < _rs.MIN_VALID_SYMBOLS:
+            insufficient_valid_decision_count += 1
+            continue
+
+        # Exit horizon is identical for every leg at this decision (same event-start
+        # bar end and the same session schedule). A horizon crossing the RTH close
+        # skips the whole decision (mirrors the single-symbol runner's `continue`).
+        decision_snapshot = assembled[0][1]
+        schedule = _schedule_from_windows(
+            decision_snapshot.session_date_et, rth_close_time_utc, session_windows)
+        exit_bar_end = horizon_gate(decision_snapshot, horizon, schedule)
+        if not isinstance(exit_bar_end, str):
+            continue
+        close = schedule.rth_close_utc
+        entry_bar_end = _entry_bar_end(decision_ts)
+        entry_instant = _parse_utc(entry_bar_end)
+
+        candidates = proxy.decide(
+            snapshots=valid_snaps, universe_order=universe_t, now_ms=now_ms)
+        candidate_count += len(candidates)
+        opened_this_decision = 0
+        opened_notional_this_decision = Decimal("0")
+        for candidate in candidates:
+            leg = candidate.legs[0]
+            symbol = leg.symbol
+            prior_exit = open_until.get(symbol)
+            if prior_exit is not None and entry_instant <= prior_exit:
+                overlap_suppressed_leg_count += 1
+                continue
+            result = _simulate_historical_long_trade(
+                reader=readers[symbol], symbol=symbol,
+                instrument_id=leg.instrument_id,
+                decision_bar_end_utc=decision_ts, entry_bar_end_utc=entry_bar_end,
+                exit_bar_end_utc=exit_bar_end, decision_ts_utc=decision_ts,
+                latency_ms=latency_ms, rth_close_utc=close, qty=leg.qty,
+                strategy_limit=leg.limit_price, slippage_cap_bps=slippage_cap_bps)
+            if isinstance(result, BacktestSkip):
+                skips.append(result)
+                continue
+            feat = feature_by_symbol[symbol]
+            trades.append(replace(
+                result,
+                decision_realized_vol_21=_feature_decimal(
+                    feat.features, "realized_vol_21"),
+                decision_z_ret_21=_feature_decimal(feat.features, "z_ret_21")))
+            open_until[symbol] = _parse_utc(exit_bar_end)
+            per_symbol_leg_counts[symbol] = (
+                per_symbol_leg_counts.get(symbol, 0) + 1)
+            opened_this_decision += 1
+            opened_notional_this_decision += result.entry_mid * result.qty
+
+        if opened_this_decision == 0:
+            continue
+        acting_decision_count += 1
+        # universe_equal_weight_long_v1: deploy the strategy's ACTUAL opened notional
+        # (already whole-share floored) equally across every valid symbol over the SAME
+        # entry/exit bars and fill assumptions. Sizing off the realised notional (not a
+        # nominal TOP_N x PAPER_NOTIONAL) keeps the active-PnL comparison exposure-matched
+        # so whole-share flooring does not systematically over-fund the benchmark.
+        per_name_notional = (
+            opened_notional_this_decision / Decimal(ranking.valid_count))
+        for ranked in ranking.ranked:
+            if ranked.mid <= 0:
+                continue
+            qty_b = per_name_notional / ranked.mid
+            if qty_b <= 0:
+                continue
+            bench = _simulate_historical_long_trade(
+                reader=readers[ranked.symbol], symbol=ranked.symbol,
+                instrument_id=ranked.instrument_id,
+                decision_bar_end_utc=decision_ts, entry_bar_end_utc=entry_bar_end,
+                exit_bar_end_utc=exit_bar_end, decision_ts_utc=decision_ts,
+                latency_ms=latency_ms, rth_close_utc=close, qty=qty_b,
+                strategy_limit=None, slippage_cap_bps=slippage_cap_bps)
+            if isinstance(bench, BacktestTrade):
+                benchmark_net += bench.net_execution_realistic_pnl_usd
+                benchmark_leg_fill_count += 1
+            else:
+                benchmark_leg_skip_count += 1
+
+    trades_t = tuple(trades)
+    skips_t = tuple(skips)
+    p95_gap, max_gap = _gap_summary(trades_t)
+    strategy_net = sum(
+        (trade.net_execution_realistic_pnl_usd for trade in trades_t),
+        Decimal("0"))
+    benchmark_net_q = _quantize_usd(benchmark_net)
+    active = _quantize_usd(strategy_net - benchmark_net_q)
+    return HistoricalCrossSectionalResult(
+        trades=trades_t,
+        skips=skips_t,
+        bar_count=total_bar_count,
+        candidate_count=candidate_count,
+        p95_realism_gap_bps=p95_gap,
+        max_single_fill_divergence_bps=max_gap,
+        ca_blackout_skip_count=ca_blackout_skip_count,
+        data_quality_skip_count=len(skips_t),
+        decision_count=len(timeline),
+        acting_decision_count=acting_decision_count,
+        insufficient_valid_decision_count=insufficient_valid_decision_count,
+        overlap_suppressed_leg_count=overlap_suppressed_leg_count,
+        exclusion_reason_counts=dict(sorted(exclusion_counts.items())),
+        per_symbol_leg_counts=dict(sorted(per_symbol_leg_counts.items())),
+        benchmark_leg_fill_count=benchmark_leg_fill_count,
+        benchmark_leg_skip_count=benchmark_leg_skip_count,
+        equal_weight_long_benchmark_net_usd=benchmark_net_q,
+        equal_weight_long_active_pnl_usd=active,
     )
 
 

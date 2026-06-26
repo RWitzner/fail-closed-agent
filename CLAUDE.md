@@ -27,10 +27,15 @@ gap/adverse-selection gate and closes the current L1/BBO 1-minute long-only mome
 `relative_strength.long_only_proxy_v1`, a long-only cross-sectional gating probe; phase 2 (true market-neutral,
 multi-leg/short-side) is conditional on a predeclared Phase Gate. A two-family search-budget stop rule in `PLAN.md`
 forces a substrate decision (longer horizon / L2 depth / wider universe) over a third same-substrate family if M7c
-also nulls. **The phase-1 strategy unit is BUILT** (pure ranking + proxy + `universe_equal_weight_long_v1`
-benchmark id + contract + TDD tests, reviewed APPROVE; **1702 tests green**); still pending before any edge
-verdict are the multi-symbol historical-runner harness wiring and the credentialed clean-window run + Phase Gate,
-so no reviewed artifact verifies `ok` yet. Production `artifacts/backtests/` still contains only `.gitkeep`; paper
+also nulls. **The phase-1 strategy unit AND the multi-symbol harness are BUILT** (first the pure ranking + proxy +
+`universe_equal_weight_long_v1` benchmark id + contract + TDD tests, reviewed APPROVE; then the multi-symbol
+same-timestamp cross-sectional decision harness `run_historical_cross_sectional_backtest` in `backtest_historical.py`
+— timestamp alignment across the universe, top-2 long, 30-bar horizon, M7 quote-B latency, no-overlap per symbol,
+both legs aggregated under one artifact, exposure-matched `universe_equal_weight_long_v1` attribution + diagnostics,
+reusing `_simulate_historical_long_trade` unchanged; read-only adversarial review passed; **1715 tests green**,
+uncommitted on `codex/m7-backtest-gate`). Still pending before any edge verdict: the multi-symbol manifest + CLI +
+production-artifact-writer plumbing, and the credentialed clean-window run + Phase Gate go/no-go — so no reviewed
+artifact verifies `ok` yet. Production `artifacts/backtests/` still contains only `.gitkeep`; paper
 edge-validation cannot start until a reviewed artifact verifies `ok`. M8/live remains blocked until passing
 artifact + realized paper edge satisfy the M7-pinned criteria plus the separate two-key/live runbook requirements.
 Merge-to-main decision still open.
@@ -55,7 +60,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 ## Commands
 
 M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
-1702 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+1715 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)

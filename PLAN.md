@@ -239,6 +239,26 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   attribution + one-artifact aggregation, (2) the credentialed clean-window run + Phase Gate go/no-go. No
   production artifact written; `artifacts/backtests/` remains `.gitkeep`; paper/M8 blocked; run gates and pinned
   criteria unchanged.
+- **M7c phase-1 multi-symbol harness wired (2026-06-26, 1715 tests green, uncommitted on `codex/m7-backtest-gate`):**
+  built `run_historical_cross_sectional_backtest` + `HistoricalCrossSectionalResult`
+  (`scripts/agent/backtest_historical.py`) — the one genuinely new piece phase 1 needed (packet step 2 / FD-P1-7).
+  It aligns decision timestamps across the predeclared universe; per instant assembles every symbol's point-in-time
+  `SignalSnapshot` (per-symbol `FeatureEngine` sharing one clock → consistent `now_ms`), ranks via the proxy,
+  selects the top-2 long, and reuses `_simulate_historical_long_trade` unchanged per leg. 30-bar horizon (skips the
+  decision if it crosses RTH close), entry = decision+1m with M7 quote-B latency, no-overlap per symbol (a held name
+  is suppressed until its exit bar), both legs aggregated under ONE artifact (FD-P1-10; the pinned verifier benchmark
+  stays `exposure_matched_midbar_v1`), plus the `universe_equal_weight_long_v1` benchmark + active PnL + diagnostics
+  (exclusion/valid-set counts, overlap-suppressed, per-symbol leg counts, benchmark fill/skip). **Benchmark
+  normalization decision (Robin, exposure-matched):** the equal-weight-long basket sizes off the strategy's ACTUAL
+  opened (whole-share-floored) notional split equally across valid symbols — NOT a nominal `TOP_N`×`PAPER_NOTIONAL` —
+  so whole-share flooring does not systematically over-fund the benchmark and drag active PnL. RED→GREEN TDD:
+  `tests/agent/test_m7c_cross_sectional_runner.py` (13). Read-only adversarial review passed (adopted: benchmark
+  fill/skip counters + qty-floor-to-0 and sparse-symbol edge tests; verified as misreads: the no-overlap inequality,
+  the ET-date schedule source, and the fractional benchmark-leg qty). `_market_state`/`_schedule` refactored to
+  blackout-set / session-window helpers with the single-symbol path behavior preserved. **Still pending before any
+  edge verdict:** (1) the multi-symbol manifest + CLI + production-artifact-writer plumbing (packet step 5), (2) the
+  credentialed clean-window run + Phase Gate go/no-go. No production artifact written; `artifacts/backtests/` remains
+  `.gitkeep`; paper/M8 blocked; run gates and pinned criteria unchanged.
 
 ## Locked decisions
 
