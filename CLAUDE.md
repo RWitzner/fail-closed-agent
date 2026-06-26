@@ -77,7 +77,10 @@ bars + longer holding, the pinned M7 criteria unchanged) before any run; the cre
 Robin's separate go.
 No reviewed artifact verifies `ok`; production `artifacts/backtests/` still contains only `.gitkeep`; the staged run +
 quotes live under gitignored `reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (reproducible from the committed
-backfill tool). Paper edge-validation + M8/live remain blocked. Merge-to-main decision still open.
+backfill tool). Paper edge-validation + M8/live remain blocked. **Merge-to-main DONE 2026-06-26:
+`codex/m7-backtest-gate` was fast-forward-merged into `main` (now `19786cf` = M7 tip; was M2 `a82be6d`; 49 commits,
+0 conflicts, all safety gates verified closed first — `live_trading`/`agent_rules.enabled`/`paper_trading` all
+`false`, `artifacts/backtests/` = `.gitkeep`). No remote, so locally reversible.**
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 

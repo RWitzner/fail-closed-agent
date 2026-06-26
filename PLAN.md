@@ -85,7 +85,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   `secret`→`secret_key`), DJ (fill_delta pinned-context hardening). M5 DONE.**
   **Plan confirmed (2026-06-10): finish the remaining milestones M6→M7, then a full autonomous paper
   edge-validation phase before any M8 step** (see "Edge before live" under Locked decisions). Merge-to-main
-  decision still open (nothing merged yet; branches stack m2-market-state→m3-signal→m6-reconcile).
+  **DONE 2026-06-26** (FF of `codex/m7-backtest-gate` into `main`; see the current-state bullet below).
 - **M6 DONE on branch `m6-reconcile` (2026-06-13, 1639 tests green; separate W6 re-review clean).**
   - **Contract FROZEN rev 6 READY-TO-BUILD, committed `1e96d5d`:**
     `docs/superpowers/specs/2026-06-10-M6-reconcile-contract.md` (1556 lines). Path: 3-architect panel
@@ -314,8 +314,8 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   universe), Robin elected an **explicit STOP on the autonomous edge search** — the packet's sanctioned Phase-Gate
   outcome after two same-substrate families (momentum, relative-strength) nulled. No third family / substrate build is
   in flight. The autonomous strategy-search loop is paused. **Open items for the step-back reassessment:** the
-  long-pending **merge-to-main** decision (everything is offline-complete on `codex/m7-backtest-gate`, nothing merged;
-  1762 tests green) and a scope/ambition review of whether/when to resume the edge hunt. Nothing should be built
+  long-pending **merge-to-main** decision (RESOLVED 2026-06-26 — FF-merged into `main`) and a scope/ambition review
+  of whether/when to resume the edge hunt. Nothing should be built
   toward a new strategy family without an explicit restart from Robin.
 - **GPT review of the NULL/STOP returned + acted on; restart toward a longer/coarser-horizon substrate (Robin,
   2026-06-26):** the GPT adversarial review came back and was independently re-verified (5-agent read-only workflow +
@@ -335,7 +335,9 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   decision/holding horizon on the same L1 data** (cheapest, reuses the harness, attacks both the edge failure and the
   realism-cap failures), NOT L2/MBP-10 (heaviest build) and NOT wider-universe-first. **Next:** predeclare the horizon
   experiment (coarser bars + longer holding, the pinned M7 criteria unchanged) before any run; the credentialed
-  pull/run is gated on Robin's separate go. Merge-to-main still open.
+  pull/run is gated on Robin's separate go. **Merge-to-main DONE 2026-06-26: `codex/m7-backtest-gate`
+  fast-forward-merged into `main` (`main` = `19786cf` = M7 tip; was M2 `a82be6d`; all safety gates verified closed
+  first; no remote, locally reversible).**
 
 ## Locked decisions
 
@@ -373,7 +375,8 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   power = ground truth; committed caps 0; S1/S8/S10 + R9 byte-exact rehydrate test-mapped.
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).
   ✓ **done on `m3-signal`** (`ad14cf6`, 1520 tests) — contract rev 2 (48+5 findings) → 6 TDD waves →
-  5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF; nothing merged to main.
+  5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF. (Built on `m3-signal`; later
+  folded into `main` via the 2026-06-26 FF merge of `codex/m7-backtest-gate`.)
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation). ✓ **done on `m6-reconcile`** —
   contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
   1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
