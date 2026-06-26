@@ -306,9 +306,15 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   L1-1min execution substrate. **DECISION (predeclared Phase Gate + the two-family search-budget stop rule): momentum
   = family 1 (nulled); relative-strength = family 2 (now nulled on a clean window) → route to a SUBSTRATE decision
   (longer decision/holding horizon, L2/MBP-10 depth-aware fill tier, or wider liquidity-screened universe). NOT the
-  phase-2 short-side build; NOT a third same-substrate family. The substrate direction is Robin's open call.** No
-  production artifact written; `artifacts/backtests/` remains `.gitkeep`; paper/M8 blocked; run gates and pinned
-  criteria unchanged.
+  phase-2 short-side build; NOT a third same-substrate family.** No production artifact written; `artifacts/backtests/`
+  remains `.gitkeep`; paper/M8 blocked; run gates and pinned criteria unchanged.
+- **STOP decision (Robin, 2026-06-26):** rather than pursue a substrate variation (L2 fill / longer horizon / wider
+  universe), Robin elected an **explicit STOP on the autonomous edge search** — the packet's sanctioned Phase-Gate
+  outcome after two same-substrate families (momentum, relative-strength) nulled. No third family / substrate build is
+  in flight. The autonomous strategy-search loop is paused. **Open items for the step-back reassessment:** the
+  long-pending **merge-to-main** decision (everything is offline-complete on `codex/m7-backtest-gate`, nothing merged;
+  1762 tests green) and a scope/ambition review of whether/when to resume the edge hunt. Nothing should be built
+  toward a new strategy family without an explicit restart from Robin.
 
 ## Locked decisions
 

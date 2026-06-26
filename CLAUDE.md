@@ -59,10 +59,12 @@ was broad (10 symbols traded, max 12.3% of legs / 16.8% of net-positive PnL — 
 **Per the predeclared Phase Gate + the two-family search-budget stop rule (momentum = family 1 nulled;
 relative-strength = family 2 now nulled clean), the next step is a SUBSTRATE decision (longer decision/holding
 horizon, L2/MBP-10 depth-aware fill tier, or wider liquidity-screened universe) — NOT the phase-2 short-side build
-and NOT a third same-substrate family. That substrate direction is Robin's open call.** No reviewed artifact verifies
-`ok`; production `artifacts/backtests/` still contains only `.gitkeep`; the staged run + quotes live under gitignored
-`reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (reproducible from the committed backfill tool). Paper
-edge-validation + M8/live remain blocked. Merge-to-main decision still open.
+and NOT a third same-substrate family. **Robin's call (2026-06-26): an explicit STOP on the autonomous edge search
+(the packet's sanctioned outcome after two same-substrate families nulled) — no substrate family is in flight; the
+strategy-search loop is paused pending a scope/ambition reassessment and the long-pending merge-to-main decision.**
+No reviewed artifact verifies `ok`; production `artifacts/backtests/` still contains only `.gitkeep`; the staged run +
+quotes live under gitignored `reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (reproducible from the committed
+backfill tool). Paper edge-validation + M8/live remain blocked. Merge-to-main decision still open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
