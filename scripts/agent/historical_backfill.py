@@ -56,6 +56,7 @@ _DEFAULT_SECRETS = (
 _DBN_PRICE_SCALE = Decimal("1e-9")
 _DBN_PRICE_QUANTUM = Decimal("0.0001")  # 4dp Reg-NMS sub-penny tick (matches recorder)
 _DBN_UNDEF_PRICE = 9223372036854775807  # INT64_MAX sentinel = empty/undefined level
+_DBN_UNDEF_TIMESTAMP = 18446744073709551615  # UINT64_MAX = no matching-engine event
 
 
 # --------------------------------------------------------------------------- normalize
@@ -309,16 +310,20 @@ def _dbn_bbo1m_record_to_event_dict(record, *, symbol: str) -> dict:
     if bid_sz <= 0 or ask_sz <= 0:
         raise ValueError(
             f"{symbol}: non-positive bbo-1m size dropped (bid={bid_sz}, ask={ask_sz})")
+    ts_event = _dbn_int(getattr(record, "ts_event", None), field="ts_event", symbol=symbol)
+    ts_recv = _dbn_int(getattr(record, "ts_recv", None), field="ts_recv", symbol=symbol)
+    # A minute with no matching-engine update carries the UNDEF timestamp sentinel
+    # (UINT64_MAX): a stale carried-forward BBO, not a genuine quote event — drop it.
+    if ts_event == _DBN_UNDEF_TIMESTAMP or ts_recv == _DBN_UNDEF_TIMESTAMP:
+        raise ValueError(f"{symbol}: bbo-1m record with no matching-engine event dropped")
     return {
         "symbol": symbol,
         "instrument_id": _dbn_int(
             getattr(record, "instrument_id", None), field="instrument_id", symbol=symbol),
         "vendor_seq": _dbn_int(
             getattr(record, "sequence", 0), field="sequence", symbol=symbol),
-        "ts_event": _ns_to_iso_utc(
-            _dbn_int(getattr(record, "ts_event", None), field="ts_event", symbol=symbol)),
-        "ts_recv_utc": _ns_to_iso_utc(
-            _dbn_int(getattr(record, "ts_recv", None), field="ts_recv", symbol=symbol)),
+        "ts_event": _ns_to_iso_utc(ts_event),
+        "ts_recv_utc": _ns_to_iso_utc(ts_recv),
         "bid_px": str(_dbn_price(bid_px)),
         "ask_px": str(_dbn_price(ask_px)),
         "bid_sz": str(bid_sz),

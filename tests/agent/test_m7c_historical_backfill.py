@@ -365,6 +365,11 @@ class TestLivePullSeam(unittest.TestCase):
         bad_recv = {k: v for k, v in base.items() if k != "ts_recv"}
         with self.assertRaises(ValueError):
             _dbn_bbo1m_record_to_event_dict(SimpleNamespace(**bad_recv), symbol="AAPL")
+        # UNDEF timestamp sentinel (UINT64_MAX) = a no-event carried-forward minute -> drop.
+        with self.assertRaises(ValueError):
+            _dbn_bbo1m_record_to_event_dict(
+                SimpleNamespace(**{**base, "ts_event": 18446744073709551615}),
+                symbol="AAPL")
 
     def test_ns_to_iso_utc_truncates_sub_microsecond_and_rolls_seconds(self):
         self.assertEqual(_ns_to_iso_utc(500), "1970-01-01T00:00:00.000000Z")
