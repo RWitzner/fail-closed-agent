@@ -24,6 +24,7 @@ Split by testability:
 
 No offline path imports ``databento`` or reads ``.secrets/``; tests pass a fake source.
 """
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -47,6 +48,9 @@ DEFAULT_SLIPPAGE_CAP_BPS = "25"
 DEFAULT_RTH_OPEN_UTC_TIME = "13:30:00.000000Z"
 DEFAULT_RTH_CLOSE_UTC_TIME = "20:00:00.000000Z"
 DEFAULT_RAW_SOURCE = "historical-databento"
+DEFAULT_RTH_WINDOW = ("13:30:00", "20:00:00")  # UTC HH:MM:SS (EDT regular RTH)
+_DEFAULT_SECRETS = (
+    Path(__file__).resolve().parents[2] / ".secrets" / "databento.json")
 
 # Databento DBN fixed-point: integer prices are USD * 1e-9 (design §M1; never float).
 _DBN_PRICE_SCALE = Decimal("1e-9")
@@ -322,16 +326,30 @@ def _dbn_bbo1m_record_to_event_dict(record, *, symbol: str) -> dict:
     }
 
 
+def _within_rth(row: dict, rth_window) -> bool:
+    """Keep only rows whose minute boundary (``ts_recv_utc`` time-of-day) is inside RTH.
+
+    bbo-1m records carry their minute boundary in ``ts_recv``; the historical harness
+    treats every bar as RTH (no time-of-day gate), so extended-hours bars MUST be filtered
+    here or they would be modeled as tradable.
+    """
+    if rth_window is None:
+        return True
+    open_t, close_t = rth_window
+    time_of_day = row["ts_recv_utc"][11:19]
+    return open_t <= time_of_day <= close_t
+
+
 def pull_normalized_window(
         *, dataset: str, schema: str, universe: Sequence[str],
-        start_utc: str, end_utc: str,
-        quote_event_source=None, credentials_path=None) -> dict:
+        start_utc: str, end_utc: str, quote_event_source=None,
+        credentials_path=None, rth_window=DEFAULT_RTH_WINDOW) -> dict:
     """Pull + normalize a window of ``bbo-1m`` quotes per universe symbol.
 
-    Returns ``{symbol: [normalized_row, ...]}``. The decode/normalize/order orchestration
-    is offline-testable through an injected ``quote_event_source(symbol) ->
+    Returns ``{symbol: [normalized_row, ...]}`` filtered to RTH. The decode/normalize/order
+    orchestration is offline-testable through an injected ``quote_event_source(symbol) ->
     Iterable[QuoteEvent]``. With no source, the real Databento Historical client is built
-    lazily (tier-2b, credentialed) — never reached offline.
+    lazily (credentialed) — never reached offline (the import is lazy inside the source).
     """
     if quote_event_source is None:
         quote_event_source = _live_quote_event_source(
@@ -339,16 +357,44 @@ def pull_normalized_window(
             end_utc=end_utc, credentials_path=credentials_path)
     out: dict = {}
     for symbol in universe:
-        events = quote_event_source(symbol)
-        out[symbol] = normalize_quote_events(events, dataset=dataset, schema=schema)
+        rows = normalize_quote_events(
+            quote_event_source(symbol), dataset=dataset, schema=schema)
+        out[symbol] = [row for row in rows if _within_rth(row, rth_window)]
     return out
 
 
 def _live_quote_event_source(*, dataset, schema, start_utc, end_utc,
                              credentials_path):  # pragma: no cover - tier-2b live
-    """Build the credentialed live source. Lazy ``databento`` import + ``.secrets`` read;
-    raises until verified against the live Historical API (tier-2b)."""
-    raise NotImplementedError(
-        "credentialed Databento bbo-1m pull is tier-2b: wire databento.Historical()."
-        "timeseries.get_range here and verify _dbn_bbo1m_record_to_event_dict against the "
-        "live record layout before producing any reviewed artifact")
+    """Credentialed live source: lazy ``databento`` import + ``.secrets`` read, then a
+    per-symbol ``timeseries.get_range`` pull decoded through ``_dbn_bbo1m_record_to_event_dict``
+    and the recorder ``parse`` (proven int-1e-9 quantization). One-sided/undefined/malformed
+    records are dropped (fail-closed per record, not per pull). The DBN field layout was
+    verified against the live ``EQUS.MINI`` ``bbo-1m`` ``BBOMsg`` (flat ``*_00`` top-of-book,
+    int 1e-9 prices). Never reached by an offline test (the import is lazy here)."""
+    import databento  # noqa: WPS433  (lazy by contract — keeps no-network tests green)
+    from recorder.event import MalformedRecord, NonFinitePrice, PrecisionLoss, parse
+
+    secrets = Path(credentials_path) if credentials_path else _DEFAULT_SECRETS
+    api_key = json.loads(secrets.read_text(encoding="utf-8"))["api_key"]
+    client = databento.Historical(api_key)
+
+    def source(symbol):
+        store = client.timeseries.get_range(
+            dataset=dataset, schema=schema, symbols=[symbol],
+            start=start_utc, end=end_utc, stype_in="raw_symbol")
+        events = []
+        for record in store:
+            try:
+                record_dict = _dbn_bbo1m_record_to_event_dict(record, symbol=symbol)
+            except ValueError:
+                continue  # one-sided / undefined / non-positive size -> drop the bar
+            ts_recv_utc = record_dict.pop("ts_recv_utc")
+            try:
+                events.append(parse(
+                    record_dict, dataset=dataset, schema=schema,
+                    reconnect_epoch=0, ts_recv_utc=ts_recv_utc))
+            except (MalformedRecord, NonFinitePrice, PrecisionLoss):
+                continue  # vendor decode anomaly -> drop the bar (fail-closed)
+        return events
+
+    return source

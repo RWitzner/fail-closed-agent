@@ -267,12 +267,51 @@ class TestLivePullSeam(unittest.TestCase):
         self.assertEqual(out["AAPL"][0]["instrument_id"], INSTRUMENT_IDS["AAPL"])
         self.assertEqual(out["MSFT"][0]["bid_px"], "100.0000")
 
-    def test_pull_without_source_is_tier2b_not_implemented(self):
-        with self.assertRaises(NotImplementedError):
-            pull_normalized_window(
-                dataset="EQUS.MINI", schema="bbo-1m", universe=("AAPL",),
-                start_utc="2026-06-15T13:30:00.000000Z",
-                end_utc="2026-06-15T20:00:00.000000Z")
+    def test_pull_with_injected_source_imports_no_databento(self):
+        import sys
+
+        def source(symbol):
+            prov = Provenance(
+                dataset="EQUS.MINI", schema="bbo-1m",
+                instrument_id=INSTRUMENT_IDS[symbol], symbol=symbol,
+                vendor_seq=None, ts_event_utc="2026-06-15T13:30:59.000000Z",
+                ts_recv_utc="2026-06-15T13:31:00.000000Z", reconnect_epoch=0)
+            return [QuoteEvent(provenance=prov, bid_px=Decimal("100.0000"),
+                               bid_sz=Decimal("100"), ask_px=Decimal("100.0200"),
+                               ask_sz=Decimal("100"))]
+
+        pull_normalized_window(
+            dataset="EQUS.MINI", schema="bbo-1m", universe=("AAPL",),
+            start_utc="2026-06-15T13:30:00.000000Z",
+            end_utc="2026-06-15T20:00:00.000000Z", quote_event_source=source)
+        self.assertNotIn("databento", sys.modules)
+
+    def test_pull_filters_extended_hours_rows(self):
+        def source(symbol):
+            prov_kw = dict(dataset="EQUS.MINI", schema="bbo-1m",
+                           instrument_id=INSTRUMENT_IDS[symbol], symbol=symbol,
+                           vendor_seq=None, reconnect_epoch=0)
+            quote = dict(bid_px=Decimal("100.0000"), bid_sz=Decimal("100"),
+                         ask_px=Decimal("100.0200"), ask_sz=Decimal("100"))
+            # one pre-open (08:00), one RTH (14:00), one post-close (21:00) boundary
+            return [
+                QuoteEvent(provenance=Provenance(
+                    ts_event_utc="2026-06-15T07:59:59.000000Z",
+                    ts_recv_utc="2026-06-15T08:00:00.000000Z", **prov_kw), **quote),
+                QuoteEvent(provenance=Provenance(
+                    ts_event_utc="2026-06-15T13:59:59.000000Z",
+                    ts_recv_utc="2026-06-15T14:00:00.000000Z", **prov_kw), **quote),
+                QuoteEvent(provenance=Provenance(
+                    ts_event_utc="2026-06-15T20:59:59.000000Z",
+                    ts_recv_utc="2026-06-15T21:00:00.000000Z", **prov_kw), **quote),
+            ]
+
+        out = pull_normalized_window(
+            dataset="EQUS.MINI", schema="bbo-1m", universe=("AAPL",),
+            start_utc="2026-06-15T08:00:00.000000Z",
+            end_utc="2026-06-15T21:00:00.000000Z", quote_event_source=source)
+        kept = [row["ts_recv_utc"] for row in out["AAPL"]]
+        self.assertEqual(kept, ["2026-06-15T14:00:00.000000Z"])
 
     def test_dbn_price_scales_int_1e9_fixed_point(self):
         self.assertEqual(_dbn_price(200000000000), Decimal("200.00"))
