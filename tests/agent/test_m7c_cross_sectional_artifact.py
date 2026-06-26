@@ -17,6 +17,7 @@ the credentialed clean-window run). Manifest-validation failures raise before th
 runs, so those tests need no patch; one un-patched single-session run exercises the real
 wiring end to end (it fails the 20-session gate, which is the point).
 """
+import dataclasses
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -253,6 +254,70 @@ class TestCrossSectionalManifestValidation(unittest.TestCase):
         self.assertEqual(parsed.slippage_cap_bps, Decimal("25"))
         self.assertEqual(parsed.horizon, "30m")
 
+    def test_preopen_ts_event_in_first_rth_minute_is_rejected(self):
+        # A stale pre-open book whose 1-minute boundary lands on the first RTH minute:
+        # ts_recv at the open but ts_event before it. The resampler buckets on ts_event, so
+        # the validator must reject it on the bucketing key rather than admit it as RTH.
+        rows = _universe_rows()
+        rows["AAPL"][0] = {
+            **rows["AAPL"][0],
+            "ts_event_utc": f"{SESSION}T13:29:30.000000Z",
+            "ts_recv_utc": f"{SESSION}T13:30:00.000000Z",
+        }
+        manifest = _manifest(rows)
+        with self.assertRaises(ValueError) as ctx:
+            self._validate(manifest=manifest, rows=rows)
+        self.assertIn("outside the pinned RTH window", str(ctx.exception))
+
+    def test_ts_event_date_absent_from_session_calendar_is_rejected(self):
+        # A matched row whose ts_event date is not covered by the pinned calendar must be
+        # rejected fail-closed (never silently bucketed under a default session window).
+        rows = _universe_rows()
+        rows["AAPL"][0] = {
+            **rows["AAPL"][0],
+            "ts_event_utc": "2026-06-14T14:30:00.000000Z",
+            "ts_recv_utc": "2026-06-14T14:30:00.300000Z",
+        }
+        manifest = _manifest(rows)
+        del manifest["calendar"]["sessions"]["2026-06-14"]
+        manifest = _rehash(manifest)
+        with self.assertRaises(ValueError) as ctx:
+            self._validate(manifest=manifest, rows=rows)
+        self.assertIn("not in the pinned session calendar", str(ctx.exception))
+
+    def test_inverted_session_window_is_rejected(self):
+        # A degenerate/inverted window (open >= close) must be rejected structurally so a
+        # mis-stated calendar topology cannot pass validation.
+        bad = _rehash({
+            **self.manifest,
+            "calendar": {
+                "calendar_pin": self.manifest["calendar"]["calendar_pin"],
+                "sessions": {
+                    SESSION: {"rth_open_utc": f"{SESSION}T20:00:00.000000Z",
+                              "rth_close_utc": f"{SESSION}T13:30:00.000000Z"},
+                },
+            },
+        })
+        with self.assertRaises(ValueError) as ctx:
+            self._validate(manifest=bad)
+        self.assertIn("rth_open_utc must be", str(ctx.exception))
+
+    def test_zero_length_session_window_is_rejected(self):
+        # open == close (a zero-length session) must also be rejected by the '>=' guard.
+        bad = _rehash({
+            **self.manifest,
+            "calendar": {
+                "calendar_pin": self.manifest["calendar"]["calendar_pin"],
+                "sessions": {
+                    SESSION: {"rth_open_utc": f"{SESSION}T13:30:00.000000Z",
+                              "rth_close_utc": f"{SESSION}T13:30:00.000000Z"},
+                },
+            },
+        })
+        with self.assertRaises(ValueError) as ctx:
+            self._validate(manifest=bad)
+        self.assertIn("rth_open_utc must be", str(ctx.exception))
+
     def test_manifest_hash_mismatch_is_rejected(self):
         bad = dict(self.manifest, manifest_hash="0" * 64)
         with self.assertRaises(ValueError) as ctx:
@@ -451,6 +516,32 @@ class TestCrossSectionalArtifactWriter(unittest.TestCase):
                                 data_pin=_data_pin(self.manifest),
                                 artifacts_dir=tmp).status,
                 "ok")
+
+    def test_nonpositive_equal_weight_active_pnl_marks_no_go_and_blocks_write(self):
+        # M7c Phase Gate (research packet lines 94-97) requires positive active PnL vs
+        # BOTH benchmarks. A result that clears the pinned exposure_matched leg but loses
+        # to (or ties) the equal-weight-long basket must NO-GO and never write.
+        base = _passing_xs_result()
+        for equal_weight_active in (Decimal("-50.600000"), Decimal("0")):
+            result = dataclasses.replace(
+                base,
+                equal_weight_long_benchmark_net_usd=Decimal("200.000000"),
+                equal_weight_long_active_pnl_usd=equal_weight_active)
+            with TemporaryDirectory() as tmp:
+                built = self._write(artifacts_dir=tmp, result=result)
+                # only the new equal-weight gate fails; the pinned exposure_matched leg
+                # (positive_active_pnl) still passes -> isolates the new gate.
+                self.assertFalse(built.criteria.passed)
+                self.assertEqual(
+                    built.criteria.failures,
+                    ("positive_equal_weight_long_active_pnl",))
+                self.assertFalse(
+                    (Path(tmp) / f"{RS_STRATEGY_ID}.json").exists())
+                self.assertEqual(
+                    verify_artifact(RS_STRATEGY_ID, rules_hash=_RULES_HASH,
+                                    data_pin=_data_pin(self.manifest),
+                                    artifacts_dir=tmp).status,
+                    "missing")
 
     def test_only_relative_strength_proxy_strategy_id_is_accepted(self):
         with TemporaryDirectory() as tmp:

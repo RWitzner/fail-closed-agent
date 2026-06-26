@@ -27,9 +27,11 @@ from agent.historical_backfill import (
     derive_session_windows,
     instrument_ids_from_rows,
     normalize_quote_event,
+    pin_sessions_from_provider,
     pull_normalized_window,
     write_quote_rows_jsonl,
 )
+from agent.market_calendar import FixtureScheduleProvider
 from agent.strategies.relative_strength import STRATEGY_ID as RS_STRATEGY_ID
 from recorder.event import Provenance, QuoteEvent
 
@@ -134,6 +136,42 @@ class TestNormalizeAndDerive(unittest.TestCase):
         self.assertEqual(windows["2026-06-15"]["rth_close_utc"],
                          "2026-06-15T20:00:00.000000Z")
 
+    def test_pin_sessions_from_provider_is_half_day_aware(self):
+        import sys
+        # Synthetic fixture: a regular full session and a 13:00-ET early close, both in EDT
+        # so the UTC conversion is unambiguous (16:00 ET -> 20:00 UTC, 13:00 ET -> 17:00 UTC).
+        provider = FixtureScheduleProvider({
+            "sessions": {
+                "2026-06-15": {"is_trading_day": True, "is_early_close": False,
+                               "rth_open_et": "09:30", "rth_close_et": "16:00"},
+                "2026-06-16": {"is_trading_day": True, "is_early_close": True,
+                               "rth_open_et": "09:30", "rth_close_et": "13:00"},
+            },
+        }, pin="fixture:test-halfday-v1")
+        windows = pin_sessions_from_provider(("2026-06-16", "2026-06-15"), provider)
+        self.assertEqual(windows["2026-06-15"]["rth_close_utc"][11:16], "20:00")
+        # the half-day close (13:00 ET) is NOT the flat 20:00 the fixture deriver assumes
+        self.assertEqual(windows["2026-06-16"]["rth_close_utc"][11:16], "17:00")
+        self.assertEqual(windows["2026-06-16"]["rth_open_utc"][11:16], "13:30")
+        # pinning stays stdlib-only — it must not pull in exchange_calendars
+        self.assertNotIn("exchange_calendars", sys.modules)
+
+    def test_pin_sessions_from_provider_fails_closed(self):
+        # No silent default window: non-trading, windowless-trading, and uncovered dates
+        # must all raise rather than emit a fabricated RTH window.
+        provider = FixtureScheduleProvider({
+            "sessions": {
+                "2026-06-16": {"is_trading_day": False, "is_early_close": False},
+                "2026-06-19": {"is_trading_day": True, "is_early_close": False},
+            },
+        }, pin="fixture:test-failclosed-v1")
+        with self.assertRaises(ValueError):  # non-trading day -> no window to pin
+            pin_sessions_from_provider(("2026-06-16",), provider)
+        with self.assertRaises(ValueError):  # trading day with no window in the fixture
+            pin_sessions_from_provider(("2026-06-19",), provider)
+        with self.assertRaises(Exception):  # date absent from the pinned fixture
+            pin_sessions_from_provider(("2026-06-18",), provider)
+
 
 class TestManifestBuilderRoundTrip(unittest.TestCase):
     def setUp(self):
@@ -141,7 +179,7 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
         self.manifest = build_cross_sectional_input_manifest(
             symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
             schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
-            calendar_pin=_CAL_PIN)
+            calendar_pin=_CAL_PIN, allow_derived_sessions=True)
 
     def test_built_manifest_validates(self):
         parsed = validate_historical_cross_sectional_manifest(
@@ -190,6 +228,51 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
                 sessions=partial_sessions)
         self.assertIn("2026-06-16", str(ctx.exception))
 
+    def test_builder_requires_pinned_sessions_by_default(self):
+        # A credentialed manifest must NOT silently fall back to the regular-session
+        # default (early-close/DST days would be mis-stated); the builder fails closed.
+        with self.assertRaises(ValueError) as ctx:
+            build_cross_sectional_input_manifest(
+                symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
+                schema="bbo-1m", hypothesis_id=_HYPOTHESIS,
+                selection_rule=_SELECTION, calendar_pin=_CAL_PIN)
+        self.assertIn("pinned", str(ctx.exception))
+        self.assertIn("calendar", str(ctx.exception))
+
+    def test_builder_allows_derived_sessions_with_explicit_fixture_opt_in(self):
+        # The offline fixture path stays available behind an explicit opt-in and still
+        # round-trips through the validator.
+        manifest = build_cross_sectional_input_manifest(
+            symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
+            schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
+            calendar_pin=_CAL_PIN, allow_derived_sessions=True)
+        parsed = validate_historical_cross_sectional_manifest(
+            manifest, symbol_quote_rows=self.rows, dataset="EQUS.MINI",
+            schema="bbo-1m", data_pin=cross_sectional_data_pin(manifest))
+        self.assertEqual(set(parsed.session_windows), {"2026-06-15"})
+
+    def test_pinned_half_day_sessions_round_trip_build_validate(self):
+        # The credentialed path end-to-end: pin a half-day window from the calendar
+        # provider, build a manifest with it, and validate (rows fit inside the 13:00-ET /
+        # 17:00-UTC early close, so the ts_event session-membership check accepts them).
+        rows = _universe_rows(sessions=("2026-06-16",), n_minutes=3)
+        provider = FixtureScheduleProvider({
+            "sessions": {
+                "2026-06-16": {"is_trading_day": True, "is_early_close": True,
+                               "rth_open_et": "09:30", "rth_close_et": "13:00"},
+            },
+        }, pin="fixture:test-halfday-rt-v1")
+        sessions = pin_sessions_from_provider(("2026-06-16",), provider)
+        manifest = build_cross_sectional_input_manifest(
+            symbol_rows=rows, universe=UNIVERSE, dataset="EQUS.MINI",
+            schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
+            calendar_pin=_CAL_PIN, sessions=sessions)
+        parsed = validate_historical_cross_sectional_manifest(
+            manifest, symbol_quote_rows=rows, dataset="EQUS.MINI",
+            schema="bbo-1m", data_pin=cross_sectional_data_pin(manifest))
+        self.assertEqual(
+            parsed.session_windows["2026-06-16"]["rth_close_utc"][11:16], "17:00")
+
     def test_zero_row_symbol_is_rejected_even_with_explicit_ids(self):
         rows = dict(self.rows)
         rows["NFLX"] = []
@@ -205,7 +288,8 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
         manifest = build_cross_sectional_input_manifest(
             symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
             schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
-            calendar_pin=_CAL_PIN, blackout_session_dates_et=("2026-06-15",),
+            calendar_pin=_CAL_PIN, allow_derived_sessions=True,
+            blackout_session_dates_et=("2026-06-15",),
             horizon="5m")
         parsed = validate_historical_cross_sectional_manifest(
             manifest, symbol_quote_rows=self.rows, dataset="EQUS.MINI",
@@ -224,7 +308,7 @@ class TestBuilderDrivesRealHarness(unittest.TestCase):
         manifest = build_cross_sectional_input_manifest(
             symbol_rows=rows, universe=UNIVERSE, dataset="EQUS.MINI",
             schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
-            calendar_pin=_CAL_PIN)
+            calendar_pin=_CAL_PIN, allow_derived_sessions=True)
         with TemporaryDirectory() as tmp:
             result = write_m7_historical_cross_sectional_artifact(
                 artifacts_dir=tmp,
@@ -312,6 +396,35 @@ class TestLivePullSeam(unittest.TestCase):
             end_utc="2026-06-15T21:00:00.000000Z", quote_event_source=source)
         kept = [row["ts_recv_utc"] for row in out["AAPL"]]
         self.assertEqual(kept, ["2026-06-15T14:00:00.000000Z"])
+
+    def test_pull_drops_stale_preopen_book_landing_on_first_rth_minute(self):
+        # A bbo-1m boundary (ts_recv) on the first RTH minute can carry a stale pre-open
+        # book whose ts_event is before the open. The ET-boundary resampler buckets on
+        # ts_event, so such a row would become a pre-open bar modeled as RTH-tradable; it
+        # must be filtered even though ts_recv is inside RTH.
+        def source(symbol):
+            prov_kw = dict(dataset="EQUS.MINI", schema="bbo-1m",
+                           instrument_id=INSTRUMENT_IDS[symbol], symbol=symbol,
+                           vendor_seq=None, reconnect_epoch=0)
+            quote = dict(bid_px=Decimal("100.0000"), bid_sz=Decimal("100"),
+                         ask_px=Decimal("100.0200"), ask_sz=Decimal("100"))
+            return [
+                # stale pre-open book, boundary on the first RTH minute -> dropped
+                QuoteEvent(provenance=Provenance(
+                    ts_event_utc="2026-06-15T13:29:30.000000Z",
+                    ts_recv_utc="2026-06-15T13:30:00.000000Z", **prov_kw), **quote),
+                # genuine in-session update -> kept
+                QuoteEvent(provenance=Provenance(
+                    ts_event_utc="2026-06-15T13:59:59.000000Z",
+                    ts_recv_utc="2026-06-15T14:00:00.000000Z", **prov_kw), **quote),
+            ]
+
+        out = pull_normalized_window(
+            dataset="EQUS.MINI", schema="bbo-1m", universe=("AAPL",),
+            start_utc="2026-06-15T13:30:00.000000Z",
+            end_utc="2026-06-15T20:00:00.000000Z", quote_event_source=source)
+        kept = [row["ts_event_utc"] for row in out["AAPL"]]
+        self.assertEqual(kept, ["2026-06-15T13:59:59.000000Z"])
 
     def test_dbn_price_scales_int_1e9_fixed_point(self):
         self.assertEqual(_dbn_price(200000000000), Decimal("200.00"))

@@ -110,15 +110,17 @@ def session_dates_from_rows(
     return tuple(sorted(dates))
 
 
-def derive_session_windows(
+def derive_regular_session_windows_fixture_only(
         symbol_rows: TypingMapping[str, Sequence[dict]], *,
         rth_open_utc_time: str = DEFAULT_RTH_OPEN_UTC_TIME,
         rth_close_utc_time: str = DEFAULT_RTH_CLOSE_UTC_TIME) -> dict:
     """Regular-RTH session windows for every session date present in the rows.
 
-    NOTE: assumes a regular 13:30–20:00 UTC RTH session; early-close days would be
-    mis-stated. The credentialed run should override ``sessions`` from the pinned market
-    calendar when the window can contain a half day.
+    OFFLINE FIXTURE USE ONLY. Assumes a regular full RTH session at a fixed UTC open/close
+    (13:30–20:00 UTC, which is EDT-correct only). It is blind to early-close half-days AND to
+    the EST/EDT shift, so it MUST NOT source a credentialed/reviewed manifest — those must pin
+    ``sessions`` from the market calendar (see ``pin_sessions_from_provider``). Retained for
+    offline fixtures whose windows are regular full EDT sessions by construction.
     """
     return {
         date: {
@@ -127,6 +129,35 @@ def derive_session_windows(
         }
         for date in session_dates_from_rows(symbol_rows)
     }
+
+
+# Back-compat alias for offline fixtures/tests; the credentialed path must pin sessions
+# from the market calendar via ``pin_sessions_from_provider``, never this fixture default.
+derive_session_windows = derive_regular_session_windows_fixture_only
+
+
+def pin_sessions_from_provider(session_dates: Sequence[str], provider) -> dict:
+    """Pin per-date RTH windows from a ``market_calendar`` ScheduleProvider — half-day AND
+    DST correct, unlike ``derive_regular_session_windows_fixture_only``.
+
+    Offline with ``FixtureScheduleProvider``; the live ``ExchangeCalendarsScheduleProvider``
+    keeps its ``exchange_calendars`` import lazy (the provider is passed in, so this module
+    gains no heavy import). Fail-closed: a non-trading or windowless date raises rather than
+    emitting a default window.
+    """
+    out: dict = {}
+    for date in sorted(set(session_dates)):
+        schedule = provider.schedule_for(date)
+        if (not schedule.is_trading_day or not schedule.rth_open_utc
+                or not schedule.rth_close_utc):
+            raise ValueError(
+                f"pinned calendar marks {date} non-trading or windowless; "
+                "no RTH window to pin")
+        out[date] = {
+            "rth_open_utc": schedule.rth_open_utc,
+            "rth_close_utc": schedule.rth_close_utc,
+        }
+    return out
 
 
 def instrument_ids_from_rows(
@@ -155,6 +186,7 @@ def build_cross_sectional_input_manifest(
         hypothesis_id: str, selection_rule: str, calendar_pin: str,
         instrument_ids: TypingMapping[str, int] | None = None,
         sessions: TypingMapping[str, TypingMapping[str, str]] | None = None,
+        allow_derived_sessions: bool = False,
         blackout_session_dates_et: Sequence[str] = (),
         latency_budget_ms: int = DEFAULT_LATENCY_BUDGET_MS,
         slippage_cap_bps=DEFAULT_SLIPPAGE_CAP_BPS,
@@ -193,7 +225,14 @@ def build_cross_sectional_input_manifest(
     elif set(instrument_ids) != set(universe_t):
         raise ValueError("instrument_ids must cover exactly the universe symbols")
     if sessions is None:
-        sessions = derive_session_windows(rows_by_symbol)
+        if not allow_derived_sessions:
+            raise ValueError(
+                "sessions must be pinned from the market calendar for a credentialed "
+                "cross-sectional manifest (early-close/DST days would be mis-stated by the "
+                "regular-session default); pass an explicit sessions map "
+                "(e.g. via pin_sessions_from_provider) or allow_derived_sessions=True for "
+                "an offline regular-session fixture")
+        sessions = derive_regular_session_windows_fixture_only(rows_by_symbol)
     else:
         # A custom sessions map MUST cover every session date in the rows, else the
         # harness silently falls back to a default 13:30-20:00 window for the missing
@@ -332,17 +371,22 @@ def _dbn_bbo1m_record_to_event_dict(record, *, symbol: str) -> dict:
 
 
 def _within_rth(row: dict, rth_window) -> bool:
-    """Keep only rows whose minute boundary (``ts_recv_utc`` time-of-day) is inside RTH.
+    """Keep only rows whose RTH session membership holds on BOTH timestamps.
 
-    bbo-1m records carry their minute boundary in ``ts_recv``; the historical harness
-    treats every bar as RTH (no time-of-day gate), so extended-hours bars MUST be filtered
-    here or they would be modeled as tradable.
+    bbo-1m records carry their minute boundary in ``ts_recv``, but the ET-boundary
+    resampler buckets each row on ``ts_event`` (the matching-engine event minute). A stale
+    pre-open book whose 1-minute boundary lands on the first RTH minute has ``ts_recv`` in
+    RTH but ``ts_event`` before the open; gating on ``ts_recv`` alone would admit it and the
+    resampler would then date the bar to a pre-open minute the historical harness treats as
+    RTH-tradable. Gate on both so the bucketing key (``ts_event``) is also in-session — a
+    quiet-open first RTH minute that only carries a stale pre-open book is correctly dropped.
     """
     if rth_window is None:
         return True
     open_t, close_t = rth_window
-    time_of_day = row["ts_recv_utc"][11:19]
-    return open_t <= time_of_day <= close_t
+    recv_tod = row["ts_recv_utc"][11:19]
+    event_tod = row["ts_event_utc"][11:19]
+    return (open_t <= recv_tod <= close_t) and (open_t <= event_tod <= close_t)
 
 
 def pull_normalized_window(

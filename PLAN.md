@@ -302,8 +302,10 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   `-$120.65` vs the pinned `exposure_matched_midbar_v1` (active `+$405.64` vs `universe_equal_weight_long_v1` only
   because that basket lost more); realism gaps `p95 29.8` / `max 97.5` bps exceed the `15`/`50` caps. Breadth was
   broad (10 symbols traded, max 12.3% of gross legs / 16.8% of net-positive PnL — **no concentration breach**), so the
-  null is a genuine edge failure, not a single-symbol artifact; the realism-gap failures independently flag the
-  L1-1min execution substrate. **DECISION (predeclared Phase Gate + the two-family search-budget stop rule): momentum
+  null is broad rather than a single-symbol artifact, and the realism-gap failures are a real execution-quality signal
+  on this L1-1min configuration. This nulls ONE tested configuration and does NOT causally isolate the substrate from
+  the horizon, universe, or strategy shape; the NO-GO/STOP routing rests on the predeclared two-family rule, not on
+  causal proof. **DECISION (predeclared Phase Gate + the two-family search-budget stop rule): momentum
   = family 1 (nulled); relative-strength = family 2 (now nulled on a clean window) → route to a SUBSTRATE decision
   (longer decision/holding horizon, L2/MBP-10 depth-aware fill tier, or wider liquidity-screened universe). NOT the
   phase-2 short-side build; NOT a third same-substrate family.** No production artifact written; `artifacts/backtests/`
@@ -315,6 +317,25 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   long-pending **merge-to-main** decision (everything is offline-complete on `codex/m7-backtest-gate`, nothing merged;
   1762 tests green) and a scope/ambition review of whether/when to resume the edge hunt. Nothing should be built
   toward a new strategy family without an explicit restart from Robin.
+- **GPT review of the NULL/STOP returned + acted on; restart toward a longer/coarser-horizon substrate (Robin,
+  2026-06-26):** the GPT adversarial review came back and was independently re-verified (5-agent read-only workflow +
+  direct read; worktree audited clean). **STOP HELD — no false-null:** the NULL is driven by active PnL vs the pinned
+  `exposure_matched_midbar_v1` benchmark (`-$120.65`) plus blown realism caps, and GPT's own RTH-leak falsification
+  (dropping the 102 event-outside-session rows) still failed hard. All four findings confirmed in code; none blocked
+  the offline merge (code+docs only — no production artifact). **Four fixes APPLIED + TDD-tested (1773 tests green):**
+  (B) the cross-sectional writer now also gates positive active PnL vs the `universe_equal_weight_long_v1` benchmark —
+  the Phase Gate requires positive active vs BOTH benchmarks and only the exposure-matched leg was gated (equal-weight
+  rode in provenance, ungated); (A) `_within_rth` AND `_validate_quote_row_quality` now require the `ts_event`
+  bucketing key — not just `ts_recv` — to fall inside the pinned session window, dropping stale pre-open books that
+  would otherwise bucket as RTH-tradable; (C) softened the causal "substrate proven" overclaim in `CLAUDE.md` + the
+  staged `summary.json` (the NO-GO/STOP rests on the predeclared two-family rule, not on causal proof); (D)
+  `build_cross_sectional_input_manifest` now fails closed unless `sessions` is pinned from the market calendar
+  (`pin_sessions_from_provider`, half-day/DST-aware) or `allow_derived_sessions=True` for an offline fixture, and the
+  validator rejects inverted windows. **Decision:** restart toward the sanctioned substrate step = a **longer/coarser
+  decision/holding horizon on the same L1 data** (cheapest, reuses the harness, attacks both the edge failure and the
+  realism-cap failures), NOT L2/MBP-10 (heaviest build) and NOT wider-universe-first. **Next:** predeclare the horizon
+  experiment (coarser bars + longer holding, the pinned M7 criteria unchanged) before any run; the credentialed
+  pull/run is gated on Robin's separate go. Merge-to-main still open.
 
 ## Locked decisions
 

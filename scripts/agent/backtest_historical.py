@@ -233,9 +233,16 @@ def _expected_data_pin(*, dataset: str, schema: str, interval: str,
     return f"{dataset}:{schema}:{interval}:{source_id_prefix}:{manifest_hash}"
 
 
-def _validate_quote_row_quality(rows: Tuple[dict, ...], *, dataset: str,
-                                schema: str, symbol: str,
-                                instrument_id: int) -> None:
+def _time_of_day_utc(ts_iso: str) -> str:
+    """'HH:MM:SS' from a canonical '...THH:MM:SS.ffffffZ' UTC string (the [11:19] slice
+    used by the RTH filter and the ET-boundary resampler)."""
+    return ts_iso[11:19]
+
+
+def _validate_quote_row_quality(
+        rows: Tuple[dict, ...], *, dataset: str, schema: str, symbol: str,
+        instrument_id: int,
+        session_windows: TypingMapping[str, TypingMapping[str, str]]) -> None:
     matched = 0
     for line_no, row in enumerate(rows, start=1):
         if (row.get("schema") != schema or row.get("symbol") != symbol
@@ -252,6 +259,22 @@ def _validate_quote_row_quality(rows: Tuple[dict, ...], *, dataset: str,
         if _parse_utc(ts_recv) < _parse_utc(ts_event):
             raise ValueError(
                 f"quote row {line_no} ts_recv_utc must be >= ts_event_utc")
+        # The ET-boundary resampler buckets each row on ts_event, but RTH is filtered
+        # upstream on ts_recv. Require the bucketing key itself to fall inside the pinned
+        # per-date session window so a stale pre-open book whose 1-minute boundary lands on
+        # the first RTH minute cannot enter the harness as an RTH-tradable bar.
+        event_date = ts_event[:10]
+        window = session_windows.get(event_date)
+        if window is None:
+            raise ValueError(
+                f"quote row {line_no} ts_event_utc date {event_date} is not in the "
+                "pinned session calendar")
+        event_tod = _time_of_day_utc(ts_event)
+        if not (_time_of_day_utc(window["rth_open_utc"]) <= event_tod
+                <= _time_of_day_utc(window["rth_close_utc"])):
+            raise ValueError(
+                f"quote row {line_no} ts_event_utc time-of-day {event_tod} is outside "
+                f"the pinned RTH window for {event_date}")
         for field in ("bid_sz", "ask_sz"):
             value = _parse_manifest_decimal(
                 row.get(field), path=f"quote row {line_no}.{field}")
@@ -311,6 +334,10 @@ def _parse_calendar_block(
                     f"input_manifest.calendar.sessions.{session_date}.{field} "
                     "must be a string")
             _parse_utc(window[field])
+        if _parse_utc(window["rth_open_utc"]) >= _parse_utc(window["rth_close_utc"]):
+            raise ValueError(
+                f"input_manifest.calendar.sessions.{session_date} rth_open_utc must be "
+                "before rth_close_utc")
     return calendar_pin, sessions
 
 
@@ -417,7 +444,7 @@ def validate_historical_input_manifest(
 
     _validate_quote_row_quality(
         quote_rows, dataset=dataset, schema=schema, symbol=symbol,
-        instrument_id=instrument_id)
+        instrument_id=instrument_id, session_windows=sessions)
     return HistoricalInputManifest(
         manifest_hash=manifest_hash,
         data_pin=data_pin,
@@ -525,6 +552,9 @@ def validate_historical_cross_sectional_manifest(
             "symbol_quote_rows must cover exactly the universe symbols "
             f"(missing={missing}, extra={extra})")
 
+    # Parse the pinned calendar before the per-symbol loop so the row-quality validator can
+    # require each row's ts_event bucket to fall inside its session window (anti-stale-quote).
+    calendar_pin, sessions = _parse_calendar_block(manifest)
     instrument_ids: dict = {}
     symbol_data_pins: dict = {}
     for symbol in universe_symbols:
@@ -554,11 +584,10 @@ def validate_historical_cross_sectional_manifest(
                 "does not match rows")
         _validate_quote_row_quality(
             rows, dataset=dataset, schema=schema, symbol=symbol,
-            instrument_id=instrument_id)
+            instrument_id=instrument_id, session_windows=sessions)
         instrument_ids[symbol] = instrument_id
         symbol_data_pins[symbol] = f"{expected_pin}:{symbol}"
 
-    calendar_pin, sessions = _parse_calendar_block(manifest)
     blackouts = _parse_blackout_dates(manifest)
     (latency, slippage_cap_bps, fee_model_version, pricing_model_version,
      realism_gap_model_version) = _parse_execution_block(manifest)
@@ -2276,6 +2305,18 @@ def write_m7_historical_cross_sectional_artifact(
         },
     )
     criteria = evaluate_paper_phase_criteria(payload["metrics"])
+    # M7c phase-1 Phase Gate (research packet lines 94-97) requires positive active PnL
+    # versus BOTH benchmarks. evaluate_paper_phase_criteria gates only the pinned
+    # exposure_matched_midbar_v1 leg (metrics.benchmark.active_pnl_usd). The
+    # universe_equal_weight_long_v1 leg is a cross-sectional-only typed Decimal carried in
+    # provenance, so it is gated here at write time and folded into the verdict so the
+    # fail-closed write guard below refuses a NO-GO. (The single-symbol writer has no
+    # equal-weight basket benchmark and is intentionally unaffected.)
+    if backtest.equal_weight_long_active_pnl_usd <= 0:
+        criteria = CriteriaVerdict(
+            passed=False,
+            failures=criteria.failures + (
+                "positive_equal_weight_long_active_pnl",))
     artifact_path = output_dir / f"{strategy_id}.json"
     result = HistoricalCrossSectionalArtifactBuildResult(
         artifact_path=artifact_path,

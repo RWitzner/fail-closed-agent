@@ -54,14 +54,27 @@ clean-window run is DONE: M7c phase-1 NULLED on the packet's preferred clean win
 sessions, 1144 trades, staged-only, no production write).** Broad NO-GO: net `-$839.68`, active `-$120.65` vs the
 pinned `exposure_matched_midbar_v1` (the `+$405.64` active vs `universe_equal_weight_long_v1` only means the basket
 lost more), profit factor `0.55`, and the realism gaps blow the caps (p95 `29.8` > 15, max `97.5` > 50). Breadth
-was broad (10 symbols traded, max 12.3% of legs / 16.8% of net-positive PnL — no concentration breach), so this is
-**decisive evidence the binding constraint is the SUBSTRATE (L1 1-minute BBO), not the long-only strategy shape.**
-**Per the predeclared Phase Gate + the two-family search-budget stop rule (momentum = family 1 nulled;
-relative-strength = family 2 now nulled clean), the next step is a SUBSTRATE decision (longer decision/holding
-horizon, L2/MBP-10 depth-aware fill tier, or wider liquidity-screened universe) — NOT the phase-2 short-side build
-and NOT a third same-substrate family. **Robin's call (2026-06-26): an explicit STOP on the autonomous edge search
-(the packet's sanctioned outcome after two same-substrate families nulled) — no substrate family is in flight; the
-strategy-search loop is paused pending a scope/ambition reassessment and the long-pending merge-to-main decision.**
+was broad (10 symbols traded, max 12.3% of legs / 16.8% of net-positive PnL — no concentration breach), so the
+null is broad rather than a single-name artifact. This is **one tested configuration (L1 1-minute BBO, this 30-bar
+horizon, this 10-name universe, long-only proxy) nulled clean; it does NOT causally isolate the substrate from the
+horizon, universe, or strategy shape.** Per the predeclared Phase Gate + the two-family search-budget stop rule
+(momentum = family 1 nulled; relative-strength = family 2 now nulled clean), the NO-GO/STOP and the routing toward
+a substrate experiment follow from the rule, not from a proof that the substrate is the binding constraint — and it
+is NOT the phase-2 short-side build and NOT a third same-substrate family.
+**GPT adversarial review of the NULL/STOP returned 2026-06-26 and was independently re-verified (5-agent read-only
+workflow + direct read): STOP HOLDS (no false-null — GPT's own RTH-leak falsification still failed hard). All four
+findings confirmed; none blocked the offline merge. The four fixes are now APPLIED + TDD-tested (1773 tests green):
+(B) the cross-sectional writer now also gates positive active PnL vs the `universe_equal_weight_long_v1` benchmark
+(the packet requires BOTH benchmarks); (A) the RTH filter AND the manifest validator now require the `ts_event`
+bucketing key — not just `ts_recv` — to fall inside the pinned session window (stale pre-open books dropped);
+(C) the causal wording above softened; (D) credentialed manifests must now pin `sessions` from the market calendar
+(`pin_sessions_from_provider`, half-day/DST-aware) and the regular-session deriver is offline-fixture-only behind
+`allow_derived_sessions`.**
+**Robin's call (2026-06-26): restart toward the sanctioned SUBSTRATE step = a longer/coarser decision/holding
+horizon on the same L1 data (cheapest, reuses the harness, attacks both the edge and the realism-cap failures) —
+NOT L2/MBP-10 (heaviest build) and NOT wider universe first.** Next: predeclare the horizon experiment (coarser
+bars + longer holding, the pinned M7 criteria unchanged) before any run; the credentialed pull/run is gated on
+Robin's separate go.
 No reviewed artifact verifies `ok`; production `artifacts/backtests/` still contains only `.gitkeep`; the staged run +
 quotes live under gitignored `reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (reproducible from the committed
 backfill tool). Paper edge-validation + M8/live remain blocked. Merge-to-main decision still open.
@@ -86,7 +99,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 ## Commands
 
 M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
-1761 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+1773 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)
