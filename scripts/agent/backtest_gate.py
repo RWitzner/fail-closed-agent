@@ -73,7 +73,15 @@ _V2_PROVENANCE_OPTIONAL_KEYS = frozenset({
     "normalizer_id", "calendar_pin", "fee_model_version",
     "pricing_model_version", "realism_gap_model_version",
     "latency_budget_ms", "slippage_cap_bps", "universe_hypothesis_id",
-    "universe_selection_rule", "universe_symbols",
+    "universe_selection_rule", "universe_symbols", "horizon",
+    # M7c phase-1 cross-sectional: the equal-weight-long benchmark attribution
+    # (FD-P1-9, additional provenance only — the pinned benchmark below is
+    # unchanged) and a canonical-JSON breadth/leg diagnostics string for the
+    # Phase Gate. All values remain strings (see the _string check below).
+    "universe_equal_weight_long_benchmark",
+    "universe_equal_weight_long_benchmark_pnl_usd",
+    "universe_equal_weight_long_active_pnl_usd",
+    "cross_sectional_diagnostics",
 })
 _PINNED_MIN_SESSIONS = 20
 _PINNED_MIN_TRADES = 30

@@ -1,7 +1,7 @@
 """M5 §O.1 / M6 §E / M7 — the CLI:
 ``observe | synthetic | paper | reconcile | m7-backtest |
-m7-historical-artifact | m7-historical-diagnostics |
-m7-historical-diagnostics-index``.
+m7-historical-artifact | m7-historical-cross-sectional-artifact |
+m7-historical-diagnostics | m7-historical-diagnostics-index``.
 
 Import discipline (§3): this module imports ``agent.orchestrator``,
 ``agent.config`` and ``agent.secrets_runtime`` ONLY (plus stdlib). Everything
@@ -37,6 +37,11 @@ exits non-zero on a mismatch; no flag can flip a gate (§M.2 step 9).
 - ``m7-historical-artifact`` — reviewed historical artifact builder over
   normalized quote JSONL plus a hash-bound input manifest. Production writes
   require ``--allow-reviewed-artifact``.
+- ``m7-historical-cross-sectional-artifact`` — reviewed M7c phase-1 multi-symbol
+  artifact builder. Binds one hash-bound manifest (predeclared universe block +
+  per-symbol data binding) over repeated ``--symbol-quotes SYMBOL=path`` JSONL, runs
+  the cross-sectional decision harness, and aggregates both long legs into one
+  artifact. Production writes require ``--allow-reviewed-artifact``.
 - ``m7-historical-diagnostics`` — bounded, non-artifact trade/skip diagnostic
   export over the same historical input path. It never writes raw quote rows.
 - ``m7-historical-diagnostics-index`` — bounded, non-artifact cross-symbol
@@ -392,6 +397,77 @@ def _cmd_m7_historical_artifact(args) -> int:
     return 0
 
 
+def _parse_symbol_quotes(pairs) -> dict:
+    """Parse repeated ``--symbol-quotes SYMBOL=path`` tokens into an ordered map."""
+    mapping: dict = {}
+    for pair in pairs:
+        symbol, sep, path = pair.partition("=")
+        if not sep or not symbol or not path:
+            raise ValueError(
+                f"--symbol-quotes must be SYMBOL=path, got {pair!r}")
+        if symbol in mapping:
+            raise ValueError(f"--symbol-quotes repeated for symbol {symbol!r}")
+        mapping[symbol] = path
+    if not mapping:
+        raise ValueError("--symbol-quotes requires at least one SYMBOL=path")
+    return mapping
+
+
+def _cmd_m7_historical_cross_sectional_artifact(args) -> int:
+    from agent.backtest_historical import HistoricalArtifactWriteRefused
+    from agent.backtest_historical import load_input_manifest_json
+    from agent.backtest_historical import load_quote_rows_jsonl
+    from agent.backtest_historical import (
+        write_m7_historical_cross_sectional_artifact)
+
+    try:
+        symbol_paths = _parse_symbol_quotes(args.symbol_quotes)
+        symbol_quote_rows = {
+            symbol: load_quote_rows_jsonl(path)
+            for symbol, path in symbol_paths.items()
+        }
+        result = write_m7_historical_cross_sectional_artifact(
+            artifacts_dir=args.artifacts_dir,
+            symbol_quote_rows=symbol_quote_rows,
+            rules_hash=args.rules_hash,
+            data_pin=args.data_pin,
+            dataset=args.dataset,
+            schema=args.schema,
+            created_utc=args.created_utc,
+            input_manifest=load_input_manifest_json(args.input_manifest_json),
+            builder_git_commit=args.builder_git_commit,
+            allow_reviewed_artifact=args.allow_reviewed_artifact,
+            strategy_id=args.strategy_id,
+        )
+    except HistoricalArtifactWriteRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"m7-historical-cross-sectional-artifact usage error: {exc}",
+              file=sys.stderr)
+        return 2
+    if not result.criteria.passed:
+        print("criteria_failed=" + ",".join(result.criteria.failures),
+              file=sys.stderr)
+        print(
+            " ".join((
+                f"bar_count={result.backtest.bar_count}",
+                f"candidate_count={result.backtest.candidate_count}",
+                f"trade_count={len(result.backtest.trades)}",
+                f"skip_count={len(result.backtest.skips)}",
+                f"acting_decision_count={result.backtest.acting_decision_count}",
+            )),
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"artifact_path={result.artifact_path} "
+        f"artifact_hash={result.payload['artifact_hash']} "
+        f"trade_count={len(result.backtest.trades)}"
+    )
+    return 0
+
+
 def _cmd_m7_historical_diagnostics(args) -> int:
     from agent.backtest_historical import HistoricalArtifactWriteRefused
     from agent.backtest_historical import load_input_manifest_json
@@ -541,6 +617,28 @@ def build_parser() -> argparse.ArgumentParser:
     hist.add_argument("--allow-reviewed-artifact",
                       dest="allow_reviewed_artifact", action="store_true")
     hist.set_defaults(func=_cmd_m7_historical_artifact)
+
+    xs = sub.add_parser(
+        "m7-historical-cross-sectional-artifact",
+        help="build reviewed M7c phase-1 multi-symbol cross-sectional artifact")
+    xs.add_argument("--symbol-quotes", dest="symbol_quotes", action="append",
+                    required=True, metavar="SYMBOL=path",
+                    help="per-symbol normalized quote JSONL (repeat per symbol)")
+    xs.add_argument("--input-manifest-json", dest="input_manifest_json",
+                    required=True)
+    xs.add_argument("--artifacts-dir", dest="artifacts_dir", required=True)
+    xs.add_argument("--dataset", default="EQUS.MINI")
+    xs.add_argument("--schema", default="tbbo")
+    xs.add_argument("--rules-hash", dest="rules_hash", required=True)
+    xs.add_argument("--data-pin", dest="data_pin", required=True)
+    xs.add_argument("--created-utc", dest="created_utc", required=True)
+    xs.add_argument("--builder-git-commit", dest="builder_git_commit",
+                    default="unknown")
+    xs.add_argument("--strategy-id", dest="strategy_id",
+                    default="relative_strength.long_only_proxy_v1")
+    xs.add_argument("--allow-reviewed-artifact",
+                    dest="allow_reviewed_artifact", action="store_true")
+    xs.set_defaults(func=_cmd_m7_historical_cross_sectional_artifact)
 
     diag = sub.add_parser(
         "m7-historical-diagnostics",

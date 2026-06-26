@@ -18,7 +18,10 @@ from typing import Iterable, Mapping as TypingMapping, Sequence, Tuple
 from agent.backtest_builder import PRODUCTION_ARTIFACTS_DIR, STRATEGY_ID
 from agent.backtest_engine import BacktestSkip, BacktestTrade
 from agent.backtest_engine import read_eligible_midbar
-from agent.backtest_metrics import build_v2_artifact_payload
+from agent.backtest_metrics import (
+    UNIVERSE_EQUAL_WEIGHT_LONG_BENCHMARK,
+    build_v2_artifact_payload,
+)
 from agent.bar_series import MidBar, MidBarSeriesReader, _canonical_utc, _parse_utc
 from agent.bar_series import resample_midbars
 from agent.exec_reasons import ExecError
@@ -94,11 +97,48 @@ class HistoricalInputManifest:
 
 
 @dataclass(frozen=True)
+class HistoricalCrossSectionalManifest:
+    """Parsed M7c multi-symbol manifest for the phase-1 cross-sectional artifact.
+
+    One hash-bound manifest declares the predeclared universe block plus a per-symbol
+    data binding (instrument_id, row_count, quote_rows_sha256). Each symbol's
+    ``data_pin`` is DERIVED from the manifest hash + symbol (never stored in the body —
+    that would be circular), exactly like the single-symbol pin.
+    """
+    manifest_hash: str
+    dataset: str
+    schema: str
+    interval: str
+    calendar_pin: str
+    session_windows: Mapping[str, Mapping[str, str]]
+    ca_blackout_session_dates_et: frozenset[str]
+    latency_budget_ms: int
+    slippage_cap_bps: Decimal
+    horizon: str
+    fee_model_version: str
+    pricing_model_version: str
+    realism_gap_model_version: str
+    universe_hypothesis_id: str
+    universe_selection_rule: str
+    universe_symbols: Tuple[str, ...]
+    instrument_ids: Mapping[str, int]
+    symbol_data_pins: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class HistoricalArtifactBuildResult:
     artifact_path: Path
     payload: dict
     criteria: CriteriaVerdict
     backtest: HistoricalBacktestResult
+
+
+@dataclass(frozen=True)
+class HistoricalCrossSectionalArtifactBuildResult:
+    artifact_path: Path
+    payload: dict
+    criteria: CriteriaVerdict
+    backtest: "HistoricalCrossSectionalResult"
 
 
 @dataclass(frozen=True)
@@ -250,6 +290,75 @@ def _validate_universe_manifest(
     return hypothesis_id, selection_rule, symbols
 
 
+def _parse_calendar_block(
+        manifest: Mapping[str, object]
+        ) -> tuple[str, TypingMapping[str, TypingMapping[str, str]]]:
+    calendar = manifest.get("calendar")
+    if not isinstance(calendar, dict):
+        raise ValueError("input_manifest.calendar must be an object")
+    calendar_pin = calendar.get("calendar_pin")
+    sessions = calendar.get("sessions")
+    if not isinstance(calendar_pin, str) or not calendar_pin:
+        raise ValueError("input_manifest.calendar.calendar_pin must be a string")
+    if not isinstance(sessions, dict) or not sessions:
+        raise ValueError("input_manifest.calendar.sessions must be a non-empty object")
+    for session_date, window in sessions.items():
+        if not isinstance(session_date, str) or not isinstance(window, dict):
+            raise ValueError("input_manifest.calendar.sessions entries are invalid")
+        for field in ("rth_open_utc", "rth_close_utc"):
+            if not isinstance(window.get(field), str):
+                raise ValueError(
+                    f"input_manifest.calendar.sessions.{session_date}.{field} "
+                    "must be a string")
+            _parse_utc(window[field])
+    return calendar_pin, sessions
+
+
+def _parse_blackout_dates(manifest: Mapping[str, object]) -> "frozenset[str]":
+    corporate_actions = manifest.get("corporate_actions")
+    if not isinstance(corporate_actions, dict):
+        raise ValueError("input_manifest.corporate_actions must be an object")
+    blackouts = corporate_actions.get("blackout_session_dates_et", [])
+    if (not isinstance(blackouts, list)
+            or any(not isinstance(item, str) for item in blackouts)):
+        raise ValueError(
+            "input_manifest.corporate_actions.blackout_session_dates_et "
+            "must be a list of strings")
+    return frozenset(blackouts)
+
+
+def _parse_execution_block(
+        manifest: Mapping[str, object]) -> "tuple[int, Decimal, str, str, str]":
+    execution = manifest.get("execution")
+    if not isinstance(execution, dict):
+        raise ValueError("input_manifest.execution must be an object")
+    latency = execution.get("latency_budget_ms")
+    if isinstance(latency, bool) or not isinstance(latency, int) or latency < 250:
+        raise ValueError(
+            "input_manifest.execution.latency_budget_ms must be an int >= 250")
+    slippage_cap_bps = _parse_manifest_decimal(
+        execution.get("slippage_cap_bps"),
+        path="input_manifest.execution.slippage_cap_bps")
+    if slippage_cap_bps <= 0:
+        raise ValueError("input_manifest.execution.slippage_cap_bps must be > 0")
+    fee_model_version = execution.get("fee_model_version")
+    pricing_model_version = execution.get("pricing_model_version")
+    realism_gap_model_version = execution.get("realism_gap_model_version")
+    if fee_model_version != FEE_MODEL_VERSION:
+        raise ValueError(
+            f"input_manifest.execution.fee_model_version must be {FEE_MODEL_VERSION!r}")
+    if pricing_model_version != _PRICING_MODEL_VERSION:
+        raise ValueError(
+            "input_manifest.execution.pricing_model_version must be "
+            f"{_PRICING_MODEL_VERSION!r}")
+    if realism_gap_model_version != _REALISM_GAP_MODEL_VERSION:
+        raise ValueError(
+            "input_manifest.execution.realism_gap_model_version must be "
+            f"{_REALISM_GAP_MODEL_VERSION!r}")
+    return (latency, slippage_cap_bps, fee_model_version,
+            pricing_model_version, realism_gap_model_version)
+
+
 def validate_historical_input_manifest(
         manifest: Mapping[str, object], *, quote_rows: Tuple[dict, ...],
         symbol: str, instrument_id: int, dataset: str, schema: str,
@@ -301,61 +410,10 @@ def validate_historical_input_manifest(
     universe_hypothesis_id, universe_selection_rule, universe_symbols = (
         _validate_universe_manifest(manifest, symbol=symbol))
 
-    calendar = manifest.get("calendar")
-    if not isinstance(calendar, dict):
-        raise ValueError("input_manifest.calendar must be an object")
-    calendar_pin = calendar.get("calendar_pin")
-    sessions = calendar.get("sessions")
-    if not isinstance(calendar_pin, str) or not calendar_pin:
-        raise ValueError("input_manifest.calendar.calendar_pin must be a string")
-    if not isinstance(sessions, dict) or not sessions:
-        raise ValueError("input_manifest.calendar.sessions must be a non-empty object")
-    for session_date, window in sessions.items():
-        if not isinstance(session_date, str) or not isinstance(window, dict):
-            raise ValueError("input_manifest.calendar.sessions entries are invalid")
-        for field in ("rth_open_utc", "rth_close_utc"):
-            if not isinstance(window.get(field), str):
-                raise ValueError(
-                    f"input_manifest.calendar.sessions.{session_date}.{field} "
-                    "must be a string")
-            _parse_utc(window[field])
-
-    corporate_actions = manifest.get("corporate_actions")
-    if not isinstance(corporate_actions, dict):
-        raise ValueError("input_manifest.corporate_actions must be an object")
-    blackouts = corporate_actions.get("blackout_session_dates_et", [])
-    if (not isinstance(blackouts, list)
-            or any(not isinstance(item, str) for item in blackouts)):
-        raise ValueError(
-            "input_manifest.corporate_actions.blackout_session_dates_et "
-            "must be a list of strings")
-
-    execution = manifest.get("execution")
-    if not isinstance(execution, dict):
-        raise ValueError("input_manifest.execution must be an object")
-    latency = execution.get("latency_budget_ms")
-    if isinstance(latency, bool) or not isinstance(latency, int) or latency < 250:
-        raise ValueError(
-            "input_manifest.execution.latency_budget_ms must be an int >= 250")
-    slippage_cap_bps = _parse_manifest_decimal(
-        execution.get("slippage_cap_bps"),
-        path="input_manifest.execution.slippage_cap_bps")
-    if slippage_cap_bps <= 0:
-        raise ValueError("input_manifest.execution.slippage_cap_bps must be > 0")
-    fee_model_version = execution.get("fee_model_version")
-    pricing_model_version = execution.get("pricing_model_version")
-    realism_gap_model_version = execution.get("realism_gap_model_version")
-    if fee_model_version != FEE_MODEL_VERSION:
-        raise ValueError(
-            f"input_manifest.execution.fee_model_version must be {FEE_MODEL_VERSION!r}")
-    if pricing_model_version != _PRICING_MODEL_VERSION:
-        raise ValueError(
-            "input_manifest.execution.pricing_model_version must be "
-            f"{_PRICING_MODEL_VERSION!r}")
-    if realism_gap_model_version != _REALISM_GAP_MODEL_VERSION:
-        raise ValueError(
-            "input_manifest.execution.realism_gap_model_version must be "
-            f"{_REALISM_GAP_MODEL_VERSION!r}")
+    calendar_pin, sessions = _parse_calendar_block(manifest)
+    blackouts = _parse_blackout_dates(manifest)
+    (latency, slippage_cap_bps, fee_model_version, pricing_model_version,
+     realism_gap_model_version) = _parse_execution_block(manifest)
 
     _validate_quote_row_quality(
         quote_rows, dataset=dataset, schema=schema, symbol=symbol,
@@ -370,7 +428,7 @@ def validate_historical_input_manifest(
         instrument_id=instrument_id,
         calendar_pin=calendar_pin,
         session_windows=sessions,
-        ca_blackout_session_dates_et=frozenset(blackouts),
+        ca_blackout_session_dates_et=blackouts,
         latency_budget_ms=latency,
         slippage_cap_bps=slippage_cap_bps,
         fee_model_version=fee_model_version,
@@ -379,6 +437,159 @@ def validate_historical_input_manifest(
         universe_hypothesis_id=universe_hypothesis_id,
         universe_selection_rule=universe_selection_rule,
         universe_symbols=universe_symbols,
+    )
+
+
+def _validate_universe_block(
+        manifest: Mapping[str, object]) -> tuple[str, str, Tuple[str, ...]]:
+    """Universe block validation for the cross-sectional manifest (no single CLI
+    symbol; the per-symbol ``symbols`` data block is cross-checked separately)."""
+    universe = manifest.get("universe")
+    if not isinstance(universe, Mapping):
+        raise ValueError("input_manifest.universe must be an object")
+    hypothesis_id = universe.get("hypothesis_id")
+    selection_rule = universe.get("selection_rule")
+    raw_symbols = universe.get("symbols")
+    if not isinstance(hypothesis_id, str) or not hypothesis_id:
+        raise ValueError(
+            "input_manifest.universe.hypothesis_id must be a non-empty string")
+    if not isinstance(selection_rule, str) or not selection_rule:
+        raise ValueError(
+            "input_manifest.universe.selection_rule must be a non-empty string")
+    if (not isinstance(raw_symbols, list) or not raw_symbols
+            or any(not isinstance(item, str) or not item for item in raw_symbols)):
+        raise ValueError(
+            "input_manifest.universe.symbols must be a non-empty list of strings")
+    symbols = tuple(raw_symbols)
+    if len(set(symbols)) != len(symbols):
+        raise ValueError("input_manifest.universe.symbols must be unique")
+    return hypothesis_id, selection_rule, symbols
+
+
+def validate_historical_cross_sectional_manifest(
+        manifest: Mapping[str, object], *,
+        symbol_quote_rows: TypingMapping[str, Iterable[dict]],
+        dataset: str, schema: str, data_pin: str
+        ) -> HistoricalCrossSectionalManifest:
+    """Validate a hash-bound M7c multi-symbol manifest against per-symbol quote rows.
+
+    One manifest declares the predeclared universe block plus a per-symbol data binding
+    (``symbols``: ``{symbol: {instrument_id, row_count, quote_rows_sha256}}``). The
+    universe block, the per-symbol data block, and the supplied ``symbol_quote_rows`` must
+    cover EXACTLY the same symbol set. Each symbol's ``data_pin`` is DERIVED from the
+    manifest hash + symbol (never stored in the body — that would be circular), and the
+    top-level ``data_pin`` binds the universe-level manifest hash.
+    """
+    if not isinstance(manifest, Mapping):
+        raise ValueError("input_manifest must be a mapping")
+    if manifest.get("v") != _MANIFEST_VERSION:
+        raise ValueError(f"input_manifest.v must be {_MANIFEST_VERSION}")
+    manifest_hash = _require_str(manifest, "manifest_hash")
+    if manifest_hash != _manifest_hash(manifest):
+        raise ValueError("input_manifest.manifest_hash does not match manifest body")
+
+    manifest_dataset = _require_str(manifest, "dataset")
+    manifest_schema = _require_str(manifest, "schema")
+    interval = _require_str(manifest, "interval")
+    source_id_prefix = _require_str(manifest, "source_id_prefix")
+    if manifest_dataset != dataset:
+        raise ValueError("input_manifest.dataset does not match CLI dataset")
+    if manifest_schema != schema:
+        raise ValueError("input_manifest.schema does not match CLI schema")
+    if interval != "1m":
+        raise ValueError("input_manifest.interval must be '1m'")
+    if source_id_prefix != "historical":
+        raise ValueError("input_manifest.source_id_prefix must be 'historical'")
+    normalizer_id = _require_str(manifest, "normalizer_id")
+    if normalizer_id != _NORMALIZER_ID:
+        raise ValueError(f"input_manifest.normalizer_id must be {_NORMALIZER_ID!r}")
+    expected_pin = _expected_data_pin(
+        dataset=dataset, schema=schema, interval=interval,
+        source_id_prefix=source_id_prefix, manifest_hash=manifest_hash)
+    if data_pin != expected_pin:
+        raise ValueError("data_pin does not match input manifest hash")
+
+    hypothesis_id, selection_rule, universe_symbols = _validate_universe_block(manifest)
+
+    symbols_block = manifest.get("symbols")
+    if not isinstance(symbols_block, Mapping) or not symbols_block:
+        raise ValueError("input_manifest.symbols must be a non-empty object")
+    if set(symbols_block) != set(universe_symbols):
+        raise ValueError(
+            "input_manifest.symbols must cover exactly the universe symbols")
+    rows_by_symbol = {sym: tuple(rows) for sym, rows in symbol_quote_rows.items()}
+    if set(rows_by_symbol) != set(universe_symbols):
+        missing = sorted(set(universe_symbols) - set(rows_by_symbol))
+        extra = sorted(set(rows_by_symbol) - set(universe_symbols))
+        raise ValueError(
+            "symbol_quote_rows must cover exactly the universe symbols "
+            f"(missing={missing}, extra={extra})")
+
+    instrument_ids: dict = {}
+    symbol_data_pins: dict = {}
+    for symbol in universe_symbols:
+        entry = symbols_block[symbol]
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"input_manifest.symbols.{symbol} must be an object")
+        instrument_id = entry.get("instrument_id")
+        if isinstance(instrument_id, bool) or not isinstance(instrument_id, int):
+            raise ValueError(
+                f"input_manifest.symbols.{symbol}.instrument_id must be an int")
+        row_count = entry.get("row_count")
+        if isinstance(row_count, bool) or not isinstance(row_count, int):
+            raise ValueError(
+                f"input_manifest.symbols.{symbol}.row_count must be an int")
+        quote_hash = entry.get("quote_rows_sha256")
+        if not isinstance(quote_hash, str) or not quote_hash:
+            raise ValueError(
+                f"input_manifest.symbols.{symbol}.quote_rows_sha256 "
+                "must be a non-empty string")
+        rows = rows_by_symbol[symbol]
+        if row_count != len(rows):
+            raise ValueError(
+                f"input_manifest.symbols.{symbol}.row_count does not match quote rows")
+        if quote_hash != _quote_rows_sha256(rows):
+            raise ValueError(
+                f"input_manifest.symbols.{symbol}.quote_rows_sha256 "
+                "does not match rows")
+        _validate_quote_row_quality(
+            rows, dataset=dataset, schema=schema, symbol=symbol,
+            instrument_id=instrument_id)
+        instrument_ids[symbol] = instrument_id
+        symbol_data_pins[symbol] = f"{expected_pin}:{symbol}"
+
+    calendar_pin, sessions = _parse_calendar_block(manifest)
+    blackouts = _parse_blackout_dates(manifest)
+    (latency, slippage_cap_bps, fee_model_version, pricing_model_version,
+     realism_gap_model_version) = _parse_execution_block(manifest)
+    # Horizon is a decision-affecting parameter (exit timing / fill probability) and is
+    # cross-sectional-only, so it is bound here rather than in the shared execution
+    # parser. It must be hash-bound and passed through, never silently defaulted; the
+    # runner rejects a horizon absent from the configured horizons.
+    horizon = manifest["execution"].get("horizon")
+    if not isinstance(horizon, str) or not horizon:
+        raise ValueError(
+            "input_manifest.execution.horizon must be a non-empty string")
+
+    return HistoricalCrossSectionalManifest(
+        manifest_hash=manifest_hash,
+        dataset=dataset,
+        schema=schema,
+        interval=interval,
+        calendar_pin=calendar_pin,
+        session_windows=sessions,
+        ca_blackout_session_dates_et=blackouts,
+        latency_budget_ms=latency,
+        slippage_cap_bps=slippage_cap_bps,
+        horizon=horizon,
+        fee_model_version=fee_model_version,
+        pricing_model_version=pricing_model_version,
+        realism_gap_model_version=realism_gap_model_version,
+        universe_hypothesis_id=hypothesis_id,
+        universe_selection_rule=selection_rule,
+        universe_symbols=universe_symbols,
+        instrument_ids=instrument_ids,
+        symbol_data_pins=symbol_data_pins,
     )
 
 
@@ -1847,6 +2058,34 @@ def write_m7_historical_diagnostic_index(
     return HistoricalDiagnosticIndexResult(output_path=output, payload=payload)
 
 
+def _guard_production_artifact_dir(
+        artifacts_dir, *, production_artifacts_dir,
+        allow_reviewed_artifact: bool) -> Path:
+    """Enforce the ``artifacts/backtests`` write guard shared by the historical
+    artifact writers: a write may only target the EXACT production directory (never a
+    nested path), and only with the reviewed flag set. Returns the output dir."""
+    output_dir = Path(artifacts_dir)
+    production_dir = (
+        Path(production_artifacts_dir).resolve()
+        if production_artifacts_dir is not None
+        else PRODUCTION_ARTIFACTS_DIR
+    )
+    try:
+        relative_to_production = output_dir.resolve().relative_to(production_dir)
+    except ValueError:
+        relative_to_production = None
+    if relative_to_production is not None:
+        if relative_to_production != Path("."):
+            raise HistoricalArtifactWriteRefused(
+                "historical artifact writes must target the exact "
+                "artifacts/backtests directory, not a nested path")
+        if not allow_reviewed_artifact:
+            raise HistoricalArtifactWriteRefused(
+                "historical artifact write to artifacts/backtests requires "
+                "--allow-reviewed-artifact")
+    return output_dir
+
+
 def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
                                  symbol: str, instrument_id: int,
                                  rules_hash: str, data_pin: str,
@@ -1871,26 +2110,9 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
         data_pin=data_pin,
     )
     strategy_for_id(strategy_id)
-    output_dir = Path(artifacts_dir)
-    production_dir = (
-        Path(production_artifacts_dir).resolve()
-        if production_artifacts_dir is not None
-        else PRODUCTION_ARTIFACTS_DIR
-    )
-    resolved_output_dir = output_dir.resolve()
-    try:
-        relative_to_production = resolved_output_dir.relative_to(production_dir)
-    except ValueError:
-        relative_to_production = None
-    if relative_to_production is not None:
-        if relative_to_production != Path("."):
-            raise HistoricalArtifactWriteRefused(
-                "historical artifact writes must target the exact "
-                "artifacts/backtests directory, not a nested path")
-        if not allow_reviewed_artifact:
-            raise HistoricalArtifactWriteRefused(
-                "historical artifact write to artifacts/backtests requires "
-                "--allow-reviewed-artifact")
+    output_dir = _guard_production_artifact_dir(
+        artifacts_dir, production_artifacts_dir=production_artifacts_dir,
+        allow_reviewed_artifact=allow_reviewed_artifact)
 
     backtest = run_historical_backtest(
         quote_rows=quote_rows_t,
@@ -1935,6 +2157,127 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
     criteria = evaluate_paper_phase_criteria(payload["metrics"])
     artifact_path = output_dir / f"{strategy_id}.json"
     result = HistoricalArtifactBuildResult(
+        artifact_path=artifact_path,
+        payload=payload,
+        criteria=criteria,
+        backtest=backtest,
+    )
+    if not criteria.passed:
+        return result
+    if not allow_reviewed_artifact:
+        raise HistoricalArtifactWriteRefused(
+            "historical artifact writes require --allow-reviewed-artifact")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(dumps(payload), encoding="utf-8")
+    return result
+
+
+def write_m7_historical_cross_sectional_artifact(
+        *, artifacts_dir,
+        symbol_quote_rows: TypingMapping[str, Iterable[dict]],
+        rules_hash: str, data_pin: str, dataset: str = "EQUS.MINI",
+        schema: str = "tbbo", created_utc: str,
+        input_manifest: Mapping[str, object], builder_git_commit: str,
+        allow_reviewed_artifact: bool, strategy_id: str = _rs.STRATEGY_ID,
+        agent_rules_path=None, production_artifacts_dir=None
+        ) -> HistoricalCrossSectionalArtifactBuildResult:
+    """M7c phase-1 reviewed cross-sectional artifact writer (research packet step 5).
+
+    Binds a hash-bound multi-symbol manifest, runs the cross-sectional decision harness
+    over the predeclared universe, and aggregates the two long legs into ONE
+    ``(strategy_id, rules_hash, data_pin)`` v2 artifact (FD-P1-10). The pinned verifier
+    benchmark stays ``exposure_matched_midbar_v1`` (from ``trade.benchmark_pnl_usd``); the
+    ``universe_equal_weight_long_v1`` attribution and the breadth/leg diagnostics ride in
+    provenance for the Phase Gate review (FD-P1-9). Production writes obey the same exact
+    ``artifacts/backtests`` directory + reviewed-flag guard as the single-symbol writer.
+    """
+    if strategy_id != _rs.STRATEGY_ID:
+        raise ValueError(
+            f"cross-sectional artifact only supports {_rs.STRATEGY_ID!r}, "
+            f"got {strategy_id!r}")
+    rows_by_symbol = {sym: tuple(rows) for sym, rows in symbol_quote_rows.items()}
+    manifest = validate_historical_cross_sectional_manifest(
+        input_manifest, symbol_quote_rows=rows_by_symbol, dataset=dataset,
+        schema=schema, data_pin=data_pin)
+    output_dir = _guard_production_artifact_dir(
+        artifacts_dir, production_artifacts_dir=production_artifacts_dir,
+        allow_reviewed_artifact=allow_reviewed_artifact)
+
+    backtest = run_historical_cross_sectional_backtest(
+        symbol_quote_rows=rows_by_symbol,
+        universe=manifest.universe_symbols,
+        instrument_ids=manifest.instrument_ids,
+        rules_hash=rules_hash,
+        symbol_data_pins=manifest.symbol_data_pins,
+        dataset=dataset,
+        schema=schema,
+        agent_rules_path=agent_rules_path,
+        strategy_id=strategy_id,
+        latency_ms=manifest.latency_budget_ms,
+        slippage_cap_bps=manifest.slippage_cap_bps,
+        horizon=manifest.horizon,
+        session_windows=manifest.session_windows,
+        ca_blackout_session_dates_et=manifest.ca_blackout_session_dates_et,
+    )
+    payload = build_v2_artifact_payload(
+        strategy_id=strategy_id,
+        rules_hash=rules_hash,
+        data_pin=data_pin,
+        trades=backtest.trades,
+        skips=backtest.skips,
+        created_utc=created_utc,
+        input_manifest_hash=manifest.manifest_hash,
+        builder_git_commit=builder_git_commit,
+        tier="historical_reviewed",
+        allocated_notional_usd=_DEFAULT_ALLOCATED_NOTIONAL,
+        p95_realism_gap_bps=backtest.p95_realism_gap_bps,
+        max_single_fill_divergence_bps=backtest.max_single_fill_divergence_bps,
+        ca_blackout_skips=backtest.ca_blackout_skip_count,
+        data_quality_skip_count=backtest.data_quality_skip_count,
+        provenance_extra={
+            "normalizer_id": _NORMALIZER_ID,
+            "calendar_pin": manifest.calendar_pin,
+            "fee_model_version": manifest.fee_model_version,
+            "pricing_model_version": manifest.pricing_model_version,
+            "realism_gap_model_version": manifest.realism_gap_model_version,
+            "universe_hypothesis_id": manifest.universe_hypothesis_id,
+            "universe_selection_rule": manifest.universe_selection_rule,
+            "universe_symbols": list(manifest.universe_symbols),
+            "latency_budget_ms": str(manifest.latency_budget_ms),
+            "slippage_cap_bps": str(manifest.slippage_cap_bps),
+            "horizon": manifest.horizon,
+            # FD-P1-9: the equal-weight-long benchmark attribution rides in provenance
+            # (additional metric only; the pinned verifier benchmark is unchanged).
+            # Values are strings so the closed-schema verifier accepts them.
+            "universe_equal_weight_long_benchmark":
+                UNIVERSE_EQUAL_WEIGHT_LONG_BENCHMARK,
+            "universe_equal_weight_long_benchmark_pnl_usd":
+                str(backtest.equal_weight_long_benchmark_net_usd),
+            "universe_equal_weight_long_active_pnl_usd":
+                str(backtest.equal_weight_long_active_pnl_usd),
+            # Phase Gate breadth/concentration + decision-flow evidence, carried as one
+            # canonical-JSON string so the single hash-bound artifact stays self-
+            # sufficient for the go/no-go review without a separate sidecar.
+            "cross_sectional_diagnostics": dumps({
+                "per_symbol_leg_counts": dict(backtest.per_symbol_leg_counts),
+                "exclusion_reason_counts": dict(backtest.exclusion_reason_counts),
+                "acting_decision_count": backtest.acting_decision_count,
+                "insufficient_valid_decision_count":
+                    backtest.insufficient_valid_decision_count,
+                "overlap_suppressed_leg_count":
+                    backtest.overlap_suppressed_leg_count,
+                "benchmark_leg_fill_count": backtest.benchmark_leg_fill_count,
+                "benchmark_leg_skip_count": backtest.benchmark_leg_skip_count,
+                "decision_count": backtest.decision_count,
+                "candidate_count": backtest.candidate_count,
+                "bar_count": backtest.bar_count,
+            }),
+        },
+    )
+    criteria = evaluate_paper_phase_criteria(payload["metrics"])
+    artifact_path = output_dir / f"{strategy_id}.json"
+    result = HistoricalCrossSectionalArtifactBuildResult(
         artifact_path=artifact_path,
         payload=payload,
         criteria=criteria,
