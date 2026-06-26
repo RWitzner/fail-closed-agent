@@ -49,13 +49,20 @@ the real harness, plus a tier-2b live-pull seam (`pull_normalized_window`) that 
 source and **fails closed**; the real `databento` `get_range` + DBN `bbo-1m` decode is lazily imported and flagged
 tier-2b-UNVERIFIED (raises) until verified against the live API. Two adversarial reviews (5- and 4-dimension, each
 finding independently verified) returned `changes_required`; all must-fixes were applied (**1761 tests green**).
-**Window decision (Robin): a completed 20+-session FORWARD window after 2026-06-13 — not available until ~mid-July
-2026, so the paid pull waits on the window closing. Still pending before any edge verdict: (1) wire the real
-`get_range` + verify the DBN decode against the live API (tier-2b) + a thin backfill CLI, built close to the July
-pull; (2) the credentialed forward-window pull → reviewed artifact → Phase Gate go/no-go — so no reviewed artifact
-verifies `ok` yet.** Production `artifacts/backtests/` still contains only `.gitkeep`; paper edge-validation cannot
-start until a reviewed artifact verifies `ok`. M8/live remains blocked until passing artifact + realized paper edge
-satisfy the M7-pinned criteria plus the separate two-key/live runbook requirements. Merge-to-main decision still open.
+The live `bbo-1m` pull is wired + verified against the real `EQUS.MINI` `BBOMsg` record, and **the credentialed
+clean-window run is DONE: M7c phase-1 NULLED on the packet's preferred clean window `2026-03-10→2026-04-08` (21
+sessions, 1144 trades, staged-only, no production write).** Broad NO-GO: net `-$839.68`, active `-$120.65` vs the
+pinned `exposure_matched_midbar_v1` (the `+$405.64` active vs `universe_equal_weight_long_v1` only means the basket
+lost more), profit factor `0.55`, and the realism gaps blow the caps (p95 `29.8` > 15, max `97.5` > 50). Breadth
+was broad (10 symbols traded, max 12.3% of legs / 16.8% of net-positive PnL — no concentration breach), so this is
+**decisive evidence the binding constraint is the SUBSTRATE (L1 1-minute BBO), not the long-only strategy shape.**
+**Per the predeclared Phase Gate + the two-family search-budget stop rule (momentum = family 1 nulled;
+relative-strength = family 2 now nulled clean), the next step is a SUBSTRATE decision (longer decision/holding
+horizon, L2/MBP-10 depth-aware fill tier, or wider liquidity-screened universe) — NOT the phase-2 short-side build
+and NOT a third same-substrate family. That substrate direction is Robin's open call.** No reviewed artifact verifies
+`ok`; production `artifacts/backtests/` still contains only `.gitkeep`; the staged run + quotes live under gitignored
+`reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (reproducible from the committed backfill tool). Paper
+edge-validation + M8/live remain blocked. Merge-to-main decision still open.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 

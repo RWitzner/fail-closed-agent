@@ -289,13 +289,26 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   zero-row guard in the pure builder; fail-closed live adapter (None/float/bool/non-positive rejects, `vendor_seq`+ISO
   `ts_recv` per the recorder `parse` contract, no silent `ts_recv` fallback). RED→GREEN:
   `tests/agent/test_m7c_historical_backfill.py` (21).
-  **Window decision (Robin):** use a completed 20+-full-RTH-session FORWARD window after 2026-06-13 (the packet's
-  preferred `2026-03-10→2026-04-08` was not chosen). As of 2026-06-26 only ~10 sessions have completed after
-  2026-06-13, so a complete forward window is not available until ~mid-July 2026 — the paid pull waits on the window
-  closing. **Still pending before any edge verdict:** (1) wire the real `get_range` + verify `_dbn_bbo1m_record_to_event_dict`
-  against the live API (tier-2b) + a thin backfill CLI, built close to the July pull; (2) the credentialed forward-window
-  pull → reviewed artifact → Phase Gate go/no-go. No production artifact written; `artifacts/backtests/` remains
-  `.gitkeep`; paper/M8 blocked; run gates and pinned criteria unchanged.
+  **Window (Robin):** first chose a FORWARD window after 2026-06-13, then — since only ~10 sessions had completed by
+  2026-06-26 (a complete 20+-session forward window is not available until ~mid-July) — pivoted to the packet's
+  PREFERRED clean window `2026-03-10→2026-04-08` (past → available now, clean → no prior RS metrics).
+- **M7c phase-1 credentialed clean-window run — broad NULL / NO-GO (2026-06-26; tool fix committed `dd2f2bc`; run
+  staged-only):** wired + live-verified the credentialed `bbo-1m` pull (`_live_quote_event_source` → real `databento`
+  `timeseries.get_range` → `_dbn_bbo1m_record_to_event_dict` verified against the live `EQUS.MINI` `BBOMsg`: flat
+  `*_00` top-of-book, int 1e-9 prices, UNDEF price/timestamp drops, RTH filter; cost ≈ $0.03). Pulled the clean
+  window (10 symbols, 21 sessions, ~8.2k bars/symbol), built the hash-bound cross-sectional manifest, ran the writer
+  **staged** under gitignored `reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (NOT `artifacts/backtests/`).
+  **Result:** 1144 trades / 21 traded sessions; net `-$839.68`; profit factor `0.55`; avg `-8.78` bps; active
+  `-$120.65` vs the pinned `exposure_matched_midbar_v1` (active `+$405.64` vs `universe_equal_weight_long_v1` only
+  because that basket lost more); realism gaps `p95 29.8` / `max 97.5` bps exceed the `15`/`50` caps. Breadth was
+  broad (10 symbols traded, max 12.3% of gross legs / 16.8% of net-positive PnL — **no concentration breach**), so the
+  null is a genuine edge failure, not a single-symbol artifact; the realism-gap failures independently flag the
+  L1-1min execution substrate. **DECISION (predeclared Phase Gate + the two-family search-budget stop rule): momentum
+  = family 1 (nulled); relative-strength = family 2 (now nulled on a clean window) → route to a SUBSTRATE decision
+  (longer decision/holding horizon, L2/MBP-10 depth-aware fill tier, or wider liquidity-screened universe). NOT the
+  phase-2 short-side build; NOT a third same-substrate family. The substrate direction is Robin's open call.** No
+  production artifact written; `artifacts/backtests/` remains `.gitkeep`; paper/M8 blocked; run gates and pinned
+  criteria unchanged.
 
 ## Locked decisions
 
