@@ -23,14 +23,25 @@ findings without re-deriving state. The exact prompt sent to GPT is embedded ver
 - Scope = **longer HOLD only**, interval `1m`, config-only (runnable today). Coarser DECISION bars are
   explicitly **deferred** (the resampler hard-rejects non-`1m`, coarsening confounds the frozen feature
   windows, and the realism model is uncalibrated at coarser cadence).
+- **Rev 2 (2026-07-02):** a full-project review (4 read-only deep-review agents + an own-run reproduction)
+  hardened the packet before this GPT review. It now carries: a MEASURED pre-run feasibility read (the
+  horizon-invariant entry-leg realism floor — p95 ≈ 14.1 bps in the 120m-survivor population = 94% of the
+  15-bps cap; survivor combined gap p95 ≈ 31.7), the fix-A-contract baseline C2 must be compared against
+  (**1147 trades / net −$858.01 / active −$111.51 / p95 29.949 / max 97.484** — the staged pre-fix quotes no
+  longer validate at HEAD), a max-cap order-statistic caveat, pinned latency/slippage numerics, a pinned C1/C2
+  run order, a GO-path lead-time acknowledgement, operational prerequisites (calendar fixture, committed
+  driver), and a `PLAN.md` substrate-search budget (M7d = substrate experiment 1 of at most 2). Three general
+  harness-correctness fixes are committed (cross-sectional decision-bar FD-2 eligibility; both writers bind
+  `rules_hash` to the config-derived hash; builder `horizon` required-explicit) — all byte-identical on the
+  baseline. Suite = 1777 tests green.
 
 ## Repo state (as of this handoff)
 
-- Branch: **`main`** (the M7 stack was fast-forward-merged 2026-06-26). HEAD = the commit that introduces this
-  handoff + the M7d packet (`git log -1`). Prior context: `0e7d136` (docs-sync: merge-to-main DONE) on top of
-  `19786cf` (M7 tip; the 4 GPT-review fixes from the M7c null review). **`main` was at M2 (`a82be6d`) before
-  the 2026-06-26 FF merge.**
-- Offline suite: **1773 tests green** — `python3 -m unittest discover -s tests -p 'test_*.py' -t .`
+- Branch: **`main`** (the M7 stack was fast-forward-merged 2026-06-26). HEAD = the commit that introduces the
+  current packet rev (rev 1 = `013f9b6`; rev 2 = the 2026-07-02 review/fix commit; `git log -1`). Prior context:
+  `0e7d136` (docs-sync: merge-to-main DONE) on top of `19786cf` (M7 tip; the 4 GPT-review fixes from the M7c
+  null review). **`main` was at M2 (`a82be6d`) before the 2026-06-26 FF merge.**
+- Offline suite: **1777 tests green** — `python3 -m unittest discover -s tests -p 'test_*.py' -t .`
   (the `-t .` is required; modules import as `agent.*` / `recorder.*` from `scripts/`).
 - Run gates committed `false`; `artifacts/backtests/` holds only `.gitkeep`; no production artifact written.
   `.secrets/databento.json` = historical-only Databento key.
@@ -45,8 +56,8 @@ re-verified against code by the orchestrator, were:
 
 1. **A FALSE causal claim (realism-causality blocker).** The draft asserted the realism gap is "structurally
    near-independent of holding horizon." This is wrong. The modeled fills are `entry_fill = entry.ask`,
-   `exit_fill = exit_bar.bid` (`backtest_historical.py:1527-1528`), so the per-trade gap reduces algebraically to
-   `entry_half_spread_bps + exit_half_spread_bps` (`_realism_gap_bps`, `backtest_historical.py:1556-1570`), and
+   `exit_fill = exit_bar.bid` (`backtest_historical.py:1544-1545`), so the per-trade gap reduces algebraically to
+   `entry_half_spread_bps + exit_half_spread_bps` (`_realism_gap_bps`, `backtest_historical.py:1573-1587`), and
    the **exit** leg is read from `exit_bar = decision + horizon` — i.e. **horizon-dependent**. It was the mirror
    image of the "substrate proven" overclaim GPT flagged in the M7c review. Corrected to an honest,
    symmetrically-hedged claim; the entry-vs-exit-leg realism decomposition is the predeclared falsification
@@ -64,6 +75,13 @@ clearing the half-spread) → routing now names passive/limit execution + tighte
 as the causally-matched levers; acknowledged reduced statistical power (a clean C2 GO is provisional pending a
 confirmation holdout before paper). GPT should treat all of these as **claims to re-attack**, not settled.
 
+**Rev 2 (2026-07-02) additions to attack:** the packet now contains a measured pre-run feasibility section
+computed from the snooped fix-A baseline (entry-leg floor / late-day-drop re-composition), a max-cap
+sample-size caveat, and a substrate-search budget. These were produced by the project's own review loop —
+attack them too: is the 120m-survivor subset of 30m trades a fair proxy for C2's entry population; is
+"measured on snooped data" itself free of design-contamination risk; is the p99-diagnostic + p95-margin
+interpretation of the max cap sound; and is a 2-substrate budget the right K?
+
 ## The experiment in brief (what GPT is reviewing)
 
 - **Strategy shape unchanged:** `relative_strength.long_only_proxy_v1` (rank → top-2 equal-notional long,
@@ -77,7 +95,7 @@ confirmation holdout before paper). GPT should treat all of these as **claims to
 - **Pinned M7 criteria UNCHANGED** (`paper_phase_criteria.py`): ≥20 sessions / ≥30 trades / ≥5 traded sessions,
   PF ≥ 1.10, max-drawdown ≤ 1.50%, worst-day ≤ 0.75%, p95 realism gap ≤ 15, max single-fill divergence ≤ 50,
   positive net PnL, positive active PnL vs **both** benchmarks (`exposure_matched_midbar_v1` in
-  `paper_phase_criteria.py`; `universe_equal_weight_long_v1` in the writer at `backtest_historical.py:2315`),
+  `paper_phase_criteria.py`; `universe_equal_weight_long_v1` in the writer at `backtest_historical.py:2347`),
   positive avg-trade-bps, zero quality-breach counts; plus the breadth/concentration rule.
 - **Decision rule:** GO iff C2 clears the full pinned matrix + breadth on the fresh holdout, with comfortable
   margin (not at the floor), and even then is provisional pending a confirmation holdout. Anything short = NULL.
@@ -89,9 +107,10 @@ confirmation holdout before paper). GPT should treat all of these as **claims to
 ## Files / code the packet depends on (GPT should verify the harness-fit claims)
 
 - `docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md` — the artifact under review.
-- `scripts/agent/backtest_historical.py` — `_realism_gap_bps`/`_gap_summary` (1556-1570), the fills (1527-1529),
-  `_entry_bar_end` +1m (723-724), the horizon validation (1796-1798), the equal-weight writer gate (2315), the
-  interval validators (414-415, 526-527).
+- `scripts/agent/backtest_historical.py` — `_realism_gap_bps`/`_gap_summary` (1573-1587), the fills (1544-1546),
+  `_entry_bar_end` +1m (740-741), the horizon validation (1813-1815), the equal-weight writer gate (2347), the
+  interval validators (414-415, 526-527), plus the 2026-07-02 fixes: decision-bar FD-2 eligibility in the
+  cross-sectional loop (~1859-1871) and `_require_config_derived_rules_hash` (~636-646), called by both writers.
 - `scripts/agent/signal_snapshot.py` — `horizon_gate` + `session_horizon_crosses_close` (160-178).
 - `scripts/agent/signal_config.py` — horizons/coefficients validation; the `1m`-only interval freeze (117-119).
 - `scripts/agent/bar_series.py` — `resample_midbars` non-`1m` hard-reject (114-115).
@@ -145,7 +164,7 @@ This system will eventually gate real capital. The artifact under review is NOT 
 
 - Autonomous, **paper-first, fail-closed** US-equities agent. Hard posture: NO real-money orders; run gates (`config/agent_rules.json: enabled`, `paper_trading.enabled`; `config/risk_rules.json: live_trading.enabled`) are committed `false`; live needs two-key arming. Tests make no network calls / no credential reads. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`; project state + safety rules: `CLAUDE.md`, `PLAN.md`.
 - History: two predeclared strategy families on the L1 1-minute BBO substrate have nulled — momentum (family 1) and relative-strength (family 2; the M7c phase-1 long-only proxy nulled broadly on a clean window: net −$839.68, PF 0.55, active −$120.65 vs the pinned exposure-matched benchmark, AND realism caps blown p95 29.8>15 / max 97.5>50). The predeclared two-family stop rule then forces a **substrate decision** rather than a third same-substrate family. The chosen (cheapest) substrate axis is a **longer holding horizon on the same L1 data**.
-- Repo is on branch `main` (the M7 stack was just fast-forward-merged); offline suite 1773 tests green via `python3 -m unittest discover -s tests -p 'test_*.py' -t .`.
+- Repo is on branch `main` (the M7 stack was just fast-forward-merged); offline suite 1777 tests green via `python3 -m unittest discover -s tests -p 'test_*.py' -t .`.
 
 ## The artifact to review
 
@@ -155,7 +174,7 @@ This packet was already hardened by an internal multi-agent design+critique pass
 
 ## Code to verify the packet's claims against (read these; do not trust the packet's citations)
 
-- `scripts/agent/backtest_historical.py` — the modeled fills `entry_fill = entry.ask` / `exit_fill = exit_bar.bid` (~1527-1529); `_realism_gap_bps` / `_gap_summary` (~1556-1570); `_entry_bar_end` hardcoded +1 minute (~723-724); horizon membership validation (~1796-1798); the `universe_equal_weight_long_v1` writer gate (~2315); the interval validators (~414-415, ~526-527).
+- `scripts/agent/backtest_historical.py` — the modeled fills `entry_fill = entry.ask` / `exit_fill = exit_bar.bid` (~1544-1546); `_realism_gap_bps` / `_gap_summary` (~1573-1587); `_entry_bar_end` hardcoded +1 minute (~740-741); horizon membership validation (~1813-1815); the `universe_equal_weight_long_v1` writer gate (~2347); the interval validators (~414-415, ~526-527); the 2026-07-02 fixes (decision-bar FD-2 eligibility in the cross-sectional loop ~1859-1871; `_require_config_derived_rules_hash` ~636-646 called by both writers).
 - `scripts/agent/signal_snapshot.py` — `horizon_gate` and the `session_horizon_crosses_close` drop (~160-178).
 - `scripts/agent/signal_config.py` — horizons/coefficients validation; the interval `1m`-only freeze (~117-119); `rules_hash` over the whole config.
 - `scripts/agent/bar_series.py` — `resample_midbars` non-`1m` hard-reject (~114-115).
@@ -181,7 +200,24 @@ This packet was already hardened by an internal multi-agent design+critique pass
 **F. Is this the right next experiment at all?**
 - Given the honest framing, is the cheap horizon probe worth running before a realism-matched lever, or should the program predeclare passive-execution / tighter-universe / entry-latency instead? Is the gate-family routing the correct way to spend the next substrate dollar?
 
+**G. Rev-2 additions (2026-07-02) — attack these specifically.**
+- The MEASURED pre-run feasibility: from the snooped fix-A baseline the packet claims the horizon-invariant
+  entry-leg realism floor is p95 ≈ 14.1 bps in the 120m-survivor population (94% of the 15 cap; survivor
+  combined gap p95 ≈ 31.7; max(entry_half) 85.8 > 50) and concludes a C2 GO is structurally improbable on
+  realism, so the run's value is the route-A-vs-B edge read. Verify the derivation and the subset construction
+  (is the 120m-survivor subset of 30m trades a fair proxy for C2's entry population?); attack whether measuring
+  on snooped data contaminates the design.
+- The max-cap sample-size caveat: the raw max order statistic loosens mechanically at C2's ~90–350 trades vs
+  the baseline's 1147; the packet answers with "p95 must also clear with margin" + a p99 diagnostic, with NO
+  threshold change. Is that interpretation sound, or should the gate itself be re-specified BEFORE the run?
+- The substrate-search budget (`PLAN.md`): at most 2 substrate experiments on this family line (M7d = 1 of 2),
+  then a documented program STOP absent a fresh mandate. Is K=2 defensible and stated tightly enough to prevent
+  substrate-level p-hacking?
+- Given the measured floor, the pivotal contingency sharpens: should the horizon probe run at all, or should a
+  realism-matched lever (passive/limit execution, tighter-spread universe, entry-latency) be predeclared
+  INSTEAD? Answer explicitly.
+
 ## Output format
 
-For each finding: `[SEVERITY: blocker|high|medium|low] [DIMENSION A–F] title — packet section and/or file:line — evidence (what the packet/code says) — why it's a real problem for a predeclaration — concrete fix`. Then close with an explicit verdict on each dimension and an overall: **APPROVE (mark reviewed) / CHANGES-REQUIRED (list blockers) / RECONSIDER-EXPERIMENT (route elsewhere first)**. Be specific and conservative: only real, actionable findings grounded in the actual code/packet. If a concern is already correctly mitigated by the applied fixes, don't re-raise it. If the design is sound, say so plainly — a clean bill of health is a valid result, but only after a genuine adversarial attempt to break it.
+For each finding: `[SEVERITY: blocker|high|medium|low] [DIMENSION A–G] title — packet section and/or file:line — evidence (what the packet/code says) — why it's a real problem for a predeclaration — concrete fix`. Then close with an explicit verdict on each dimension and an overall: **APPROVE (mark reviewed) / CHANGES-REQUIRED (list blockers) / RECONSIDER-EXPERIMENT (route elsewhere first)**. Be specific and conservative: only real, actionable findings grounded in the actual code/packet. If a concern is already correctly mitigated by the applied fixes, don't re-raise it. If the design is sound, say so plainly — a clean bill of health is a valid result, but only after a genuine adversarial attempt to break it.
 ````

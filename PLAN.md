@@ -5,7 +5,7 @@
 Build an autonomous US-equities trading agent, paper-first but live-like, reusing the Polymarket engineering
 spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-## Current status (2026-06-13)
+## Current status (2026-07-02)
 
 - Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
   workflow), reconciled. All external facts verified against primary sources.
@@ -338,6 +338,39 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   pull/run is gated on Robin's separate go. **Merge-to-main DONE 2026-06-26: `codex/m7-backtest-gate`
   fast-forward-merged into `main` (`main` = `19786cf` = M7 tip; was M2 `a82be6d`; all safety gates verified closed
   first; no remote, locally reversible).**
+- **M7d predeclaration committed + full-project review applied (2026-06-26 → 2026-07-02, 1777 tests green):**
+  the longer-horizon packet + GPT-review handoff were committed `013f9b6`
+  (`docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md`, C2 = `1m`/`120m` sole decider on a
+  fresh fixed-20-session post-2026-06-13 holdout; C1 = `1m`/`60m` descriptive on the snooped window; pinned
+  criteria unchanged; both benchmarks gated). A 2026-07-02 full-project review (4 read-only deep-review agents:
+  backtest core / backfill / safety / methodology + an own-run reproduction; tree git-audited clean) found **no
+  blockers** — the safety checklist passed 12/12 in code (token chokepoint non-bypassable, S1 canaries real
+  end-to-end, two-key arming, no committed secrets; one pre-live MINOR for the M8 checklist: the loss/drawdown
+  auto-kill is SKIPPED on a non-"fresh" account read) — and three M7d-relevant fixes, applied TDD (+4 tests):
+  (1) the cross-sectional runner now requires the DECISION bar to be FD-2-eligible at decision time
+  (`read_eligible_midbar`; late-receipt bars are excluded from the ranked set as `decision_bar_*` exclusion
+  counts — ranked set == tradable set; byte-identical on the clean-window data, where `ts_recv` is the minute
+  boundary); (2) both reviewed-artifact writers now fail closed unless `rules_hash` equals the config-DERIVED
+  hash for the `agent_rules_path` the harness runs (an operator label can no longer decouple the artifact triple
+  from the rules — the M7d horizon config edit changes the derived hash, and the writer will enforce the new one);
+  (3) `build_cross_sectional_input_manifest` requires an explicit `horizon` (silent `30m` default removed). The
+  review also established: the staged `2026-03-10-clean-rs-v1` quotes predate fix A and no longer pass the HEAD
+  validator (102 `ts_event`-outside-session rows), and the fix-A-compliant rerun — rows re-filtered, manifest
+  rebuilt via the committed builder (`90866e90…`) — gives **1147 trades, net −$858.01, active −$111.51 vs
+  `exposure_matched_midbar_v1`, p95 29.949, max 97.484**: the NULL is robust under the current contract and this
+  is the like-for-like baseline for M7d. A measured pre-run feasibility decomposition (snooped window only; per
+  trade gap ≈ entry_half + exit_half) put the horizon-invariant ENTRY-leg realism floor at **p95 ≈ 14.13 bps in
+  the 120m-survivor population (94% of the 15-bps cap; survivor combined gap p95 31.67; max(entry_half) 85.8 >
+  the 50 cap alone)** — an M7d C2 GO is structurally improbable on the realism caps, so the run's decision value
+  is the EDGE read (route A vs B). The packet was revised to **rev 2** accordingly (measured feasibility +
+  fix-A baseline in Evidence Grounding, max-cap order-statistic caveat + p99 diagnostic, pinned
+  latency/slippage numerics, pinned C1/C2 run order, GO-path lead-time note, calendar-fixture + committed-driver
+  operational prerequisites) and the handoff's GPT prompt gained a dimension G attacking the rev-2 additions.
+  Remaining pre-run gaps (in the packet as operational prerequisites): `ExchangeCalendarsScheduleProvider` is a
+  stub (`exchange_calendars` not installed) so holdout sessions need a hand-authored, calendar-cross-checked
+  fixture or the implemented provider; and the pull→build→write orchestration driver must be committed. STATUS =
+  DRAFT rev 2, awaiting Robin's GPT review; the credentialed pull/run stays gated on (review + Robin's separate
+  go + the fresh holdout, complete ~2026-07-14). Paper/M8 blocked; run gates and pinned criteria unchanged.
 
 ## Locked decisions
 
@@ -398,6 +431,15 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   family — it is an explicit substrate decision (a longer decision/holding horizon, an L2/MBP-10 depth-aware fill
   tier, or a wider liquidity-screened universe) or a documented stop. No-edge on a fixed substrate is a substrate
   conclusion, not an invitation to keep reskinning the strategy.
+- **Substrate-search budget (predeclared 2026-07-02):** the substrate axis itself is budgeted, mirroring the
+  two-family rule one level up: at most **two** predeclared substrate experiments on the current relative-strength
+  family line before a **documented program STOP** of the autonomous edge search. The M7d longer-horizon packet is
+  substrate experiment **1 of 2**. If M7d's C2 nulls on the edge gates (route A), the packet's documented STOP
+  applies directly and the remaining slot is NOT auto-spent. If C2 passes edge but fails realism (route B), the
+  single remaining slot may fund ONE realism-matched lever (passive/limit execution, tighter-spread universe, or
+  entry-latency — selected by the predeclared realism decomposition), as its own packet + review + separate go.
+  A second substrate null ends the program: any continuation — including a daily-horizon/EOD family line, which
+  is a NEW substrate — requires a fresh explicit mandate from Robin, not a routing rule.
 - **Paper edge-validation phase** (post-passing-artifact, pre-M8): full autonomous paper run measured against the
   pre-pinned criteria — this run produces the "realized edge" evidence M8 requires.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).

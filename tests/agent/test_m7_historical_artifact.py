@@ -4,6 +4,7 @@ This is distinct from the fixture-only ``m7-backtest`` builder: production
 ``artifacts/backtests`` writes require an explicit reviewed-artifact flag and
 must still produce a normal verifier-compatible v2 artifact.
 """
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -24,11 +25,17 @@ from agent.backtest_historical import (
     write_m7_historical_artifact,
 )
 from agent.serializer import dumps, row_hash
+from agent.signal_config import SignalConfig
 
 
 _STRATEGY_ID = "directional.momentum_v1"
 _STRATEGY_ID_V2 = "directional.momentum_v2"
-_RULES_HASH = "rh-historical-test"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# The writer fails closed unless rules_hash is the DERIVED hash of the config the
+# harness will run, so the fixture must use the real committed-config hash.
+_RULES_HASH = SignalConfig.from_config(
+    json.loads((_REPO_ROOT / "config" / "agent_rules.json").read_text())
+).rules_hash
 
 
 def _historical_rows():
@@ -668,6 +675,29 @@ class TestHistoricalArtifactFlow(unittest.TestCase):
                              False)
             self.assertIn("entry_spread_quintile",
                           payload["friction_buckets"])
+
+
+class TestHistoricalArtifactRulesHashBinding(unittest.TestCase):
+    def test_writer_rejects_rules_hash_not_derived_from_config(self):
+        # Same binding as the cross-sectional writer: the artifact triple must carry
+        # the derived hash of the rules the harness actually ran.
+        rows = _historical_rows()
+        manifest = _manifest(rows)
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                write_m7_historical_artifact(
+                    artifacts_dir=tmp,
+                    quote_rows=rows,
+                    symbol="AAPL",
+                    instrument_id=1001,
+                    rules_hash="rh-not-the-config-hash",
+                    data_pin=_data_pin(manifest),
+                    created_utc="2026-06-13T12:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    allow_reviewed_artifact=False,
+                )
+            self.assertIn("rules_hash", str(ctx.exception))
 
 
 class TestHistoricalArtifactCli(unittest.TestCase):

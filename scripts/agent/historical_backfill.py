@@ -42,7 +42,6 @@ from agent.backtest_historical import (
 
 DEFAULT_INTERVAL = "1m"
 DEFAULT_SOURCE_ID_PREFIX = "historical"
-DEFAULT_HORIZON = "30m"
 DEFAULT_LATENCY_BUDGET_MS = 250
 DEFAULT_SLIPPAGE_CAP_BPS = "25"
 DEFAULT_RTH_OPEN_UTC_TIME = "13:30:00.000000Z"
@@ -190,7 +189,7 @@ def build_cross_sectional_input_manifest(
         blackout_session_dates_et: Sequence[str] = (),
         latency_budget_ms: int = DEFAULT_LATENCY_BUDGET_MS,
         slippage_cap_bps=DEFAULT_SLIPPAGE_CAP_BPS,
-        horizon: str = DEFAULT_HORIZON,
+        horizon: str,
         fee_model_version: str = FEE_MODEL_VERSION,
         pricing_model_version: str = _PRICING_MODEL_VERSION,
         realism_gap_model_version: str = _REALISM_GAP_MODEL_VERSION,
@@ -220,6 +219,10 @@ def build_cross_sectional_input_manifest(
     if empty:
         raise ValueError(
             f"every universe symbol must have at least one quote row; empty: {empty}")
+    # horizon is decision-carrying and hash-bound; it must be an explicit operator
+    # choice (no silent default — M7d predeclares the exact horizon per config).
+    if not isinstance(horizon, str) or not horizon:
+        raise ValueError("horizon must be a non-empty string (e.g. '30m')")
     if instrument_ids is None:
         instrument_ids = instrument_ids_from_rows(rows_by_symbol)
     elif set(instrument_ids) != set(universe_t):
@@ -332,12 +335,15 @@ def _ns_to_iso_utc(ns: int) -> str:
 def _dbn_bbo1m_record_to_event_dict(record, *, symbol: str) -> dict:
     """Adapt one live ``bbo-1m`` DBN record to the recorder ``parse`` input dict.
 
-    tier-2b-UNVERIFIED: the DBN field layout (``*_00`` top-of-book, int 1e-9 prices,
-    ``UNDEF_PRICE`` empty side, ``ts_recv``/``sequence`` names) is assumed from the design
-    note and MUST be verified against the live ``timeseries.get_range`` records before any
-    reviewed artifact. Fails closed on missing/one-sided/non-positive/non-int fields; never
-    uses ``to_df`` (floats). Returns the recorder ``parse`` record dict plus the ISO
-    ``ts_recv_utc`` (which ``parse`` takes as a kwarg, not from the record body).
+    The DBN field layout (``*_00`` top-of-book, int 1e-9 prices, ``UNDEF_PRICE`` empty
+    side, ``UNDEF_TIMESTAMP`` no-event minutes, ``ts_recv``/``sequence`` names) WAS
+    verified 2026-06-26 against a live ``EQUS.MINI`` ``bbo-1m`` ``BBOMsg`` record (see
+    ``_live_quote_event_source``). Still tier-2b-unverified at scale: the multi-record
+    ``get_range`` pull semantics (record ordering, pagination, sentinel frequency across
+    a full window) beyond that single-record check. Fails closed on
+    missing/one-sided/non-positive/non-int fields; never uses ``to_df`` (floats).
+    Returns the recorder ``parse`` record dict plus the ISO ``ts_recv_utc`` (which
+    ``parse`` takes as a kwarg, not from the record body).
     """
     bid_px = getattr(record, "bid_px_00", None)
     ask_px = getattr(record, "ask_px_00", None)

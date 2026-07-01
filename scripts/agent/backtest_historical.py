@@ -622,10 +622,27 @@ def validate_historical_cross_sectional_manifest(
     )
 
 
-def _signal_config(*, rules_hash: str, agent_rules_path=None) -> SignalConfig:
+def _load_agent_rules(agent_rules_path=None) -> dict:
     path = Path(agent_rules_path) if agent_rules_path else _DEFAULT_AGENT_RULES
-    config = json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _signal_config(*, rules_hash: str, agent_rules_path=None) -> SignalConfig:
+    config = _load_agent_rules(agent_rules_path)
     return replace(SignalConfig.from_config(config), rules_hash=rules_hash)
+
+
+def _require_config_derived_rules_hash(rules_hash: str, *,
+                                       agent_rules_path=None) -> None:
+    """Reviewed-artifact builds must bind ``rules_hash`` to the config the harness
+    actually runs: an arbitrary operator label would decouple the artifact triple
+    ``(strategy_id, rules_hash, data_pin)`` from the rules that produced its metrics."""
+    derived = SignalConfig.from_config(
+        _load_agent_rules(agent_rules_path)).rules_hash
+    if rules_hash != derived:
+        raise ValueError(
+            f"rules_hash {rules_hash!r} does not match the config-derived rules hash "
+            f"{derived!r} for the agent rules this artifact would run under")
 
 
 def _market_state_from_blackouts(bar: MidBar,
@@ -1844,6 +1861,17 @@ def run_historical_cross_sectional_backtest(
             if bar is None:
                 continue
             iid = instrument_ids[symbol]
+            eligible = read_eligible_midbar(
+                readers[symbol], symbol, iid, decision_ts, as_of_utc=decision_ts)
+            if isinstance(eligible, BacktestSkip):
+                # FD-2: a decision bar not knowable at decision time (late receipt)
+                # may not enter the ranked set — it would occupy a top-N slot its own
+                # leg can never fill, displacing the true next rank. Ranked set must
+                # equal tradable set.
+                reason = f"decision_bar_{eligible.reason}"
+                exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+                continue
+            bar = eligible
             market_state = _market_state_from_blackouts(bar, ca_blackout_dates)
             if market_state.ca_blackout:
                 ca_blackout_skip_count += 1
@@ -2142,6 +2170,8 @@ def write_m7_historical_artifact(*, artifacts_dir, quote_rows: Iterable[dict],
     output_dir = _guard_production_artifact_dir(
         artifacts_dir, production_artifacts_dir=production_artifacts_dir,
         allow_reviewed_artifact=allow_reviewed_artifact)
+    _require_config_derived_rules_hash(
+        rules_hash, agent_rules_path=agent_rules_path)
 
     backtest = run_historical_backtest(
         quote_rows=quote_rows_t,
@@ -2232,6 +2262,8 @@ def write_m7_historical_cross_sectional_artifact(
     output_dir = _guard_production_artifact_dir(
         artifacts_dir, production_artifacts_dir=production_artifacts_dir,
         allow_reviewed_artifact=allow_reviewed_artifact)
+    _require_config_derived_rules_hash(
+        rules_hash, agent_rules_path=agent_rules_path)
 
     backtest = run_historical_cross_sectional_backtest(
         symbol_quote_rows=rows_by_symbol,

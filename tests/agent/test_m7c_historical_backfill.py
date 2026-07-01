@@ -6,6 +6,7 @@ by ``validate_historical_cross_sectional_manifest`` AND drive the real cross-sec
 harness through the artifact writer. The live Databento pull is exercised only through an
 injected fake source (the real SDK adapter is tier-2b, verified against the live API).
 """
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -32,6 +33,7 @@ from agent.historical_backfill import (
     write_quote_rows_jsonl,
 )
 from agent.market_calendar import FixtureScheduleProvider
+from agent.signal_config import SignalConfig
 from agent.strategies.relative_strength import STRATEGY_ID as RS_STRATEGY_ID
 from recorder.event import Provenance, QuoteEvent
 
@@ -41,6 +43,12 @@ INSTRUMENT_IDS = {sym: 1001 + i for i, sym in enumerate(UNIVERSE)}
 _HYPOTHESIS = "m7c_relative_strength_market_neutral_v0_20260613"
 _SELECTION = "Reuse the full ordered M7 broad universe before relative-strength metrics."
 _CAL_PIN = "xnys-rth-regular-unit-test-v1"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# The artifact writer fails closed unless rules_hash is the DERIVED hash of the config
+# the harness will run, so the round-trip fixture uses the real committed-config hash.
+_RULES_HASH = SignalConfig.from_config(
+    json.loads((_REPO_ROOT / "config" / "agent_rules.json").read_text())
+).rules_hash
 _WIGGLE = Decimal("0.0010")
 
 
@@ -179,7 +187,17 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
         self.manifest = build_cross_sectional_input_manifest(
             symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
             schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
-            calendar_pin=_CAL_PIN, allow_derived_sessions=True)
+            calendar_pin=_CAL_PIN, allow_derived_sessions=True, horizon="30m")
+
+    def test_builder_requires_explicit_horizon(self):
+        # horizon is decision-carrying and hash-bound; a silent default would let an
+        # operator run a different horizon than the one predeclared (M7d: 120m).
+        with self.assertRaises(TypeError):
+            build_cross_sectional_input_manifest(
+                symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
+                schema="bbo-1m", hypothesis_id=_HYPOTHESIS,
+                selection_rule=_SELECTION, calendar_pin=_CAL_PIN,
+                allow_derived_sessions=True)
 
     def test_built_manifest_validates(self):
         parsed = validate_historical_cross_sectional_manifest(
@@ -204,14 +222,14 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
             build_cross_sectional_input_manifest(
                 symbol_rows=rows, universe=UNIVERSE, dataset="EQUS.MINI",
                 schema="bbo-1m", hypothesis_id=_HYPOTHESIS,
-                selection_rule=_SELECTION, calendar_pin=_CAL_PIN)
+                selection_rule=_SELECTION, calendar_pin=_CAL_PIN, horizon="30m")
 
     def test_builder_rejects_duplicate_universe(self):
         with self.assertRaises(ValueError):
             build_cross_sectional_input_manifest(
                 symbol_rows=self.rows, universe=UNIVERSE + ("AAPL",),
                 dataset="EQUS.MINI", schema="bbo-1m", hypothesis_id=_HYPOTHESIS,
-                selection_rule=_SELECTION, calendar_pin=_CAL_PIN)
+                selection_rule=_SELECTION, calendar_pin=_CAL_PIN, horizon="30m")
 
     def test_custom_sessions_must_cover_every_row_date(self):
         # Two session dates in the rows, but the operator supplies a window for only one.
@@ -225,7 +243,7 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
                 symbol_rows=rows, universe=UNIVERSE, dataset="EQUS.MINI",
                 schema="bbo-1m", hypothesis_id=_HYPOTHESIS,
                 selection_rule=_SELECTION, calendar_pin=_CAL_PIN,
-                sessions=partial_sessions)
+                sessions=partial_sessions, horizon="30m")
         self.assertIn("2026-06-16", str(ctx.exception))
 
     def test_builder_requires_pinned_sessions_by_default(self):
@@ -235,7 +253,7 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
             build_cross_sectional_input_manifest(
                 symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
                 schema="bbo-1m", hypothesis_id=_HYPOTHESIS,
-                selection_rule=_SELECTION, calendar_pin=_CAL_PIN)
+                selection_rule=_SELECTION, calendar_pin=_CAL_PIN, horizon="30m")
         self.assertIn("pinned", str(ctx.exception))
         self.assertIn("calendar", str(ctx.exception))
 
@@ -245,7 +263,7 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
         manifest = build_cross_sectional_input_manifest(
             symbol_rows=self.rows, universe=UNIVERSE, dataset="EQUS.MINI",
             schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
-            calendar_pin=_CAL_PIN, allow_derived_sessions=True)
+            calendar_pin=_CAL_PIN, allow_derived_sessions=True, horizon="30m")
         parsed = validate_historical_cross_sectional_manifest(
             manifest, symbol_quote_rows=self.rows, dataset="EQUS.MINI",
             schema="bbo-1m", data_pin=cross_sectional_data_pin(manifest))
@@ -266,7 +284,7 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
         manifest = build_cross_sectional_input_manifest(
             symbol_rows=rows, universe=UNIVERSE, dataset="EQUS.MINI",
             schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
-            calendar_pin=_CAL_PIN, sessions=sessions)
+            calendar_pin=_CAL_PIN, sessions=sessions, horizon="30m")
         parsed = validate_historical_cross_sectional_manifest(
             manifest, symbol_quote_rows=rows, dataset="EQUS.MINI",
             schema="bbo-1m", data_pin=cross_sectional_data_pin(manifest))
@@ -281,7 +299,7 @@ class TestManifestBuilderRoundTrip(unittest.TestCase):
                 symbol_rows=rows, universe=UNIVERSE, dataset="EQUS.MINI",
                 schema="bbo-1m", hypothesis_id=_HYPOTHESIS,
                 selection_rule=_SELECTION, calendar_pin=_CAL_PIN,
-                instrument_ids=INSTRUMENT_IDS)
+                instrument_ids=INSTRUMENT_IDS, horizon="30m")
         self.assertIn("NFLX", str(ctx.exception))
 
     def test_blackout_and_custom_horizon_flow_into_manifest(self):
@@ -308,12 +326,12 @@ class TestBuilderDrivesRealHarness(unittest.TestCase):
         manifest = build_cross_sectional_input_manifest(
             symbol_rows=rows, universe=UNIVERSE, dataset="EQUS.MINI",
             schema="bbo-1m", hypothesis_id=_HYPOTHESIS, selection_rule=_SELECTION,
-            calendar_pin=_CAL_PIN, allow_derived_sessions=True)
+            calendar_pin=_CAL_PIN, allow_derived_sessions=True, horizon="30m")
         with TemporaryDirectory() as tmp:
             result = write_m7_historical_cross_sectional_artifact(
                 artifacts_dir=tmp,
                 symbol_quote_rows=rows,
-                rules_hash="rh-backfill-it",
+                rules_hash=_RULES_HASH,
                 data_pin=cross_sectional_data_pin(manifest),
                 dataset="EQUS.MINI",
                 schema="bbo-1m",

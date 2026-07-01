@@ -72,12 +72,33 @@ bucketing key — not just `ts_recv` — to fall inside the pinned session windo
 `allow_derived_sessions`.**
 **Robin's call (2026-06-26): restart toward the sanctioned SUBSTRATE step = a longer/coarser decision/holding
 horizon on the same L1 data (cheapest, reuses the harness, attacks both the edge and the realism-cap failures) —
-NOT L2/MBP-10 (heaviest build) and NOT wider universe first.** Next: predeclare the horizon experiment (coarser
-bars + longer holding, the pinned M7 criteria unchanged) before any run; the credentialed pull/run is gated on
-Robin's separate go.
+NOT L2/MBP-10 (heaviest build) and NOT wider universe first.**
+**M7d predeclaration DONE (committed `013f9b6`; rev 2 applied 2026-07-02 after a full-project review; suite 1777
+tests green):** packet `docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md` + GPT handoff
+`docs/superpowers/reviews/2026-06-26-M7d-predeclaration-gpt-review-handoff.md` — C2 = `1m`/`120m` sole decider on a
+fresh fixed-20-session post-2026-06-13 holdout (complete ~2026-07-14); C1 = `1m`/`60m` descriptive on the snooped
+window; pinned criteria unchanged; both benchmarks gated. STATUS = DRAFT rev 2, awaiting Robin's GPT review; the
+credentialed pull/run stays gated on (review + Robin's separate go + the holdout). The 2026-07-02 review (4
+read-only deep-review agents + own-run reproduction; safety checklist 12/12 PASS in code; one pre-live MINOR for
+the M8 checklist: the loss/drawdown auto-kill is SKIPPED on a non-"fresh" account read) applied three fixes TDD:
+the cross-sectional runner now requires the DECISION bar to be FD-2-eligible at decision time (late-receipt bars
+excluded from the ranked set as `decision_bar_*` exclusions — ranked set == tradable set); both reviewed-artifact
+writers fail closed unless `rules_hash` == the config-DERIVED hash (the M7d horizon config edit changes it — an
+expected, documented delta, not an `artifact_mismatch`); and `build_cross_sectional_input_manifest` requires an
+explicit `horizon` (silent `30m` default removed). The review also measured what the packet had only hedged: the
+staged clean-rs-v1 quotes predate fix A and no longer validate at HEAD — the fix-A-compliant baseline (manifest
+`90866e90…`, rebuilt with the committed tools) is **1147 trades / net −$858.01 / active −$111.51 / p95 29.949 /
+max 97.484** (NULL robust under the current contract; use THIS baseline for the C2 A/B) — and the
+horizon-invariant entry-leg realism floor is **p95 ≈ 14.13 bps in the 120m-survivor population (94% of the 15-bps
+cap; survivor combined gap p95 31.67)**, so a C2 GO is structurally improbable on the realism caps and the run's
+decision value is the route-A-vs-B EDGE read. A substrate-search budget is pinned in `PLAN.md` (M7d = substrate
+experiment 1 of at most 2 on this family line; a second substrate null → documented program STOP absent a fresh
+mandate). Pre-run operational prerequisites (in the packet): a calendar-cross-checked session fixture (the
+`exchange_calendars` provider is an unimplemented stub) and a committed pull→build→write driver.
 No reviewed artifact verifies `ok`; production `artifacts/backtests/` still contains only `.gitkeep`; the staged run +
-quotes live under gitignored `reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (reproducible from the committed
-backfill tool). Paper edge-validation + M8/live remain blocked. **Merge-to-main DONE 2026-06-26:
+quotes live under gitignored `reports/m7_historical_runs/2026-03-10-clean-rs-v1/` (rows reproducible from the
+committed backfill tool; NOTE: the staged manifest predates fix A and no longer validates at HEAD — the
+fix-A-compliant rebuild `90866e90…` is the live baseline). Paper edge-validation + M8/live remain blocked. **Merge-to-main DONE 2026-06-26:
 `codex/m7-backtest-gate` was fast-forward-merged into `main` (now `19786cf` = M7 tip; was M2 `a82be6d`; 49 commits,
 0 conflicts, all safety gates verified closed first — `live_trading`/`agent_rules.enabled`/`paper_trading` all
 `false`, `artifacts/backtests/` = `.gitkeep`). No remote, so locally reversible.**
@@ -101,8 +122,9 @@ If a task implicitly requires breaching any of these, stop and ask.
 
 ## Commands
 
-M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate`. The **offline acceptance suite** (currently
-1773 tests) remains stdlib-only for normal development — no install needed to run it on a bare checkout:
+M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate` (merged to `main` 2026-06-26). The **offline
+acceptance suite** (currently 1777 tests) remains stdlib-only for normal development — no install needed to run
+it on a bare checkout:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -t .   # -t . is required (see note)

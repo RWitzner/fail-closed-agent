@@ -37,9 +37,16 @@ from agent.backtest_historical import (
     write_m7_historical_cross_sectional_artifact,
 )
 from agent.serializer import dumps, row_hash
+from agent.signal_config import SignalConfig
 from agent.strategies.relative_strength import STRATEGY_ID as RS_STRATEGY_ID
 
-_RULES_HASH = "rh-m7c-xs-artifact"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# The writer fails closed unless rules_hash is the DERIVED hash of the config the
+# harness will run (an arbitrary label would decouple the artifact triple from the
+# actual rules), so the fixture must use the real committed-config hash.
+_RULES_HASH = SignalConfig.from_config(
+    json.loads((_REPO_ROOT / "config" / "agent_rules.json").read_text())
+).rules_hash
 _MOMENTUM_ID = "directional.momentum_v1"
 _HYPOTHESIS_ID = "m7c_relative_strength_market_neutral_v0_20260613"
 _SELECTION_RULE = (
@@ -612,6 +619,30 @@ class TestCrossSectionalArtifactWriter(unittest.TestCase):
                 )
             self.assertIn("horizon", str(ctx.exception))
             self.assertFalse((Path(tmp) / f"{RS_STRATEGY_ID}.json").exists())
+
+
+class TestCrossSectionalWriterRulesHashBinding(unittest.TestCase):
+    def test_writer_rejects_rules_hash_not_derived_from_config(self):
+        # The reviewed-artifact triple must be bound to the config the harness runs:
+        # an arbitrary label would let an artifact carry a rules_hash unrelated to
+        # the rules that produced its metrics.
+        rows = _universe_rows()
+        manifest = _manifest(rows)
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError) as ctx:
+                write_m7_historical_cross_sectional_artifact(
+                    artifacts_dir=tmp,
+                    symbol_quote_rows=rows,
+                    rules_hash="rh-not-the-config-hash",
+                    data_pin=_data_pin(manifest),
+                    dataset="EQUS.MINI",
+                    schema="tbbo",
+                    created_utc="2026-06-15T20:00:00.000000Z",
+                    input_manifest=manifest,
+                    builder_git_commit="test-commit",
+                    allow_reviewed_artifact=False,
+                )
+            self.assertIn("rules_hash", str(ctx.exception))
 
 
 class TestCrossSectionalArtifactCli(unittest.TestCase):

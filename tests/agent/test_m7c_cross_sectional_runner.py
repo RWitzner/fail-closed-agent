@@ -48,7 +48,8 @@ _WIGGLE = Decimal("0.0010")
 
 
 def _rows_for_symbol(symbol, *, n_minutes, slope: Decimal, session=SESSION,
-                     base: Decimal = Decimal("100.0000"), start_hhmm="14:30:00"):
+                     base: Decimal = Decimal("100.0000"), start_hhmm="14:30:00",
+                     recv_delay_ms=300):
     """A gently-rising path: a DISTINCT per-symbol slope makes momentum/ema/sma ranks
     monotonic in slope, while keeping every minute-over-minute move well under the
     proxy's 5 bps marketable BUY limit (so decision->entry fills are not rejected as
@@ -61,7 +62,7 @@ def _rows_for_symbol(symbol, *, n_minutes, slope: Decimal, session=SESSION,
     seq = 1
     for minute in range(n_minutes):
         ts_event = start + timedelta(minutes=minute)
-        ts_recv = ts_event + timedelta(milliseconds=300)
+        ts_recv = ts_event + timedelta(milliseconds=recv_delay_ms)
         mid = base + slope * Decimal(minute) + (_WIGGLE if minute % 2 else Decimal("0"))
         rows.append({
             "dataset": "EQUS.MINI",
@@ -241,6 +242,32 @@ class TestCrossSectionalEdgeCases(unittest.TestCase):
         # Every acting decision deploys the equal-weight basket across all valid symbols.
         self.assertGreater(result.benchmark_leg_fill_count, 0)
         self.assertGreaterEqual(result.benchmark_leg_skip_count, 0)
+
+
+class TestCrossSectionalDecisionEligibility(unittest.TestCase):
+    def test_late_receipt_decision_bar_cannot_occupy_a_ranked_slot(self):
+        # AAPL keeps the steepest slope (cross-sectional rank 1) but every quote is
+        # received 90s after its event, so the decision bucket's watermark lands
+        # AFTER the decision instant: per FD-2 that bar is not knowable at decision
+        # time. The ranked set must equal the tradable set — AAPL may not take a
+        # top-2 slot its own leg can never fill (that would displace the true #2/#3
+        # and shrink fills without any price leak). With AAPL excluded at the
+        # decision read, the top-2 are MSFT and NVDA.
+        rows = _full_universe_rows()
+        rows["AAPL"] = _rows_for_symbol(
+            "AAPL", n_minutes=130,
+            slope=Decimal(len(UNIVERSE)) * Decimal("0.0010"),
+            recv_delay_ms=90_000)
+        result = _run(rows)
+        self.assertTrue(result.trades)
+        self.assertEqual({t.symbol for t in result.trades}, {"MSFT", "NVDA"})
+        self.assertNotIn("AAPL", result.per_symbol_leg_counts)
+        self.assertGreater(
+            result.exclusion_reason_counts.get("decision_bar_future_receipt", 0), 0)
+        # Ranked set == tradable set: no candidate leg dies on a future-receipt
+        # decision bar any more.
+        self.assertFalse(
+            [s for s in result.skips if s.reason == "future_receipt"])
 
 
 class TestCrossSectionalArtifactAggregation(unittest.TestCase):
