@@ -1,11 +1,11 @@
 # M7d predeclaration GPT review handoff (2026-06-26)
 
-**Purpose.** A GPT adversarial review is requested on a **predeclaration packet** (a pre-registered
+**Purpose.** A GPT adversarial review was requested on a **predeclaration packet** (a pre-registered
 experiment design), NOT on code or a run/verdict. The packet —
 `docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md` — predeclares the sanctioned
 **substrate** step after the two-family STOP: a **longer holding horizon** on the same L1 `EQUS.MINI:bbo-1m`
 data, within the existing M7c relative-strength family. This document lets a FRESH context act on GPT's
-findings without re-deriving state. The exact prompt sent to GPT is embedded verbatim in the appendix.
+findings without re-deriving state. The exact rev-2 prompt sent to GPT is embedded verbatim in the appendix.
 
 > Robin routes reviews through GPT. The most consequential question for a *predeclaration* is methodological:
 > is the experiment honestly falsifiable, free of data-snooping and multiple-comparisons escape hatches, and
@@ -13,12 +13,31 @@ findings without re-deriving state. The exact prompt sent to GPT is embedded ver
 > or any credentialed dollar is spent. A predeclaration's whole value is that it pre-commits the verdict and the
 > routing so results cannot be cherry-picked.
 
+## Review outcome (2026-07-02)
+
+GPT review returned **CHANGES-REQUIRED** on two methodology issues and an architect **WATCH / RECONSIDER**
+on the experiment sequencing:
+
+- The packet used undefined "comfortable margin" language as if it were an extra GO gate. Rev 3 removes that
+  discretionary gate: GO/NULL is the pinned matrix + breadth only; margin distances are exported as diagnostics,
+  and any clean pass remains provisional pending confirmation.
+- Route B could be read as auto-selecting the second substrate lever after seeing C2 diagnostics. Rev 3 makes the
+  decomposition mechanism-classification only: the second substrate slot is consumed only if Robin separately
+  selects a lever under its own packet + review + separate go.
+- The rev-2 handoff/packet had stale current-state claims. Current HEAD has 1846 tests green, the
+  `ExchangeCalendarsScheduleProvider` + committed session fixture, and `agent.m7_run_driver` built; no credentialed
+  run or production artifact is authorized.
+
+The remaining strategic WATCH is explicit: Robin must still choose whether to run M7d at all versus route straight
+to a realism-matched lever. This packet remains non-authorizing until that choice, Robin's separate go, and the
+fresh fixed holdout are all present.
+
 ## What this packet is (and is NOT)
 
-- It is a DRAFT, pre-registered design. **No code is written, no manifest built, no credentialed pull/run is
-  authorized.** A run is gated on three things, ALL required: (1) this packet reviewed; (2) Robin's explicit
-  separate go; (3) the predeclared **fresh fixed-20-session post-2026-06-13 holdout** existing — which it will
-  NOT until ~mid/late-July 2026 (only ~12 sessions exist after the last inspected window as of 2026-06-26).
+- It is a GPT-reviewed pre-registered design. **No credentialed pull/run is authorized.** A run is gated on four
+  things, ALL required: (1) Robin explicitly chooses M7d rather than routing straight to a realism-matched lever;
+  (2) Robin gives a separate go; (3) the predeclared **fresh fixed-20-session post-2026-06-13 holdout** exists;
+  (4) the run uses the current rev-3 packet and current HEAD prerequisites.
 - It does NOT relax any pinned criterion, flip any gate, or authorize paper/M8/production writes.
 - Scope = **longer HOLD only**, interval `1m`, config-only (runnable today). Coarser DECISION bars are
   explicitly **deferred** (the resampler hard-rejects non-`1m`, coarsening confounds the frozen feature
@@ -33,7 +52,7 @@ findings without re-deriving state. The exact prompt sent to GPT is embedded ver
   driver), and a `PLAN.md` substrate-search budget (M7d = substrate experiment 1 of at most 2). Three general
   harness-correctness fixes are committed (cross-sectional decision-bar FD-2 eligibility; both writers bind
   `rules_hash` to the config-derived hash; builder `horizon` required-explicit) — all byte-identical on the
-  baseline. Suite = 1777 tests green.
+  baseline. Rev 3 then applied the GPT review fixes above; current verification is 1846 tests green.
 
 ## Repo state (as of this handoff)
 
@@ -41,7 +60,7 @@ findings without re-deriving state. The exact prompt sent to GPT is embedded ver
   current packet rev (rev 1 = `013f9b6`; rev 2 = the 2026-07-02 review/fix commit; `git log -1`). Prior context:
   `0e7d136` (docs-sync: merge-to-main DONE) on top of `19786cf` (M7 tip; the 4 GPT-review fixes from the M7c
   null review). **`main` was at M2 (`a82be6d`) before the 2026-06-26 FF merge.**
-- Offline suite: **1777 tests green** — `python3 -m unittest discover -s tests -p 'test_*.py' -t .`
+- Offline suite: **1846 tests green** — `python3 -m unittest discover -s tests -p 'test_*.py' -t .`
   (the `-t .` is required; modules import as `agent.*` / `recorder.*` from `scripts/`).
 - Run gates committed `false`; `artifacts/backtests/` holds only `.gitkeep`; no production artifact written.
   `.secrets/databento.json` = historical-only Databento key.
@@ -97,12 +116,14 @@ interpretation of the max cap sound; and is a 2-substrate budget the right K?
   positive net PnL, positive active PnL vs **both** benchmarks (`exposure_matched_midbar_v1` in
   `paper_phase_criteria.py`; `universe_equal_weight_long_v1` in the writer at `backtest_historical.py:2347`),
   positive avg-trade-bps, zero quality-breach counts; plus the breadth/concentration rule.
-- **Decision rule:** GO iff C2 clears the full pinned matrix + breadth on the fresh holdout, with comfortable
-  margin (not at the floor), and even then is provisional pending a confirmation holdout. Anything short = NULL.
+- **Decision rule:** GO iff C2 clears the full pinned matrix + breadth on the fresh holdout. Margin-to-floor/cap is
+  exported as a diagnostic, not an extra undefined gate; even a clean pass is provisional pending a confirmation
+  holdout. Anything short = NULL.
 - **Stop routing on a C2 null:** route by which gate family fails — (A) edge-fail → documented STOP of the L1
   1-min cross-sectional RS program; (B) edge-pass-but-realism-fail → DIAGNOSTIC PARTIAL routing the *next*
-  separately-predeclared substrate spend (passive execution / tighter universe / entry-latency / L2), never an
-  auto-GO; (C) both pass → provisional GO. No 4th cell, no in-grid re-test, no third family — all forbidden.
+  separately-predeclared substrate spend only if Robin separately selects it (passive execution / tighter universe /
+  entry-latency / L2), never an auto-GO or auto-spend; (C) both pass → provisional GO. No 4th cell, no in-grid
+  re-test, no third family — all forbidden.
 
 ## Files / code the packet depends on (GPT should verify the harness-fit claims)
 
@@ -139,8 +160,8 @@ interpretation of the max cap sound; and is a 2-substrate budget the right K?
 6. **Process guardrails (learned the hard way):** dispatched build/fix subagents must NOT run git mutations;
    review/verify subagents tend to edit files despite READ-ONLY prompts — git-audit the tree after any agent
    run, revert non-authored edits, re-derive against pristine HEAD.
-7. **If GPT confirms the design is sound:** mark the packet reviewed (DRAFT → reviewed), then it waits on Robin's
-   separate go AND the fresh holdout becoming available (~mid/late-July 2026) before any code/run loop.
+7. **If GPT findings are fixed and no methodology blocker remains:** keep the packet marked GPT-reviewed, then it
+   waits on Robin's route decision, Robin's separate go, and the fresh holdout before any code/run loop.
 
 ## Open decisions (unchanged by this review until findings land)
 

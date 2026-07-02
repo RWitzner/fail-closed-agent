@@ -338,7 +338,8 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   pull/run is gated on Robin's separate go. **Merge-to-main DONE 2026-06-26: `codex/m7-backtest-gate`
   fast-forward-merged into `main` (`main` = `19786cf` = M7 tip; was M2 `a82be6d`; all safety gates verified closed
   first; no remote, locally reversible).**
-- **M7d predeclaration committed + full-project review applied (2026-06-26 → 2026-07-02, 1777 tests green):**
+- **M7d predeclaration committed + full-project review applied (2026-06-26 → 2026-07-02, 1777 tests at that checkpoint;
+  current suite 1846 after paper-operational readiness):**
   the longer-horizon packet + GPT-review handoff were committed `013f9b6`
   (`docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md`, C2 = `1m`/`120m` sole decider on a
   fresh fixed-20-session post-2026-06-13 holdout; C1 = `1m`/`60m` descriptive on the snooped window; pinned
@@ -366,11 +367,12 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   fix-A baseline in Evidence Grounding, max-cap order-statistic caveat + p99 diagnostic, pinned
   latency/slippage numerics, pinned C1/C2 run order, GO-path lead-time note, calendar-fixture + committed-driver
   operational prerequisites) and the handoff's GPT prompt gained a dimension G attacking the rev-2 additions.
-  Remaining pre-run gaps (in the packet as operational prerequisites): `ExchangeCalendarsScheduleProvider` is a
-  stub (`exchange_calendars` not installed) so holdout sessions need a hand-authored, calendar-cross-checked
-  fixture or the implemented provider; and the pull→build→write orchestration driver must be committed. STATUS =
-  DRAFT rev 2, awaiting Robin's GPT review; the credentialed pull/run stays gated on (review + Robin's separate
-  go + the fresh holdout, complete ~2026-07-14). Paper/M8 blocked; run gates and pinned criteria unchanged.
+  GPT review (2026-07-02) returned changes-required on two methodology items plus a strategic WATCH; rev 3 applied
+  the must-fixes by removing the undefined "comfortable margin" gate, making route-B decomposition
+  mechanism-classification only (no automatic second substrate spend), and reconciling current HEAD operational
+  state. STATUS = GPT-reviewed rev 3, not run-authorized; the credentialed pull/run stays gated on Robin choosing
+  M7d rather than routing straight to a realism-matched lever, Robin's separate go, and the fresh holdout (complete
+  ~2026-07-14). Paper/M8 blocked; run gates and pinned criteria unchanged.
 
 - **Paper-operational readiness build (2026-07-02, 1846 tests green; commits `9c5590d`…`9d73528`):** closed every
   buildable gap between "spine done" and "an autonomous paper session can run", without flipping anything
@@ -475,7 +477,8 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   substrate experiment **1 of 2**. If M7d's C2 nulls on the edge gates (route A), the packet's documented STOP
   applies directly and the remaining slot is NOT auto-spent. If C2 passes edge but fails realism (route B), the
   single remaining slot may fund ONE realism-matched lever (passive/limit execution, tighter-spread universe, or
-  entry-latency — selected by the predeclared realism decomposition), as its own packet + review + separate go.
+  entry-latency — informed, not auto-selected, by the predeclared realism decomposition), as its own packet +
+  review + separate go.
   A second substrate null ends the program: any continuation — including a daily-horizon/EOD family line, which
   is a NEW substrate — requires a fresh explicit mandate from Robin, not a routing rule.
 - **Paper edge-validation phase** (post-passing-artifact, pre-M8): full autonomous paper run measured against the
