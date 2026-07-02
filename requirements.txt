@@ -6,6 +6,8 @@
 #   M2 (session/calendar gate): exchange_calendars — the live ScheduleProvider
 #     (implemented 2026-07-02: lazy import inside _build_calendar only, version-pin
 #     enforced fail-closed; offline tests drive it via a sys.modules-injected fake).
-#   M5 (paper broker): alpaca-py==<pin>
+#   M5 (paper broker) + the paper-account verifier: alpaca-py — lazy import inside
+#     AlpacaPaperBroker._build_real_client / verify_alpaca_paper._build_real_client only.
 databento==0.79.0
 exchange_calendars==4.13.2
+alpaca-py==0.43.5
