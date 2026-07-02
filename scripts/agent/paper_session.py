@@ -258,10 +258,15 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:  # pragma: no cover - th
             event_writer=writer,
             max_runtime_ms=14 * 3600 * 1000)
 
+    import os
+    import platform
+
     strategy = build_strategy(args.strategy_id)
     orch = orch_mod.Orchestrator(
         journal_dir=args.journal_dir,
-        run_id=orch_mod.mint_run_id(),
+        run_id=orch_mod.mint_run_id(
+            host=platform.node() or "unknown", pid=os.getpid(),
+            now_utc=datetime.now(timezone.utc)),
         clock=feed.clock(),
         quote_view=feed.quote_view(),
         bar_reader=feed.bar_reader(),
