@@ -1502,3 +1502,24 @@ confirmed, 1 refuted. All fixed TDD; suite 888 → 896 tests.
 Refuted: M4-R4 (truthy non-bool `PortfolioRead.stale` "fails open" — the verifier found the construction
 requires a caller violating the typed `portfolio_is_stale` contract; tracked as an M5-caller obligation,
 not an M4 defect).
+
+## R.2 Harden log (round 2, 2026-07-02 — full-project review follow-up)
+
+1. **M4-R2-BLIND (pre-live MINOR from the 2026-07-02 full-project review, fixed TDD)** — the
+   loss/drawdown auto-kill was SKIPPED whenever the broker account read was not "fresh"
+   (`KillEvaluation.skipped`, FD-M4-3), with only one edge-triggered `kill_eval_skipped` row as
+   visibility. A persistently degraded account API therefore left HELD exposure unmanaged forever
+   (opens were already blocked by the `can_open` account rung; the gap was holdings-with-no-kill).
+   Fix: blindness is now BOUNDED — `MAX_ACCOUNT_BLIND_MS = 120_000` (CODE CONSTANT, FD-M4-22
+   posture) of CONTINUOUS non-fresh account reads (`missing`/`stale`/`invalid`/`skew`) while the
+   local book-of-record holds an open position escalates to a new kill cause `account_blind_cap`
+   (KILL_CAUSES += 1): the standard §M.6 flatten-then-halt sequence with `evaluation=None`, so the
+   trigger consumes NO account numbers (FD-M4-3 preserved: numeric caps still never fire on
+   unverified reads) and journals `stale_inputs=true`. The blind clock resets on any fresh read;
+   `missing` keeps its row-silent semantics (observe compositions journal nothing) but counts
+   toward the clock; a flat book never trips (broker-less compositions unaffected; S1 canaries
+   unchanged). Tests: `test_account_blind_beyond_cap_with_position_flattens_and_halts`,
+   `test_account_blind_below_cap_only_journals_skip`,
+   `test_account_blind_clock_resets_on_fresh_read`,
+   `test_account_blind_beyond_cap_flat_book_never_triggers` (tests/agent/test_orchestrator.py)
+   plus the KILL_CAUSES vocabulary pin update (tests/agent/test_risk_config.py). Suite 1777 → 1781.

@@ -831,6 +831,122 @@ class OrchestratorCase(unittest.TestCase):
         self.assertEqual(len(position_closes), 1)
         self.assertEqual(position_closes[0]["reason"], "kill_flatten")
 
+    # ------------------------------------------- account-blind bounded kill
+    # 2026-07-02 review MINOR: a persistently non-fresh account read used to
+    # skip the loss/drawdown auto-kill FOREVER while positions stayed held.
+    # Bounded blindness: > MAX_ACCOUNT_BLIND_MS of continuous non-fresh reads
+    # WITH an open position => flatten-then-halt (cause=account_blind_cap).
+
+    def _blind_pipeline(self, subdir, *, seed_position=True,
+                        account_payloads=None):
+        journal_dir = self.tmp / subdir
+        if seed_position:
+            self._m6_open_prior_position(journal_dir)
+
+        def flatten_status(client_order_id):
+            return order_payload(
+                client_order_id=client_order_id, symbol="AAPL", qty="10",
+                side="sell", status="filled", filled_qty="10",
+                filled_avg_price="200.00")
+
+        api = ScriptedOrderApi({
+            "get_by_client_order_id": [flatten_status],
+            "submit": [
+                lambda payload: order_payload(
+                    client_order_id=payload["client_order_id"],
+                    symbol=payload["symbol"], qty=payload["qty"],
+                    side=payload["side"], status="filled",
+                    filled_qty=payload["qty"], filled_avg_price="200.00",
+                    limit_price=payload["limit_price"]),
+            ],
+        })
+        positions_row = [{"symbol": "AAPL", "qty": "10",
+                          "market_value": "2000.00", "instrument_id": 1001}]
+        provider = FakeAccountProvider(
+            account_payloads=(account_payloads if account_payloads is not None
+                              else [account_payload(), None]),
+            positions_payloads=[positions_row if seed_position else []])
+        pipeline = self.make_pipeline(
+            subdir=subdir, broker=AlpacaPaperBroker(order_api=api),
+            strategy=None, account_provider=provider, run_gates=None)
+        return pipeline, api
+
+    def test_account_blind_beyond_cap_with_position_flattens_and_halts(self):
+        pipeline, api = self._blind_pipeline("blind-trip")
+        pipeline.tick_on_bar(1)                      # fresh account read
+        for bar in range(2, 9):                      # continuous invalid reads
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        transitions = pipeline.rows_of("risk", "kill_switch_transition")
+        self.assertEqual([row["to_state"] for row in transitions],
+                         ["flattening", "halted"])
+        self.assertEqual({row["cause"] for row in transitions},
+                         {"account_blind_cap"})
+        self.assertTrue(all(row["stale_inputs"] for row in transitions))
+        self.assertTrue(all(row["daily_loss_usd"] is None
+                            and row["drawdown_usd"] is None
+                            for row in transitions))
+        # edge-triggered visibility row exactly once for the blind spell
+        skipped = pipeline.rows_of("risk", "kill_eval_skipped")
+        self.assertEqual([row["account_status"] for row in skipped],
+                         ["invalid"])
+        # the flatten was a single reduce-only sell; nothing opened
+        self.assertEqual([call["side"] for call in api.submit_calls], ["sell"])
+        self.assertEqual(api.submit_calls[0]["client_order_id"],
+                         "flatten-AAPL")
+        closes = pipeline.rows_of("positions", "position_close")
+        self.assertEqual([row["reason"] for row in closes], ["kill_flatten"])
+
+    def test_account_blind_below_cap_only_journals_skip(self):
+        pipeline, api = self._blind_pipeline("blind-below")
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 5):                      # 60s of blindness < cap
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "monitoring")
+        self.assertEqual(pipeline.rows_of("risk", "kill_switch_transition"), [])
+        skipped = pipeline.rows_of("risk", "kill_eval_skipped")
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(api.submit_calls, [])
+
+    def test_account_blind_clock_resets_on_fresh_read(self):
+        # 60s blind -> fresh -> 90s blind: cumulative 150s exceeds the cap but
+        # each CONTINUOUS spell stays under it => still monitoring; the same
+        # second spell then crosses the cap => halted (clock restarted, not
+        # cumulative).
+        pipeline, api = self._blind_pipeline(
+            "blind-reset",
+            account_payloads=[account_payload(), None, None, None,
+                              account_payload(), None])
+        pipeline.tick_on_bar(1)                      # fresh
+        for bar in range(2, 5):                      # blind spell 1 (60s span)
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        pipeline.tick_on_bar(5, advance_ms=30_000)   # fresh again -> reset
+        for bar in range(6, 10):                     # blind spell 2 (90s span)
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.state, "monitoring")
+        skipped = pipeline.rows_of("risk", "kill_eval_skipped")
+        self.assertEqual(len(skipped), 2)            # one per blind spell
+
+        for bar in range(10, 12):                    # spell 2 crosses the cap
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        transitions = pipeline.rows_of("risk", "kill_switch_transition")
+        self.assertEqual({row["cause"] for row in transitions},
+                         {"account_blind_cap"})
+
+    def test_account_blind_beyond_cap_flat_book_never_triggers(self):
+        pipeline, api = self._blind_pipeline("blind-flat", seed_position=False)
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 11):                     # blind far beyond the cap
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "monitoring")
+        self.assertEqual(pipeline.rows_of("risk", "kill_switch_transition"), [])
+        self.assertEqual(len(pipeline.rows_of("risk", "kill_eval_skipped")), 1)
+        self.assertEqual(api.submit_calls, [])
+
     # ------------------------------------------------------------- M6 reconcile
 
     def _m6_open_prior_position(self, journal_dir, *, qty="10", avg="200.00",

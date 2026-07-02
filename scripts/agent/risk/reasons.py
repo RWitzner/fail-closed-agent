@@ -37,7 +37,8 @@ GATE_STAGES: Tuple[str, ...] = (
 )
 
 KILL_STATES: FrozenSet[str] = frozenset({"monitoring", "flattening", "halted"})
-KILL_CAUSES: FrozenSet[str] = frozenset({"daily_loss_cap", "drawdown_cap", "operator_manual", "drill"})
+KILL_CAUSES: FrozenSet[str] = frozenset({
+    "daily_loss_cap", "drawdown_cap", "account_blind_cap", "operator_manual", "drill"})
 RESERVED_KILL_CAUSES: FrozenSet[str] = frozenset({"live_gate_flip"})   # M8 (FD-M4-23)
 
 ACCOUNT_STATUSES: FrozenSet[str] = frozenset({"fresh", "stale", "missing", "invalid", "skew"})

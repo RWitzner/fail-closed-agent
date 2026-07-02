@@ -10,7 +10,10 @@ One-way per run (FD-M4-19): MONITORING → FLATTENING → HALTED; HALTED latches
 rehydrate; no in-process re-arm API (re-arm = operator-attended NEW run over a journal
 that shows the halt). Flatten attempts ALL positions regardless of M2 tradability
 (FD-M4-20 — verdicts are annotation only, never a skip). The switch never fires on
-unverified numbers (FD-M4-3: degraded account => skip, not trip).
+unverified numbers (FD-M4-3: degraded account => skip, not trip) — but blindness is
+BOUNDED: the orchestrator escalates > MAX_ACCOUNT_BLIND_MS of continuous non-fresh
+account reads WITH open positions to `account_blind_cap` (flatten-then-halt), which
+consumes no account numbers at all; unbounded blind exposure is the fail-open case.
 """
 import threading
 from dataclasses import dataclass
@@ -25,6 +28,14 @@ from agent.risk.risk_config import RiskConfig
 from agent.risk.risk_ledger import EVT_KILL_TRANSITION, rehydrate_risk_state
 
 _DECIMAL_CTX = Context(prec=28, rounding=ROUND_HALF_EVEN)
+
+# CODE CONSTANT (the FD-M4-22 posture: safety mechanics are not config-loosenable).
+# Continuous non-fresh account reads beyond this, with an open position held, trip
+# `account_blind_cap`: with can_open already rejecting on any non-fresh read, the only
+# exposure a blind agent still manages is what it HOLDS — flat is strictly safer than
+# blind-and-holding. 120s ≈ 48 refresh attempts at the 2.5s cadence, far past any
+# transient API blip.
+MAX_ACCOUNT_BLIND_MS = 120_000
 
 
 @dataclass(frozen=True)

@@ -171,7 +171,7 @@ from agent.risk.intraday_margin import (
 from agent.risk.loss_limits import LossLimitsMonitor
 from agent.risk.pdt_compat import BrokerRejectionObservation, LegacyPdtCompatMode
 from agent.risk.risk_config import RiskConfig
-from agent.risk.risk_kill import RiskKillSwitch
+from agent.risk.risk_kill import MAX_ACCOUNT_BLIND_MS, RiskKillSwitch
 from agent.risk.risk_ledger import RiskLedger, replay_risk, rehydrate_risk_state
 from agent.run_lock import RunLock, RunLockHeld
 from agent.secrets_runtime import (
@@ -750,6 +750,7 @@ class Orchestrator:
         self._last_phase: Optional[SessionPhase] = None
         self._closed_sessions: set = set()
         self._kill_skipped_latch = False
+        self._kill_blind_since_ms: Optional[int] = None
         self._artifact_checks: Dict[Tuple[str, str, str], object] = {}
         self._outstanding_open_tokens: List[Tuple[object, _OrderTask]] = []
         self._position_marked: set = set()
@@ -1663,19 +1664,38 @@ class Orchestrator:
         if self._risk_kill.state != "monitoring":
             return
         account = self._account_store.get(now_ms=now_ms)
-        if account.status == "missing":
-            return  # nothing observed yet this run
-        evaluation = self._risk_kill.evaluate(account, self._loss.read())
-        if evaluation.skipped:
-            if not self._kill_skipped_latch:
-                self._kill_skipped_latch = True
-                self._risk_ledger.record_kill_eval_skipped(
-                    account_status=account.status,
-                    generation=self._risk_kill.generation)
+        if account.status == "fresh":
+            self._kill_blind_since_ms = None
+            self._kill_skipped_latch = False
+            evaluation = self._risk_kill.evaluate(account, self._loss.read())
+            if evaluation.cause is not None:
+                self._kill_sequence(evaluation.cause, evaluation, now_ms)
             return
-        self._kill_skipped_latch = False
-        if evaluation.cause is not None:
-            self._kill_sequence(evaluation.cause, evaluation, now_ms)
+        # Non-fresh (missing/stale/invalid/skew): the numeric caps stay skipped
+        # (FD-M4-3 — never trip on unverified numbers) but the blindness itself
+        # is BOUNDED (2026-07-02 review): past MAX_ACCOUNT_BLIND_MS of
+        # continuous non-fresh reads with an open position held, flatten-then-
+        # halt under `account_blind_cap` — a cause that consumes no account
+        # numbers. `missing` keeps its pre-existing no-skip-row semantics (an
+        # observe composition reads `missing` every tick and must stay
+        # row-silent) but counts toward the blind clock; the flat-book guard
+        # keeps broker-less compositions from ever tripping.
+        if self._kill_blind_since_ms is None:
+            self._kill_blind_since_ms = now_ms
+        if account.status != "missing" and not self._kill_skipped_latch:
+            self._kill_skipped_latch = True
+            self._risk_ledger.record_kill_eval_skipped(
+                account_status=account.status,
+                generation=self._risk_kill.generation)
+        if (now_ms - self._kill_blind_since_ms > MAX_ACCOUNT_BLIND_MS
+                and self._has_open_positions()):
+            self._kill_sequence("account_blind_cap", None, now_ms)
+
+    def _has_open_positions(self) -> bool:
+        """Local book-of-record view (rehydrate-backed) — usable while the
+        broker account read is degraded."""
+        return any(pos.status == "open"
+                   for pos in self._book._positions.values())
 
     def trigger_kill(self, cause: str = "drill") -> None:
         """Operator/drill entry into the §M.6 sequence."""

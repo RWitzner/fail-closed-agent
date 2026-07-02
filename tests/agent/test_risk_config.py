@@ -58,7 +58,8 @@ class TestVocabularies(unittest.TestCase):
     def test_kill_vocabularies(self):
         self.assertEqual(KILL_STATES, frozenset({"monitoring", "flattening", "halted"}))
         self.assertEqual(KILL_CAUSES, frozenset(
-            {"daily_loss_cap", "drawdown_cap", "operator_manual", "drill"}))
+            {"daily_loss_cap", "drawdown_cap", "account_blind_cap",
+             "operator_manual", "drill"}))
         self.assertEqual(RESERVED_KILL_CAUSES, frozenset({"live_gate_flip"}))
 
     def test_validators_raise_risk_error(self):
