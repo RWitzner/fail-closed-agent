@@ -77,6 +77,7 @@ class TestM2OfflinePurity(unittest.TestCase):
     _M2_MODULES = [
         "market_calendar", "market_state", "market_state_cache",
         "corporate_actions", "status_ledger", "session_liveness",
+        "calendar_fixture",
     ]
 
     def _agent_dir(self):

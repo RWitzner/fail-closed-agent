@@ -1,63 +1,494 @@
-{"mic":"XNYS","pin":"fixture:XNYS-margin-window-v1","sessions":{
-  "2026-06-01":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-02":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-03":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-04":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-05":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-06":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-07":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-08":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-09":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-10":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-11":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-12":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-13":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-14":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-15":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-16":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-17":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-18":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-19":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-20":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-21":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-22":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-23":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-24":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-25":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-26":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-27":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-28":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-06-29":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-06-30":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-01":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-02":{"is_trading_day":true,"is_early_close":true,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"13:00","post_close_et":"17:00"},
-  "2026-07-03":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-04":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-05":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-06":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-07":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-08":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-09":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-10":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-11":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-12":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-13":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-14":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-15":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-16":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-17":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-18":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-19":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-20":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-21":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-22":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-23":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-24":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-25":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-26":{"is_trading_day":false,"is_early_close":false,"pre_open_et":null,"rth_open_et":null,"rth_close_et":null,"post_close_et":null},
-  "2026-07-27":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-28":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-29":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-30":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"},
-  "2026-07-31":{"is_trading_day":true,"is_early_close":false,"pre_open_et":"04:00","rth_open_et":"09:30","rth_close_et":"16:00","post_close_et":"20:00"}
-}}
+{
+  "mic": "XNYS",
+  "pin": "fixture:XNYS-margin-window-v1",
+  "sessions": {
+    "2026-06-01": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-02": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-03": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-04": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-05": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-06": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-07": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-08": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-09": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-10": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-11": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-12": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-13": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-14": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-15": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-16": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-17": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-18": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-19": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-20": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-21": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-22": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-23": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-24": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-25": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-26": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-27": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-28": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-06-29": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-06-30": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-01": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-02": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-03": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-04": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-05": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-06": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-07": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-08": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-09": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-10": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-11": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-12": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-13": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-14": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-15": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-16": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-17": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-18": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-19": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-20": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-21": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-22": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-23": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-24": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-25": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-26": {
+      "is_early_close": false,
+      "is_trading_day": false,
+      "post_close_et": null,
+      "pre_open_et": null,
+      "rth_close_et": null,
+      "rth_open_et": null
+    },
+    "2026-07-27": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-28": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-29": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-30": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    },
+    "2026-07-31": {
+      "is_early_close": false,
+      "is_trading_day": true,
+      "post_close_et": "20:00",
+      "pre_open_et": "04:00",
+      "rth_close_et": "16:00",
+      "rth_open_et": "09:30"
+    }
+  }
+}
