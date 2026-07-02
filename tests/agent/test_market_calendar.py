@@ -183,14 +183,175 @@ class TestOfflinePurity(unittest.TestCase):
         cal._provider.is_trading_day("2026-06-15")
         self.assertNotIn("exchange_calendars", sys.modules)
 
-    def test_live_provider_build_is_notimplemented_offline(self):
+    def test_live_provider_missing_lib_fails_closed(self):
         provider = ExchangeCalendarsScheduleProvider()
         self.assertNotIn("exchange_calendars", sys.modules)
-        with self.assertRaises(NotImplementedError):
-            provider._build_calendar()
-        self.assertNotIn("exchange_calendars", sys.modules)
+        # Construction imports nothing; a build without the pinned lib present
+        # fails CLOSED with CalendarError (never "assume a schedule").
+        # sys.modules[name] = None forces ImportError deterministically in any
+        # env (with or without the lib installed).
+        from unittest import mock
+        with mock.patch.dict(sys.modules, {"exchange_calendars": None}):
+            with self.assertRaises(CalendarError):
+                provider._build_calendar()
+            with self.assertRaises(CalendarError):
+                provider.schedule_for("2026-06-15")
         # The provider still carries a provenance pin without building anything.
         self.assertEqual(provider.calendar_pin(), "4.13.2")
+
+
+class TestExchangeCalendarsProvider(unittest.TestCase):
+    """The IMPLEMENTED exchange_calendars-backed provider, driven offline via a
+    sys.modules-injected fake module (deterministic in any env — the offline
+    suite never needs the real lib). The real-lib cross-check lives in the
+    credentialed verify/fixture-generator tool, not here."""
+
+    _SESSIONS = {
+        # EDT full day (2026-07-02 is a FULL session: July 4 2026 is a Saturday,
+        # July 3 is the observed holiday, and there is NO July-2 early close).
+        "2026-07-02": ("2026-07-02T13:30:00+00:00", "2026-07-02T20:00:00+00:00"),
+        # EST half-day (day after Thanksgiving): 09:30-13:00 ET.
+        "2026-11-27": ("2026-11-27T14:30:00+00:00", "2026-11-27T18:00:00+00:00"),
+    }
+
+    def _fake_calendar(self, *, sessions=None, first="2026-01-02",
+                       last="2026-12-31"):
+        from datetime import datetime
+
+        sessions = self._SESSIONS if sessions is None else sessions
+
+        class _FakeCalendar:
+            first_session = first
+            last_session = last
+
+            def is_session(self, date_str):
+                return date_str in sessions
+
+            def session_open(self, date_str):
+                return datetime.fromisoformat(sessions[date_str][0])
+
+            def session_close(self, date_str):
+                return datetime.fromisoformat(sessions[date_str][1])
+
+        return _FakeCalendar()
+
+    def _fake_module(self, calendar, *, version="4.13.2"):
+        from types import SimpleNamespace
+
+        calls = []
+
+        def get_calendar(mic, **kwargs):
+            calls.append((mic, kwargs))
+            return calendar
+
+        module = SimpleNamespace(__version__=version, get_calendar=get_calendar)
+        return module, calls
+
+    def _provider_with(self, calendar=None, **module_kwargs):
+        from unittest import mock
+
+        module, calls = self._fake_module(
+            calendar if calendar is not None else self._fake_calendar(),
+            **module_kwargs)
+        provider = ExchangeCalendarsScheduleProvider()
+        patcher = mock.patch.dict(sys.modules, {"exchange_calendars": module})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return provider, calls
+
+    def test_regular_edt_session_schedule(self):
+        provider, calls = self._provider_with()
+        sched = provider.schedule_for("2026-07-02")
+        self.assertTrue(sched.is_trading_day)
+        self.assertFalse(sched.is_early_close)
+        self.assertEqual(sched.pre_open_utc, "2026-07-02T08:00:00.000000Z")
+        self.assertEqual(sched.rth_open_utc, "2026-07-02T13:30:00.000000Z")
+        self.assertEqual(sched.rth_close_utc, "2026-07-02T20:00:00.000000Z")
+        # 20:00 ET post-close on an EDT date crosses the UTC midnight.
+        self.assertEqual(sched.post_close_utc, "2026-07-03T00:00:00.000000Z")
+        self.assertTrue(provider.is_trading_day("2026-07-02"))
+        # the calendar is built ONCE and memoized across queries
+        provider.schedule_for("2026-11-27")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "XNYS")
+
+    def test_est_half_day_schedule(self):
+        provider, _ = self._provider_with()
+        sched = provider.schedule_for("2026-11-27")
+        self.assertTrue(sched.is_trading_day)
+        self.assertTrue(sched.is_early_close)
+        self.assertEqual(sched.rth_open_utc, "2026-11-27T14:30:00.000000Z")
+        self.assertEqual(sched.rth_close_utc, "2026-11-27T18:00:00.000000Z")
+        # half-day post-market ends 17:00 ET (EST) = 22:00Z — the same
+        # convention the committed fixture pins for 2026-11-27.
+        self.assertEqual(sched.post_close_utc, "2026-11-27T22:00:00.000000Z")
+
+    def test_holiday_inside_coverage_is_non_trading(self):
+        provider, _ = self._provider_with()
+        sched = provider.schedule_for("2026-07-03")   # observed July 4
+        self.assertFalse(sched.is_trading_day)
+        self.assertIsNone(sched.rth_open_utc)
+        self.assertIsNone(sched.rth_close_utc)
+        self.assertIsNone(sched.pre_open_utc)
+        self.assertIsNone(sched.post_close_utc)
+        self.assertFalse(provider.is_trading_day("2026-07-03"))
+
+    def test_out_of_coverage_raises_unknown_session_date(self):
+        provider, _ = self._provider_with()
+        with self.assertRaises(UnknownSessionDate):
+            provider.schedule_for("2027-06-15")
+        with self.assertRaises(UnknownSessionDate):
+            provider.schedule_for("2025-12-31")
+
+    def test_malformed_date_raises_calendar_error(self):
+        provider, _ = self._provider_with()
+        with self.assertRaises(CalendarError):
+            provider.schedule_for("garbage")
+
+    def test_version_pin_mismatch_fails_closed(self):
+        provider, _ = self._provider_with(version="9.9.9")
+        with self.assertRaises(CalendarError) as ctx:
+            provider.schedule_for("2026-07-02")
+        self.assertIn("4.13.2", str(ctx.exception))
+
+    def test_session_date_identity_mismatch_fails_closed(self):
+        # A calendar whose open lands on a DIFFERENT ET date than queried is an
+        # identity fault, never silently accepted.
+        wrong = {"2026-07-02": ("2026-07-01T13:30:00+00:00",
+                                "2026-07-01T20:00:00+00:00")}
+        provider, _ = self._provider_with(self._fake_calendar(sessions=wrong))
+        with self.assertRaises(CalendarError):
+            provider.schedule_for("2026-07-02")
+
+    def test_naive_boundary_from_lib_fails_closed(self):
+        from datetime import datetime
+
+        class _NaiveCalendar:
+            first_session = "2026-01-02"
+            last_session = "2026-12-31"
+
+            def is_session(self, date_str):
+                return True
+
+            def session_open(self, date_str):
+                return datetime(2026, 7, 2, 13, 30)   # tz-naive
+
+            def session_close(self, date_str):
+                return datetime(2026, 7, 2, 20, 0)
+
+        provider, _ = self._provider_with(_NaiveCalendar())
+        with self.assertRaises(CalendarError):
+            provider.schedule_for("2026-07-02")
+
+    def test_phase_at_through_live_provider(self):
+        provider, _ = self._provider_with()
+        cal = MarketCalendar(provider)
+        self.assertEqual(cal.phase_at("2026-07-02T13:30:00.000000Z"),
+                         SessionPhase.RTH)
+        self.assertEqual(cal.phase_at("2026-11-27T18:30:00.000000Z"),
+                         SessionPhase.POST)
+        self.assertEqual(cal.phase_at("2026-07-03T15:00:00.000000Z"),
+                         SessionPhase.CLOSED)
 
 
 class TestScheduleProviderProtocol(unittest.TestCase):

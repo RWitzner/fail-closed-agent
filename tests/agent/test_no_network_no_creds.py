@@ -122,12 +122,17 @@ class TestM2OfflinePurity(unittest.TestCase):
         cal.phase_at("2026-06-15T13:30:00.000000Z")
         self.assertNotIn("exchange_calendars", sys.modules)
 
-    def test_live_provider_build_is_notimplemented_offline(self):
-        from agent.market_calendar import ExchangeCalendarsScheduleProvider
+    def test_live_provider_missing_lib_fails_closed_offline(self):
+        from agent.market_calendar import (
+            CalendarError,
+            ExchangeCalendarsScheduleProvider,
+        )
         provider = ExchangeCalendarsScheduleProvider()
-        with self.assertRaises(NotImplementedError):
-            provider._build_calendar()
-        self.assertNotIn("exchange_calendars", sys.modules)
+        # sys.modules[name] = None forces ImportError deterministically whether
+        # or not the lib is installed in the running env (bare checkout OR .venv).
+        with mock.patch.dict(sys.modules, {"exchange_calendars": None}):
+            with self.assertRaises(CalendarError):
+                provider._build_calendar()
 
     def test_m2_flows_open_no_socket(self):
         from agent.corporate_actions import (

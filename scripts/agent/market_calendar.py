@@ -225,34 +225,145 @@ class FixtureScheduleProvider:
         return self._pin
 
 
+def _as_utc_datetime(value, *, field: str) -> datetime:
+    """Normalize a calendar boundary (pandas ``Timestamp`` or ``datetime``) to a
+    tz-aware UTC ``datetime``. Duck-typed via ``to_pydatetime`` so this module
+    never imports pandas; a tz-naive boundary is an identity fault → fail closed."""
+    to_pydatetime = getattr(value, "to_pydatetime", None)
+    dt = to_pydatetime() if callable(to_pydatetime) else value
+    if not isinstance(dt, datetime) or dt.tzinfo is None:
+        raise CalendarError(
+            f"calendar returned a non-tz-aware {field} boundary: {value!r} "
+            "(fail-closed: never guess an offset)"
+        )
+    return dt.astimezone(UTC)
+
+
+def _session_date_str(value) -> str:
+    """``first_session``/``last_session`` (Timestamp or str) → "YYYY-MM-DD"."""
+    return str(value)[:10]
+
+
+def _require_session_date(session_date_et: str) -> str:
+    """Malformed "YYYY-MM-DD" → CalendarError (shared date validation)."""
+    try:
+        year, month, day = (int(part) for part in session_date_et.split("-"))
+        datetime(year, month, day)
+    except (ValueError, TypeError):
+        raise CalendarError(f"malformed session_date_et: {session_date_et!r}")
+    return session_date_et
+
+
 class ExchangeCalendarsScheduleProvider:
-    """LIVE/credentialed. The ONLY ``import exchange_calendars`` in M2 lives inside
+    """LIVE/credentialed. The ONLY ``import exchange_calendars`` lives inside
     ``_build_calendar()``, reached solely on the live path — so importing this module
     offline pulls nothing heavy into ``sys.modules`` (mirrors
-    ``DatabentoTransport._build_real_client``, databento.py:93-102)."""
+    ``DatabentoTransport._build_real_client``, databento.py:93-102).
+
+    Fail-closed posture: missing lib → ``CalendarError`` (never "assume a
+    schedule"); installed version != the provenance pin → ``CalendarError``
+    (silent calendar drift is a correctness fault); queried date outside the
+    calendar's coverage → ``UnknownSessionDate``; tz-naive or wrong-ET-date
+    boundaries from the lib → ``CalendarError``. RTH open/close come from the
+    calendar itself (half-days + special sessions mirrored, DST-correct via the
+    same construct-in-ET helper the fixture provider uses); pre-open is the
+    04:00 ET code constant and post-close is 20:00 ET (17:00 ET on half-days —
+    the committed-fixture convention)."""
+
+    _HALF_DAY_POST_CLOSE_ET = time(17, 0)
 
     def __init__(self, *, mic: str = CALENDAR_MIC, pin: str = EXCHANGE_CALENDARS_PIN) -> None:
         self._mic = mic
         self._pin = pin
+        self._calendar = None
 
-    def _build_calendar(self):  # pragma: no cover - live
-        """Lazily ``import exchange_calendars``; build ``ec.get_calendar(mic)``. Raises
-        ``NotImplementedError`` in M2 offline scope; never reached by an offline test."""
-        raise NotImplementedError(
-            "exchange_calendars-backed provider lands when the live path is wired"
+    def _build_calendar(self):
+        if self._calendar is not None:
+            return self._calendar
+        try:
+            import exchange_calendars  # LAZY — the only import site (offline purity)
+        except ImportError as exc:
+            raise CalendarError(
+                "exchange_calendars is not installed — the live calendar path "
+                f"requires the pinned dependency exchange_calendars=={self._pin} "
+                "(see requirements.txt; installed in .venv, never needed by the "
+                "offline suite). Fail-closed: never assume a schedule."
+            ) from exc
+        installed = getattr(exchange_calendars, "__version__", None)
+        if installed != self._pin:
+            raise CalendarError(
+                f"exchange_calendars version {installed!r} does not match the "
+                f"provenance pin {self._pin!r} — refusing to serve a drifted "
+                "calendar (fail-closed)"
+            )
+        self._calendar = exchange_calendars.get_calendar(self._mic)
+        return self._calendar
+
+    def schedule_for(self, session_date_et: str) -> SessionSchedule:
+        _require_session_date(session_date_et)
+        calendar = self._build_calendar()
+        first = _session_date_str(calendar.first_session)
+        last = _session_date_str(calendar.last_session)
+        # "YYYY-MM-DD" compares lexicographically == chronologically.
+        if not (first <= session_date_et <= last):
+            raise UnknownSessionDate(
+                f"session date outside calendar coverage [{first}, {last}]: "
+                f"{session_date_et!r} (fail-closed: never assume open)"
+            )
+        try:
+            is_session = bool(calendar.is_session(session_date_et))
+        except Exception as exc:  # noqa: BLE001 — any lib fault is fail-closed
+            raise CalendarError(
+                f"exchange_calendars is_session({session_date_et!r}) failed: {exc}"
+            ) from exc
+        if not is_session:
+            return SessionSchedule(
+                session_date_et=session_date_et,
+                is_trading_day=False,
+                is_early_close=False,
+                pre_open_utc=None,
+                rth_open_utc=None,
+                rth_close_utc=None,
+                post_close_utc=None,
+            )
+        try:
+            open_utc = _as_utc_datetime(calendar.session_open(session_date_et),
+                                        field="session_open")
+            close_utc = _as_utc_datetime(calendar.session_close(session_date_et),
+                                         field="session_close")
+        except CalendarError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — any lib fault is fail-closed
+            raise CalendarError(
+                f"exchange_calendars session query({session_date_et!r}) failed: {exc}"
+            ) from exc
+        open_et = open_utc.astimezone(ET)
+        close_et = close_utc.astimezone(ET)
+        for label, boundary_et in (("open", open_et), ("close", close_et)):
+            if boundary_et.strftime("%Y-%m-%d") != session_date_et:
+                raise CalendarError(
+                    f"calendar session {label} lands on ET date "
+                    f"{boundary_et.strftime('%Y-%m-%d')} for queried date "
+                    f"{session_date_et!r} — identity fault (fail-closed)"
+                )
+        is_early_close = ((close_et.hour, close_et.minute)
+                          < (RTH_CLOSE_ET.hour, RTH_CLOSE_ET.minute))
+        post_close_et = (self._HALF_DAY_POST_CLOSE_ET if is_early_close
+                         else POST_CLOSE_ET)
+        return SessionSchedule(
+            session_date_et=session_date_et,
+            is_trading_day=True,
+            is_early_close=is_early_close,
+            pre_open_utc=_et_boundary_to_utc_iso(session_date_et, PRE_OPEN_ET),
+            rth_open_utc=_et_boundary_to_utc_iso(
+                session_date_et, time(open_et.hour, open_et.minute)),
+            rth_close_utc=_et_boundary_to_utc_iso(
+                session_date_et, time(close_et.hour, close_et.minute)),
+            post_close_utc=_et_boundary_to_utc_iso(session_date_et, post_close_et),
         )
 
-    def schedule_for(self, session_date_et: str) -> SessionSchedule:  # pragma: no cover - live
-        self._build_calendar()
-        raise NotImplementedError(
-            "exchange_calendars-backed provider lands when the live path is wired"
-        )
-
-    def is_trading_day(self, session_date_et: str) -> bool:  # pragma: no cover - live
-        self._build_calendar()
-        raise NotImplementedError(
-            "exchange_calendars-backed provider lands when the live path is wired"
-        )
+    def is_trading_day(self, session_date_et: str) -> bool:
+        return self.schedule_for(session_date_et).is_trading_day
 
     def calendar_pin(self) -> str:
         return self._pin
