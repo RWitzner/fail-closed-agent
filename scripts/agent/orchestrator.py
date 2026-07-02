@@ -793,6 +793,22 @@ class Orchestrator:
     def drift_latched(self) -> bool:
         return self._drift_latch
 
+    @property
+    def ticks_run(self) -> int:
+        return self._ticks_run
+
+    def ensure_eod_reconcile(self, session_date_et: str, *, ts_utc: str,
+                             now_ms: int):
+        """Idempotent EOD reconcile for the session runner: a no-op when the
+        in-loop session edge already ran it (or outside paper mode). Shares the
+        session-edge guard set, so EOD runs exactly once per session date."""
+        if self.mode != "paper":
+            return None
+        if session_date_et in self._reconciled_eod_sessions:
+            return None
+        self._reconciled_eod_sessions.add(session_date_et)
+        return self.run_reconcile(phase="eod", ts_utc=ts_utc, now_ms=now_ms)
+
     # ----------------------------------------------------------- M6 reconcile
 
     def _reconcile_ts(self, ts_utc: Optional[str]) -> str:
