@@ -53,37 +53,44 @@ def _last4(value) -> Optional[str]:
     return value[-4:]
 
 
+def _plain_drill_request(*, symbol: str, client_order_id: str) -> dict:
+    """The injected-fake request shape (offline tests); the credentialed path
+    builds the real SDK ``LimitOrderRequest`` inside ``_build_real_client``."""
+    return {"symbol": symbol, "qty": 1, "side": "buy",
+            "time_in_force": "day", "limit_price": _DRILL_LIMIT,
+            "client_order_id": client_order_id}
+
+
 def _build_real_client(creds: Mapping):  # pragma: no cover - credentialed
-    """The ONLY alpaca SDK import site in this module (mirrors the broker
-    adapter's FD-M5-5 discipline); reached solely on the credentialed path."""
+    """The ONLY alpaca SDK import site in this module (the broker adapter's
+    FD-M5-5 one-site discipline, allow-listed in the AST guard); reached solely
+    on the credentialed path. Returns ``(client, drill_request_factory)`` so no
+    other function needs an SDK import."""
     from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import LimitOrderRequest
 
-    return TradingClient(api_key=creds["key_id"],
-                         secret_key=creds["secret_key"],
-                         paper=True, raw_data=True)
+    client = TradingClient(api_key=creds["key_id"],
+                           secret_key=creds["secret_key"],
+                           paper=True, raw_data=True)
+
+    def drill_request(*, symbol: str, client_order_id: str):
+        return LimitOrderRequest(
+            symbol=symbol, qty=1, side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY, limit_price=_DRILL_LIMIT,
+            client_order_id=client_order_id)
+
+    return client, drill_request
 
 
-def _order_drill(client, *, symbol: str, now_iso: str) -> dict:
+def _order_drill(client, request_factory, *, symbol: str, now_iso: str) -> dict:
     """Submit a non-marketable 1-share DAY limit, then cancel it. Any failure is
     RECORDED, never raised — the read-only verification stands on its own."""
     client_order_id = f"verify-drill-{now_iso.replace(':', '').replace('.', '')}"
     drill = {"attempted": True, "symbol": symbol,
              "client_order_id": client_order_id, "submitted": False,
              "canceled": False, "final_status": None, "error": None}
-    try:  # pragma: no cover start - exercised via injected fakes offline
-        from alpaca.trading.enums import OrderSide, TimeInForce
-        from alpaca.trading.requests import LimitOrderRequest
-
-        request = LimitOrderRequest(
-            symbol=symbol, qty=1, side=OrderSide.BUY,
-            time_in_force=TimeInForce.DAY, limit_price=_DRILL_LIMIT,
-            client_order_id=client_order_id)
-    except ImportError:
-        # offline fakes: hand the fake client a plain payload instead
-        request = {"symbol": symbol, "qty": 1, "side": "buy",
-                   "time_in_force": "day", "limit_price": _DRILL_LIMIT,
-                   "client_order_id": client_order_id}
-    # pragma: no cover end
+    request = request_factory(symbol=symbol, client_order_id=client_order_id)
     try:
         submitted = client.submit_order(order_data=request)
         drill["submitted"] = True
@@ -115,8 +122,11 @@ def verify_alpaca_paper(*, credentials_path=None,
         raise ValueError(
             f"verifier is paper-only: base_url must be {PAPER_HOST!r}")
 
-    client = (client_factory(creds) if client_factory is not None
-              else _build_real_client(creds))
+    if client_factory is not None:
+        client = client_factory(creds)
+        drill_request_factory = _plain_drill_request
+    else:  # pragma: no cover - credentialed
+        client, drill_request_factory = _build_real_client(creds)
 
     account = client.get_account() or {}
     clock = client.get_clock() or {}
@@ -142,7 +152,8 @@ def verify_alpaca_paper(*, credentials_path=None,
 
     drill = None
     if allow_order_drill:
-        drill = _order_drill(client, symbol=drill_symbol, now_iso=now_iso)
+        drill = _order_drill(client, drill_request_factory,
+                             symbol=drill_symbol, now_iso=now_iso)
         if drill["error"] is not None or not drill["submitted"]:
             failures.append("order_drill_failed")
 

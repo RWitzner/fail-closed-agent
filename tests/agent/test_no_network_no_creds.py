@@ -641,9 +641,10 @@ class TestM5ExecOfflinePurityAndImportGuard(unittest.TestCase):
             self.assertEqual(offending, [], rel)
 
     def test_alpaca_sdk_import_only_inside_build_real_client(self):
-        # FD-M5-5/§3: `alpaca` (the SDK) appears in exactly ONE function body
-        # (broker/alpaca.py::_build_real_client) and never at module scope
-        # anywhere under scripts/agent/.
+        # FD-M5-5/§3: `alpaca` (the SDK) appears ONLY inside a function named
+        # `_build_real_client`, in exactly the two allow-listed modules (the
+        # broker adapter + the credentialed paper-account verifier), and never
+        # at module scope anywhere under scripts/agent/.
         sites = []
 
         def walk(node, func_name, rel):
@@ -668,8 +669,10 @@ class TestM5ExecOfflinePurityAndImportGuard(unittest.TestCase):
             walk(ast.parse(source_path.read_text(encoding="utf-8")), None, rel)
         self.assertTrue(sites, "expected the lazy SDK import to exist")
         self.assertEqual(
-            sorted(set(sites)), [("broker/alpaca.py", "_build_real_client")],
-            f"alpaca SDK import outside _build_real_client: {sites}")
+            sorted(set(sites)),
+            [("broker/alpaca.py", "_build_real_client"),
+             ("verify_alpaca_paper.py", "_build_real_client")],
+            f"alpaca SDK import outside the allow-listed sites: {sites}")
 
     # ---------------------------------------------- subprocess fresh imports
 
