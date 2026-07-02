@@ -56,6 +56,10 @@ LIVE_QUOTE_SCHEMAS = frozenset({"tbbo", "bbo-1s"})  # the replay QUOTE_SCHEMAS s
 DEFAULT_REFRESH_CADENCE_MS = 1000
 DEFAULT_BAR_CLOSE_GRACE_MS = 1500
 BAR_INTERVAL = "1m"
+# Vendor ts_recv may run slightly ahead of our wall clock (skew); beyond this
+# bound a record is corrupt/unusable — buffering it would push the bucket's
+# FD-2 watermark far into the future and wedge the key's bar firing.
+MAX_RECV_AHEAD_MS = 30_000
 
 
 class LiveClock:
@@ -207,7 +211,7 @@ class LiveQuoteFeed:
                 break
 
             if item is not None:
-                self._deliver(item, now_ms)
+                self._deliver(item, now_ms, wall_utc)
 
             self._complete_due_bars(wall_utc, on_bar_complete)
 
@@ -224,7 +228,7 @@ class LiveQuoteFeed:
     def _count(self, reason: str) -> None:
         self._quality_counts[reason] = self._quality_counts.get(reason, 0) + 1
 
-    def _deliver(self, event, now_ms: int) -> None:
+    def _deliver(self, event, now_ms: int, wall_utc: datetime) -> None:
         prov = event.provenance
         if prov.symbol not in self._symbols:
             self._count("off_universe_symbol")
@@ -234,6 +238,12 @@ class LiveQuoteFeed:
             return
         key = (prov.symbol, prov.instrument_id)
         recv = _parse_utc(prov.ts_recv_utc)
+        if recv > wall_utc + timedelta(milliseconds=MAX_RECV_AHEAD_MS):
+            # corrupt/absurd vendor receipt: buffering it would wedge the
+            # key's bar firing behind an unreachable watermark (fail-closed
+            # per record, never per session).
+            self._count("future_receipt_dropped")
+            return
         last = self._last_recv.get(key)
         if last is not None and recv < last:
             self._count("receipt_order_regression")
@@ -295,24 +305,34 @@ class LiveQuoteFeed:
             fired_ends = self._fired_ends.setdefault(key, set())
             fired_bars = self._fired_bars.setdefault(key, [])
             fired_missing = self._fired_missing.setdefault(key, [])
-            for bar in bars:
-                end = _parse_utc(bar.bucket_end_utc)
+            # STRICT IN-ORDER firing per key: walk (bars ∪ missing) ascending
+            # by bucket_end and STOP at the first not-yet-settled record. A
+            # later bucket must never fire before an earlier one (out-of-order
+            # on_bar_complete would corrupt forward-time feature state, and an
+            # out-of-order per-key list fails the reader rebuild) — vendor
+            # ts_recv skew can otherwise make an older bucket's watermark
+            # settle AFTER a newer bucket's end+grace.
+            records = sorted(
+                [( _parse_utc(bar.bucket_end_utc),
+                   max(_parse_utc(bar.bucket_end_utc) + self._grace,
+                       _parse_utc(bar.watermark_utc)),
+                   bar, True) for bar in bars]
+                + [( _parse_utc(miss.bucket_end_utc),
+                     _parse_utc(miss.bucket_end_utc) + self._grace,
+                     miss, False) for miss in missing],
+                key=lambda item: item[0])
+            for end, settle_at, record, is_bar in records:
                 if end in fired_ends:
                     continue
-                watermark = _parse_utc(bar.watermark_utc)
-                if wall_utc < max(end + self._grace, watermark):
-                    continue   # the minute (or its receipt) has not settled yet
+                if wall_utc < settle_at:
+                    break   # not settled: everything after must wait too
                 fired_ends.add(end)
-                fired_bars.append(bar)
                 changed = True
-                on_bar_complete(bar)
-            for miss in missing:
-                end = _parse_utc(miss.bucket_end_utc)
-                if end in fired_ends or wall_utc < end + self._grace:
-                    continue
-                fired_ends.add(end)
-                fired_missing.append(miss)
-                changed = True
+                if is_bar:
+                    fired_bars.append(record)
+                    on_bar_complete(record)
+                else:
+                    fired_missing.append(record)
         if changed:
             all_bars: List[MidBar] = []
             all_missing: list = []

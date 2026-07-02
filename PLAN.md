@@ -372,6 +372,44 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   DRAFT rev 2, awaiting Robin's GPT review; the credentialed pull/run stays gated on (review + Robin's separate
   go + the fresh holdout, complete ~2026-07-14). Paper/M8 blocked; run gates and pinned criteria unchanged.
 
+- **Paper-operational readiness build (2026-07-02, 1841 tests green; commits `9c5590d…`):** closed every
+  buildable gap between "spine done" and "an autonomous paper session can run", without flipping anything
+  (committed gates untouched; S1 canaries green throughout). (1) Kill-switch bounded blindness: >120s of
+  continuous non-fresh account reads WITH open positions now trips the new `account_blind_cap` cause
+  (flatten-then-halt, no account numbers consumed — FD-M4-3 preserved; code-constant per FD-M4-22; the
+  2026-07-02 review MINOR closed). (2) `ExchangeCalendarsScheduleProvider` IMPLEMENTED (lazy import,
+  4.13.2 version-pin fail-closed, coverage/identity checks); `exchange_calendars==4.13.2` +
+  `alpaca-py==0.43.5` pinned + installed in `.venv` (offline suite stays stdlib-only). (3) New
+  `agent.calendar_fixture` generator + hand-table cross-check; committed cross-checked fixture
+  `tests/fixtures/calendar/xnys_sessions_2026H2_v1.json` (2026-06-15→12-31, 139 trading days; the fresh
+  M7d holdout = exactly 20 sessions ending 2026-07-14); the cross-check caught + fixed a REAL defect in the
+  hand-authored margin fixture (2026-07-02 wrongly a half-day — July 4 2026 is a Saturday). (4) The M7d
+  packet's LAST two operational prerequisites DONE: §9 calendar (above) and §10 the committed
+  `agent.m7_run_driver` (pin sessions fail-closed BEFORE any credentialed spend → pull → session-pinned
+  row filter (`filter_rows_to_pinned_sessions`, half-day/DST-correct) → build/validate from the staged
+  bytes on disk → staged-only write guard (never production) → summary.json with the packet's full
+  per-gate table + NULL diagnostics incl. p99). (5) M1 tier-2b live seam BUILT fail-closed:
+  `LiveQuoteFeed` (wall-clock feed with record-then-act EventWriter journaling — live sessions replay
+  byte-identically through `ReplayQuoteFeed`; strict in-order no-lookahead bar firing with
+  grace+watermark+vendor-skew guards; per-record fail-closed drops; stop/max-runtime backstops) +
+  `databento_live_source` (bbo-1s pinned, UNVERIFIED-fail-closed until the paid live subscription; the
+  one-session verification flag mirrors the historical pull's posture). (6) The paper session day-runner
+  `agent.paper_session` (SOD reconcile → the frozen tick loop with its in-loop session-edge EOD → new
+  idempotent `ensure_eod_reconcile` fallback → daily report; exit codes 0/1/2/3/4; strategy registry
+  wires momentum v1/v2 and REFUSES the cross-sectional RS proxy pending a predeclared scan-adapter) +
+  `agent.paper_report` (journal roll-up: broker-vs-modeled PnL split, rejects, kill, reconcile, feed data
+  quality) — the replay rehearsal is verified end-to-end (committed observe fixture: 74 ticks, report,
+  exit 0, zero orders). (7) `agent.verify_alpaca_paper`: credentialed read-only account verifier +
+  gated non-marketable order drill, redacted artifact; the FD-M5-5 one-SDK-import-site wall extended to
+  exactly the two `_build_real_client` sites. (8) The capstone runbook
+  `docs/runbooks/paper-go-live-checklist.md`: the ordered Robin-only steps A–E (Alpaca paper account +
+  verifier; the PAID Databento live realtime subscription + tier-2b verification; the S9 reviewed
+  artifact via M7d incl. the RS adapter caveat; the REVIEWED paper-phase caps commit — overlays are
+  tighten-only so the envelope is git-visible by design; runtime arming via `.secrets/run_gates.json`)
+  + daily operation + drills. **Remaining before autonomous paper: exactly those five Robin-gated
+  steps — no unbuilt code stands in the path** (the only conditional build left is the cross-sectional
+  scan-adapter IF the GO'ed strategy is the RS proxy).
+
 ## Locked decisions
 
 - **Broker:** Alpaca (paper and live share one API surface).

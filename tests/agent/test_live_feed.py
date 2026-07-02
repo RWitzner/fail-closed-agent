@@ -186,6 +186,56 @@ class TestBarCompletion(unittest.TestCase):
         self.assertEqual([bar.bucket_end_utc for bar in bars],
                          ["2026-07-06T13:31:00.000000Z"])
 
+    def test_vendor_clock_skew_cannot_disorder_bar_firing(self):
+        # A late row for bucket A carries a vendor ts_recv AHEAD of our wall
+        # clock (skew), pushing A's watermark past the moment bucket B becomes
+        # eligible. Bars must STILL fire in bucket order per key (B waits for
+        # A) — out-of-order on_bar_complete would corrupt rolling feature
+        # state and an out-of-order reader rebuild would crash the session.
+        tm = _TimeMachine()
+
+        def skewed_late_row():
+            # event in bucket A [13:30,13:31); vendor recv 8s ahead of wall
+            recv = (tm.utc_now() + timedelta(seconds=8)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ")
+            return _quote(tm, ts_event_utc="2026-07-06T13:30:59.000000Z",
+                          ts_recv_utc=recv)
+
+        steps = [
+            (10.0, lambda: _quote(tm)),      # 13:30:10 (bucket A)
+            (75.0, lambda: _quote(tm)),      # 13:31:25 (bucket B)
+            (30.0, skewed_late_row),         # wall 13:31:55; recv 13:32:03
+            (8.0, None),                     # 13:32:03: B end+grace passed,
+                                             # A watermark NOT yet -> neither
+            (4.0, None),                     # 13:32:07: A settles -> A then B
+            (1.0, None),
+        ]
+        _, bars = _run(_feed(tm, steps))
+        self.assertEqual([bar.bucket_end_utc for bar in bars],
+                         ["2026-07-06T13:31:00.000000Z",
+                          "2026-07-06T13:32:00.000000Z"])
+
+    def test_absurd_future_receipt_dropped_so_key_cannot_wedge(self):
+        tm = _TimeMachine()
+
+        def far_future_recv():
+            recv = (tm.utc_now() + timedelta(seconds=120)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ")
+            return _quote(tm, ts_event_utc=tm.utc_iso(), ts_recv_utc=recv)
+
+        steps = [
+            (10.0, lambda: _quote(tm)),      # 13:30:10 (bucket A)
+            (5.0, far_future_recv),          # recv 2 min ahead -> DROPPED
+            (60.0, lambda: _quote(tm)),      # 13:31:15 (bucket B opens)
+            (3.0, None),                     # A fires despite the bad row
+        ]
+        feed = _feed(tm, steps)
+        _, bars = _run(feed)
+        self.assertEqual([bar.bucket_end_utc for bar in bars],
+                         ["2026-07-06T13:31:00.000000Z"])
+        self.assertEqual(
+            feed.data_quality_counts().get("future_receipt_dropped"), 1)
+
     def test_late_row_for_fired_bucket_dropped_and_counted(self):
         tm = _TimeMachine()
         late_ts = "2026-07-06T13:30:30.000000Z"

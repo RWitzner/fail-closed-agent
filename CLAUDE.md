@@ -102,6 +102,25 @@ fix-A-compliant rebuild `90866e90…` is the live baseline). Paper edge-validati
 `codex/m7-backtest-gate` was fast-forward-merged into `main` (now `19786cf` = M7 tip; was M2 `a82be6d`; 49 commits,
 0 conflicts, all safety gates verified closed first — `live_trading`/`agent_rules.enabled`/`paper_trading` all
 `false`, `artifacts/backtests/` = `.gitkeep`). No remote, so locally reversible.**
+**PAPER-OPERATIONAL READINESS BUILD DONE 2026-07-02 (on `main`, 1841 tests green):** every buildable gap between
+"spine done" and "an autonomous paper session runs" is closed, gates untouched. Built + TDD'ed: the
+`account_blind_cap` bounded-blindness kill (the review MINOR — >120s non-fresh account reads with held positions
+⇒ flatten-then-halt); the IMPLEMENTED `ExchangeCalendarsScheduleProvider` (lazy, version-pinned fail-closed) +
+`agent.calendar_fixture` generator + the committed cross-checked `xnys_sessions_2026H2_v1.json` (holdout = 20
+sessions ending 2026-07-14; the cross-check caught a real 2026-07-02 half-day error in the old margin fixture);
+the committed M7d driver `agent.m7_run_driver` (packet §9+§10 prerequisites now BOTH done; staged-only, rules_hash
+derived, full per-gate summary); the M1 tier-2b live seam `LiveQuoteFeed` + `databento_live_source` (bbo-1s
+pinned, UNVERIFIED-fail-closed until the paid subscription; record→replay byte round-trip pinned; strict in-order
+no-lookahead bar firing with vendor-skew guards); the day-runner `agent.paper_session` (SOD → tick loop →
+idempotent EOD → daily report; exit codes; strategy registry — momentum wired, the cross-sectional RS proxy
+REFUSED pending a predeclared scan-adapter) + `agent.paper_report`; the credentialed `agent.verify_alpaca_paper`
+(+`alpaca-py==0.43.5` pinned; FD-M5-5 wall extended to exactly two `_build_real_client` sites); and the capstone
+runbook `docs/runbooks/paper-go-live-checklist.md`. Replay rehearsal VERIFIED end-to-end (observe fixture: 74
+ticks, report, exit 0, zero orders). **Remaining before autonomous paper = the runbook's five Robin-gated steps:
+(A) Alpaca paper account + verifier, (B) the PAID Databento live realtime subscription + one-session tier-2b
+verify, (C) an S9-passing reviewed artifact (M7d path; + the RS scan-adapter IF that family GOes), (D) the
+reviewed paper-phase caps commit (overlays are tighten-only), (E) runtime arming `.secrets/run_gates.json`. No
+unbuilt code stands in the path.**
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
