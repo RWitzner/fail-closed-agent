@@ -175,6 +175,13 @@ def _per_symbol_net(trades) -> dict:
 
 
 def _guard_staging_dir(staging_root, run_id: str) -> Path:
+    # run_id is operator input (--run-id): it must be a single path component,
+    # never a traversal that relocates the staging dir (e.g. into production).
+    if (not isinstance(run_id, str) or not run_id or run_id in (".", "..")
+            or "/" in run_id or "\\" in run_id or ".." in run_id
+            or Path(run_id).is_absolute()):
+        raise ValueError(
+            f"run_id must be a single plain path component, got {run_id!r}")
     staging_root = Path(staging_root)
     resolved_root = staging_root.resolve()
     production = PRODUCTION_ARTIFACTS_DIR.resolve()
@@ -186,6 +193,13 @@ def _guard_staging_dir(staging_root, run_id: str) -> Path:
             "staging root must never resolve inside (or above) the production "
             f"artifacts directory {production}; got {resolved_root}")
     staging_dir = staging_root / run_id
+    # belt-and-braces: the JOINED dir must still resolve inside the root
+    # (symlinked run dirs or future run_id relaxations cannot escape).
+    resolved_dir = staging_dir.resolve()
+    if resolved_root not in resolved_dir.parents:
+        raise ValueError(
+            f"staged run dir {resolved_dir} escapes the staging root "
+            f"{resolved_root} (fail-closed)")
     if staging_dir.exists():
         raise ValueError(
             f"staged run dir already exists: {staging_dir} — refusing to "

@@ -176,8 +176,15 @@ def filter_rows_to_pinned_sessions(
     """
     windows = {}
     for date, window in sessions.items():
-        windows[date] = (window["rth_open_utc"][11:19],
-                         window["rth_close_utc"][11:19])
+        rth_open = window.get("rth_open_utc") if hasattr(window, "get") else None
+        rth_close = window.get("rth_close_utc") if hasattr(window, "get") else None
+        if (not isinstance(rth_open, str) or not isinstance(rth_close, str)
+                or len(rth_open) < 19 or len(rth_close) < 19):
+            raise ValueError(
+                f"pinned session {date!r} is windowless/malformed "
+                f"(rth_open_utc={rth_open!r}, rth_close_utc={rth_close!r}) — "
+                "fail-closed, never default a window")
+        windows[date] = (rth_open[11:19], rth_close[11:19])
     kept: dict = {}
     dropped: dict = {}
     for symbol, rows in symbol_rows.items():

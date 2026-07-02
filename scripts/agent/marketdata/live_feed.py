@@ -238,6 +238,11 @@ class LiveQuoteFeed:
             return
         key = (prov.symbol, prov.instrument_id)
         recv = _parse_utc(prov.ts_recv_utc)
+        if recv < _parse_utc(prov.ts_event_utc):
+            # impossible receive-before-event row — the same contract the
+            # historical manifest validator enforces, mirrored per record.
+            self._count("receive_before_event_dropped")
+            return
         if recv > wall_utc + timedelta(milliseconds=MAX_RECV_AHEAD_MS):
             # corrupt/absurd vendor receipt: buffering it would wedge the
             # key's bar firing behind an unreachable watermark (fail-closed

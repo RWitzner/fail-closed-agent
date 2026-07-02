@@ -245,12 +245,20 @@ def _session_date_str(value) -> str:
 
 
 def _require_session_date(session_date_et: str) -> str:
-    """Malformed "YYYY-MM-DD" → CalendarError (shared date validation)."""
+    """Malformed "YYYY-MM-DD" → CalendarError (shared date validation).
+
+    The format is enforced EXACTLY zero-padded: coverage comparisons are
+    lexicographic, which is only chronological for canonical ISO dates
+    ("2026-7-2" would silently sort wrong)."""
     try:
         year, month, day = (int(part) for part in session_date_et.split("-"))
         datetime(year, month, day)
     except (ValueError, TypeError):
         raise CalendarError(f"malformed session_date_et: {session_date_et!r}")
+    if session_date_et != f"{year:04d}-{month:02d}-{day:02d}":
+        raise CalendarError(
+            f"session_date_et must be zero-padded ISO YYYY-MM-DD, got "
+            f"{session_date_et!r}")
     return session_date_et
 
 

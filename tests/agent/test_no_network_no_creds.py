@@ -640,6 +640,44 @@ class TestM5ExecOfflinePurityAndImportGuard(unittest.TestCase):
                                 offending.append(name)
             self.assertEqual(offending, [], rel)
 
+    _PAPER_OPS_MODULES = (
+        "marketdata/live_feed.py", "paper_session.py", "paper_report.py",
+        "m7_run_driver.py", "verify_alpaca_paper.py", "calendar_fixture.py",
+    )
+
+    def test_paper_ops_modules_no_module_scope_heavy_import(self):
+        # The 2026-07-02 paper-operational modules: the heavy SDKs
+        # (alpaca/databento/exchange_calendars/pandas/numpy) must never appear
+        # at MODULE scope — the lazy-import discipline every credentialed seam
+        # follows. (Each module's own tests also assert sys.modules purity;
+        # this is the central sweep.)
+        banned = ("alpaca", "databento", "exchange_calendars", "pandas",
+                  "numpy")
+        for rel in self._PAPER_OPS_MODULES:
+            src = (self._agent_dir() / rel).read_text(encoding="utf-8")
+            offending = []
+
+            def walk(node, in_func):
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.FunctionDef,
+                                          ast.AsyncFunctionDef)):
+                        walk(child, True)
+                        continue
+                    if not in_func and isinstance(
+                            child, (ast.Import, ast.ImportFrom)):
+                        names = ([alias.name for alias in child.names]
+                                 if isinstance(child, ast.Import)
+                                 else [child.module or ""])
+                        for name in names:
+                            if any(name == b or name.startswith(b + ".")
+                                   for b in banned):
+                                offending.append(name)
+                    walk(child, in_func)
+
+            walk(ast.parse(src), False)
+            self.assertEqual(offending, [],
+                             f"{rel} imports a heavy SDK at module scope")
+
     def test_alpaca_sdk_import_only_inside_build_real_client(self):
         # FD-M5-5/§3: `alpaca` (the SDK) appears ONLY inside a function named
         # `_build_real_client`, in exactly the two allow-listed modules (the

@@ -348,6 +348,22 @@ class TestBuilderDrivesRealHarness(unittest.TestCase):
             self.assertFalse((Path(tmp) / f"{RS_STRATEGY_ID}.json").exists())
 
 
+class TestFilterRowsToPinnedSessions(unittest.TestCase):
+    def test_windowless_session_entry_fails_closed(self):
+        from agent.historical_backfill import filter_rows_to_pinned_sessions
+
+        rows = {"AAPL": [{"ts_event_utc": "2026-06-15T14:00:00.000000Z",
+                          "ts_recv_utc": "2026-06-15T14:00:00.300000Z"}]}
+        for bad_sessions in (
+                {"2026-06-15": {"rth_open_utc": None,
+                                "rth_close_utc": "2026-06-15T20:00:00.000000Z"}},
+                {"2026-06-15": {"rth_close_utc": "2026-06-15T20:00:00.000000Z"}},
+        ):
+            with self.subTest(sessions=bad_sessions):
+                with self.assertRaises(ValueError):
+                    filter_rows_to_pinned_sessions(rows, bad_sessions)
+
+
 class TestLivePullSeam(unittest.TestCase):
     def test_pull_with_injected_source_normalizes_per_symbol(self):
         def source(symbol):

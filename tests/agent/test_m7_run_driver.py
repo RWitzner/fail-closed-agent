@@ -232,6 +232,19 @@ class TestStagedRun(unittest.TestCase):
             _stage(prod, run_id="evil")
         self.assertFalse((prod / "evil").exists())
 
+    def test_run_id_path_traversal_refused(self):
+        # A pathological --run-id must not be able to relocate the staging dir
+        # (e.g. into production artifacts/backtests) or split into subpaths.
+        before = self._production_listing()
+        with TemporaryDirectory() as tmp:
+            for evil in ("../../artifacts/backtests/evil", "a/b", "..",
+                         "/abs/path", "a\\b", ""):
+                with self.subTest(run_id=evil):
+                    with self.assertRaises(ValueError):
+                        _stage(tmp, run_id=evil)
+            self.assertEqual(sorted(Path(tmp).iterdir()), [])
+        self.assertEqual(self._production_listing(), before)
+
     def test_unknown_session_date_fails_closed(self):
         with TemporaryDirectory() as tmp:
             with self.assertRaises(Exception):

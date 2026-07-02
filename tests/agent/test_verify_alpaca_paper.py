@@ -145,6 +145,16 @@ class TestVerifier(unittest.TestCase):
         self.assertIn("order_drill_failed", summary["failures"])
         self.assertIn("submit rejected", summary["order_drill"]["error"])
 
+    def test_drill_symbol_clamped(self):
+        client = _FakeClient()
+        with TemporaryDirectory() as tmp:
+            for bad in ("aapl", "TOOLONGX", "BRK.B", ""):
+                with self.subTest(symbol=bad):
+                    with self.assertRaises(ValueError):
+                        self._run(tmp, client, allow_order_drill=True,
+                                  drill_symbol=bad)
+        self.assertEqual(client.submit_calls, [])
+
     def test_non_paper_base_url_refused(self):
         creds = dict(_CREDS, base_url="https://api.alpaca.markets")
         with TemporaryDirectory() as tmp:

@@ -4,9 +4,11 @@ paper tier) — the Alpaca analogue of ``verify_databento_entitlements``.
 Read-only by default: probes account / clock / positions / open orders through
 the SAME lazy-SDK surface the broker adapter uses (``TradingClient`` with
 ``raw_data=True``; the loader + host pin enforce paper-only BEFORE any SDK
-import), evaluates fail-closed checks, and writes a REDACTED summary artifact
-(flags/counts/last-4 only — never keys, never the full account number) to
-``reports/alpaca_paper/verified_account.json``.
+import), evaluates fail-closed checks, and writes a summary artifact to
+``reports/alpaca_paper/verified_account.json``. Redaction contract: NEVER key
+material, NEVER the full account number (last-4 only); paper-account BALANCES
+(equity/buying power/cash) ARE included — they are fake-money account values,
+not secrets, and the arming checklist needs them (``reports/`` is gitignored).
 
 The optional ``--allow-order-drill`` exercises the full submit→status→cancel
 round trip with a deliberately NON-MARKETABLE 1-share DAY limit (far below any
@@ -152,6 +154,13 @@ def verify_alpaca_paper(*, credentials_path=None,
 
     drill = None
     if allow_order_drill:
+        if (not isinstance(drill_symbol, str) or not drill_symbol.isalpha()
+                or not drill_symbol.isupper() or len(drill_symbol) > 5):
+            # keep the drill on plain US large-cap tickers: the $1.00 limit is
+            # non-marketable only for symbols trading above $1.
+            raise ValueError(
+                f"drill_symbol must be a 1-5 letter uppercase ticker, got "
+                f"{drill_symbol!r}")
         drill = _order_drill(client, drill_request_factory,
                              symbol=drill_symbol, now_iso=now_iso)
         if drill["error"] is not None or not drill["submitted"]:

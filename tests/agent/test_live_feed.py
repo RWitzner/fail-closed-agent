@@ -215,6 +215,22 @@ class TestBarCompletion(unittest.TestCase):
                          ["2026-07-06T13:31:00.000000Z",
                           "2026-07-06T13:32:00.000000Z"])
 
+    def test_receive_before_event_dropped(self):
+        # the historical input contract rejects ts_recv < ts_event (impossible
+        # rows); the live feed mirrors it per record.
+        tm = _TimeMachine()
+
+        def impossible_row():
+            event = (tm.utc_now() + timedelta(seconds=5)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ")
+            return _quote(tm, ts_event_utc=event, ts_recv_utc=tm.utc_iso())
+
+        steps = [(10.0, (lambda: _quote(tm))), (5.0, impossible_row)]
+        feed = _feed(tm, steps)
+        _run(feed)
+        self.assertEqual(
+            feed.data_quality_counts().get("receive_before_event_dropped"), 1)
+
     def test_absurd_future_receipt_dropped_so_key_cannot_wedge(self):
         tm = _TimeMachine()
 

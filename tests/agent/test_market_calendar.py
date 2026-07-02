@@ -307,6 +307,12 @@ class TestExchangeCalendarsProvider(unittest.TestCase):
         provider, _ = self._provider_with()
         with self.assertRaises(CalendarError):
             provider.schedule_for("garbage")
+        # non-zero-padded dates would break the lexicographic coverage
+        # comparison — reject the format itself, not just unparseable input.
+        with self.assertRaises(CalendarError):
+            provider.schedule_for("2026-7-2")
+        with self.assertRaises(CalendarError):
+            provider.schedule_for("2026-07-2")
 
     def test_version_pin_mismatch_fails_closed(self):
         provider, _ = self._provider_with(version="9.9.9")
