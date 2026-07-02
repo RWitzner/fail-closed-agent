@@ -372,7 +372,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   DRAFT rev 2, awaiting Robin's GPT review; the credentialed pull/run stays gated on (review + Robin's separate
   go + the fresh holdout, complete ~2026-07-14). Paper/M8 blocked; run gates and pinned criteria unchanged.
 
-- **Paper-operational readiness build (2026-07-02, 1841 tests green; commits `9c5590d…`):** closed every
+- **Paper-operational readiness build (2026-07-02, 1846 tests green; commits `9c5590d`…`9d73528`):** closed every
   buildable gap between "spine done" and "an autonomous paper session can run", without flipping anything
   (committed gates untouched; S1 canaries green throughout). (1) Kill-switch bounded blindness: >120s of
   continuous non-fresh account reads WITH open positions now trips the new `account_blind_cap` cause

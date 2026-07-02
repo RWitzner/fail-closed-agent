@@ -102,7 +102,7 @@ fix-A-compliant rebuild `90866e90…` is the live baseline). Paper edge-validati
 `codex/m7-backtest-gate` was fast-forward-merged into `main` (now `19786cf` = M7 tip; was M2 `a82be6d`; 49 commits,
 0 conflicts, all safety gates verified closed first — `live_trading`/`agent_rules.enabled`/`paper_trading` all
 `false`, `artifacts/backtests/` = `.gitkeep`). No remote, so locally reversible.**
-**PAPER-OPERATIONAL READINESS BUILD DONE 2026-07-02 (on `main`, 1841 tests green):** every buildable gap between
+**PAPER-OPERATIONAL READINESS BUILD DONE 2026-07-02 (on `main`, 1846 tests green; independently reviewed, all findings applied):** every buildable gap between
 "spine done" and "an autonomous paper session runs" is closed, gates untouched. Built + TDD'ed: the
 `account_blind_cap` bounded-blindness kill (the review MINOR — >120s non-fresh account reads with held positions
 ⇒ flatten-then-halt); the IMPLEMENTED `ExchangeCalendarsScheduleProvider` (lazy, version-pinned fail-closed) +
