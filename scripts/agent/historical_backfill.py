@@ -159,6 +159,46 @@ def pin_sessions_from_provider(session_dates: Sequence[str], provider) -> dict:
     return out
 
 
+def filter_rows_to_pinned_sessions(
+        symbol_rows: TypingMapping[str, Sequence[dict]],
+        sessions: TypingMapping[str, TypingMapping[str, str]]) -> tuple:
+    """Filter normalized rows to the PINNED per-date session windows.
+
+    The half-day/DST-correct replacement for the fixed-UTC ``DEFAULT_RTH_WINDOW``
+    time-of-day filter: a row survives iff its ``ts_event_utc`` DATE is a pinned
+    session AND BOTH timestamps' times-of-day fall inside that date's pinned
+    ``[rth_open_utc, rth_close_utc]`` window (inclusive — the same bounds the
+    manifest validator enforces on ``ts_event``, plus the ``ts_recv`` key the
+    upstream RTH filter has always gated on). Rows on unpinned dates are dropped,
+    never defaulted (fail-closed).
+
+    Returns ``(kept_by_symbol, dropped_count_by_symbol)``.
+    """
+    windows = {}
+    for date, window in sessions.items():
+        windows[date] = (window["rth_open_utc"][11:19],
+                         window["rth_close_utc"][11:19])
+    kept: dict = {}
+    dropped: dict = {}
+    for symbol, rows in symbol_rows.items():
+        kept_rows = []
+        dropped_count = 0
+        for row in rows:
+            ts_event = row.get("ts_event_utc")
+            ts_recv = row.get("ts_recv_utc")
+            window = (windows.get(ts_event[:10])
+                      if isinstance(ts_event, str) else None)
+            if (window is None or not isinstance(ts_recv, str)
+                    or not (window[0] <= ts_event[11:19] <= window[1])
+                    or not (window[0] <= ts_recv[11:19] <= window[1])):
+                dropped_count += 1
+                continue
+            kept_rows.append(row)
+        kept[symbol] = kept_rows
+        dropped[symbol] = dropped_count
+    return kept, dropped
+
+
 def instrument_ids_from_rows(
         symbol_rows: TypingMapping[str, Sequence[dict]]) -> dict:
     """Per-symbol instrument id, requiring exactly one distinct int id per symbol."""
