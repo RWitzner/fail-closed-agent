@@ -11,7 +11,12 @@ import threading
 import unittest
 from pathlib import Path
 
-from agent.journal import JournalCorruption, JournalWriter, replay
+from agent.journal import (
+    IncrementalJournalReader,
+    JournalCorruption,
+    JournalWriter,
+    replay,
+)
 
 
 class _Tmp(unittest.TestCase):
@@ -194,6 +199,74 @@ class TestTimestamp(_Tmp):
         w = JournalWriter(self.path, run_id="run-1", clock=lambda: next(ticks))
         self.assertEqual(w.append("decision", {"i": 0})["ts_utc"], "2026-06-08T00:00:00Z")
         self.assertEqual(w.append("decision", {"i": 1})["ts_utc"], "2026-06-08T00:00:01Z")
+
+
+class TestIncrementalJournalReader(_Tmp):
+    """read() must equal replay(path) at every point — it exists so the tick
+    loop stops re-reading + re-hashing the whole decisions file per bar batch
+    (O(day²) over a session)."""
+
+    def test_matches_full_replay_across_interleaved_appends(self):
+        reader = IncrementalJournalReader(self.path)
+        self.assertEqual(reader.read(), [])          # missing file
+        w = JournalWriter(self.path, run_id="run-1",
+                          clock=lambda: "2026-07-06T00:00:00Z")
+        w.append("evt", {"n": 1})
+        self.assertEqual(reader.read(), replay(self.path))
+        w.append("evt", {"n": 2})
+        w.append("evt", {"n": 3})
+        self.assertEqual(reader.read(), replay(self.path))
+        self.assertEqual([r["n"] for r in reader.read()], [1, 2, 3])
+        # the returned list is a copy: caller mutation cannot poison the cache
+        rows = reader.read()
+        rows.append({"poison": True})
+        self.assertEqual([r["n"] for r in reader.read()], [1, 2, 3])
+
+    def test_complete_corrupt_row_raises_and_keeps_raising(self):
+        w = JournalWriter(self.path, run_id="run-1",
+                          clock=lambda: "2026-07-06T00:00:00Z")
+        w.append("evt", {"n": 1})
+        reader = IncrementalJournalReader(self.path)
+        self.assertEqual(len(reader.read()), 1)
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write("garbage-complete-line\n")
+        with self.assertRaises(JournalCorruption):
+            reader.read()
+        with self.assertRaises(JournalCorruption):
+            reader.read()   # offset was NOT committed past the corruption
+
+    def test_truncated_tail_pending_until_completed(self):
+        w = JournalWriter(self.path, run_id="run-1",
+                          clock=lambda: "2026-07-06T00:00:00Z")
+        w.append("evt", {"n": 1})
+        # craft row 2's exact bytes in a scratch stream, then append them split
+        scratch = self.path.with_name("scratch.jsonl")
+        w2 = JournalWriter(scratch, run_id="run-1",
+                           clock=lambda: "2026-07-06T00:00:00Z")
+        w2.append("evt", {"n": 1})
+        w2.append("evt", {"n": 2})
+        row2_bytes = scratch.read_bytes().splitlines(keepends=True)[1]
+        reader = IncrementalJournalReader(self.path)
+        self.assertEqual(len(reader.read()), 1)
+        with open(self.path, "ab") as fh:
+            fh.write(row2_bytes[:20])                # partial line, no newline
+        self.assertEqual(len(reader.read()), 1)      # pending, like replay()
+        with open(self.path, "ab") as fh:
+            fh.write(row2_bytes[20:])                # completed
+        self.assertEqual(reader.read(), replay(self.path))
+        self.assertEqual([r["n"] for r in reader.read()], [1, 2])
+
+    def test_shrunk_file_falls_back_to_full_reread(self):
+        w = JournalWriter(self.path, run_id="run-1",
+                          clock=lambda: "2026-07-06T00:00:00Z")
+        w.append("evt", {"n": 1})
+        first_row_bytes = self.path.read_bytes()
+        w.append("evt", {"n": 2})
+        reader = IncrementalJournalReader(self.path)
+        self.assertEqual(len(reader.read()), 2)
+        self.path.write_bytes(first_row_bytes)        # external shrink
+        self.assertEqual(reader.read(), replay(self.path))
+        self.assertEqual([r["n"] for r in reader.read()], [1])
 
 
 if __name__ == "__main__":

@@ -4,8 +4,11 @@ The S3 wall for LABELS and the CLIMATOLOGY lives in `ForecastResolver.resolve_du
 label bars are read AS-OF resolve time (`as_of_utc=now_utc`); a `future_receipt`
 bar DEFERS the forecast (no row, retried later) so a future-received label can
 never leak into a score or into the as-of reference (rev2 SAFETY-F1). Unresolved is
-TERMINAL per forecast_id (FD-8): the resolver replays the scored stream first and
-skips seen ids — rerun appends nothing.
+TERMINAL per forecast_id (FD-8): the resolver replays the scored stream ONCE per
+instance (the stream is single-writer — S6; ids this resolver writes are tracked
+in-memory, so a per-bar-batch caller does not re-read the whole file each call)
+and skips seen ids — rerun appends nothing, including from a FRESH resolver,
+which re-replays the stream on its first call.
 
 Scoring math is frozen (rev2 MATH-Q1/Q4/Q5): every formula in this module is pinned
 in the contract; the 3-term Murphy identity BS = REL - RES + UNC is exact ONLY when
@@ -54,10 +57,11 @@ class AsOfClimatology:
     ingested outcomes. Below min_samples it degrades to constant 0.5.
 
     Ingestion is IDEMPOTENT per forecast_id (harden round 1, M3-01 BLOCKER): the
-    resolver both re-seeds from the replayed scored stream on every resolve_due
+    resolver re-seeds from the replayed scored stream on its FIRST resolve_due
     call AND ingests live after each new score — without id-level dedupe HERE, a
-    shared climatology double-counts outcomes across calls and corrupts the
-    persisted FD-6 reference fields. A repeated forecast_id is a silent no-op.
+    fresh resolver instance sharing this climatology would double-count outcomes
+    it already ingested live, corrupting the persisted FD-6 reference fields.
+    A repeated forecast_id is a silent no-op.
     """
 
     def __init__(self, *, min_samples: int) -> None:
@@ -191,6 +195,10 @@ class ForecastResolver:
         self._ledger = ledger
         self._scored_stream_path = scored_stream_path
         self._climatology = climatology
+        # FD-8 seen ids: replayed ONCE per instance (single-writer stream), then
+        # maintained incrementally from this resolver's own writes — resolve_due
+        # runs per bar batch and a full re-read + re-hash per call is O(day²).
+        self._seen: Optional[set] = None
 
     def resolve_due(self, decision_rows: Iterable[dict], *, now_utc: str) -> ResolveStats:
         from agent.bar_series import _parse_utc  # shared parse-then-compare chokepoint
@@ -202,26 +210,30 @@ class ForecastResolver:
             if forecast_id is not None and forecast_id not in by_forecast_id:
                 by_forecast_id[forecast_id] = row
 
-        # FD-8: replay -> seen ids (both event types), in stream seq order.
-        replayed = replay(self._scored_stream_path)
-        seen = set()
-        for row in sorted(replayed, key=lambda r: r["seq"]):
-            seen.add(row["forecast_id"])
-            # rev2 SAFETY-F14 + rev3 minor-3: seed the climatology from replayed
-            # scored rows (resolution order == seq order) via the forecast_id join.
-            if self._climatology is not None and row["event_type"] == ScoredLedger.EVT_SCORED:
-                decision = by_forecast_id.get(row["forecast_id"])
-                if decision is None:
-                    raise ValueError(
-                        "scored stream row has no matching decision row "
-                        f"(forecast_id={row['forecast_id']!r}) — corrupt stream pair")
-                self._climatology.ingest_resolved(
-                    symbol=decision["symbol"], horizon=decision["horizon"],
-                    outcome=row["outcome"], forecast_id=row["forecast_id"])
+        # FD-8: replay -> seen ids (both event types), in stream seq order —
+        # once per instance; later calls trust the in-memory set plus our own
+        # appended ids (no other writer exists on this stream — S6).
+        if self._seen is None:
+            replayed = replay(self._scored_stream_path)
+            self._seen = set()
+            for row in sorted(replayed, key=lambda r: r["seq"]):
+                self._seen.add(row["forecast_id"])
+                # rev2 SAFETY-F14 + rev3 minor-3: seed the climatology from replayed
+                # scored rows (resolution order == seq order) via the forecast_id join.
+                if self._climatology is not None and row["event_type"] == ScoredLedger.EVT_SCORED:
+                    decision = by_forecast_id.get(row["forecast_id"])
+                    if decision is None:
+                        raise ValueError(
+                            "scored stream row has no matching decision row "
+                            f"(forecast_id={row['forecast_id']!r}) — corrupt stream pair")
+                    self._climatology.ingest_resolved(
+                        symbol=decision["symbol"], horizon=decision["horizon"],
+                        outcome=row["outcome"], forecast_id=row["forecast_id"])
+        seen = self._seen
 
         now = _parse_utc(now_utc)
         considered = due = scored = unresolved = skipped = deferred = 0
-        resolved_this_call = set()
+        resolved_this_call: set = set()
 
         for row in decision_rows:
             if row.get("action") != "forecast_only":
@@ -305,6 +317,7 @@ class ForecastResolver:
                     symbol=symbol, horizon=row["horizon"], outcome=outcome,
                     forecast_id=forecast_id)
 
+        self._seen.update(resolved_this_call)
         return ResolveStats(
             considered=considered, due=due, scored=scored, unresolved=unresolved,
             skipped_already_resolved=skipped, deferred_not_eligible=deferred)

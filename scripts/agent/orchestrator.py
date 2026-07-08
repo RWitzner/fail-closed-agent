@@ -124,6 +124,7 @@ from agent.execution_realism import bind_modeled_fill_id, assess_divergence, mod
 from agent.feature_engine import FeatureEngine, FeatureView
 from agent.fees import fees_for
 from agent.gates import opening_allowed
+from agent.journal import IncrementalJournalReader
 from agent.journal import replay as journal_replay
 from agent.market_calendar import (
     FixtureScheduleProvider,
@@ -739,6 +740,11 @@ class Orchestrator:
             reader=reader, ledger=self._scored_ledger,
             scored_stream_path=self._scored_path,
             climatology=self._climatology)
+        # Incremental (replay-equivalent) view of the decisions stream for the
+        # per-bar-batch resolver call: a full journal_replay per batch re-reads
+        # + re-hashes the whole file — O(day²) over a session. Startup and
+        # rehydrate paths keep full-verification journal_replay.
+        self._decisions_tail = IncrementalJournalReader(self._decisions_path)
 
         # mutable tick state
         self._task: Optional[_OrderTask] = None
@@ -1670,7 +1676,7 @@ class Orchestrator:
                 event_start_bar_end_utc=bar.bucket_end_utc,
                 decision_ts_utc=_canonical_utc_str(_parse_utc(decision_ts)))
         if bars and self._instant_utc is not None:
-            self._resolver.resolve_due(journal_replay(self._decisions_path),
+            self._resolver.resolve_due(self._decisions_tail.read(),
                                        now_utc=self._instant_utc)
         return bars
 

@@ -59,6 +59,75 @@ def replay(path) -> list:
     return rows
 
 
+class IncrementalJournalReader:
+    """Replay-equivalent incremental reader for ONE single-writer stream.
+
+    ``read()`` returns exactly what ``replay(path)`` would return, but re-reads
+    and hash-verifies only the bytes appended since the previous call — the M5
+    tick loop consults the decisions stream once per bar batch, and a full
+    re-read + re-hash per batch is O(day²) over a session. Startup/rehydrate
+    keep using ``replay`` (full verification); rows returned here were either
+    verified on this reader's first read or appended by THIS process (one
+    writer per stream — S6). Semantics mirrored from ``replay``:
+
+    - only complete (newline-terminated) lines are consumed; a partial tail
+      stays PENDING (not dropped) and is verified on a later call once the
+      writer completes it;
+    - a complete corrupt line raises ``JournalCorruption`` — and keeps raising
+      on every subsequent call (the offset is committed only on full success);
+    - a file that shrinks or disappears (external interference) triggers a
+      fail-closed full re-read from scratch.
+
+    Not thread-safe (the tick loop is single-threaded)."""
+
+    def __init__(self, path) -> None:
+        self._path = Path(path)
+        self._offset = 0          # bytes consumed, always at a newline boundary
+        self._rows: list = []
+        self._line_index = 0      # global line number for corruption messages
+
+    def _reset(self) -> None:
+        self._offset = 0
+        self._rows = []
+        self._line_index = 0
+
+    def read(self) -> list:
+        if not self._path.exists():
+            self._reset()
+            return []
+        size = self._path.stat().st_size
+        if size < self._offset:
+            self._reset()   # shrunk underneath us: fail-closed full re-read
+        if size == self._offset:
+            return list(self._rows)
+        with open(self._path, "rb") as fh:
+            fh.seek(self._offset)
+            chunk = fh.read()
+        newline_at = chunk.rfind(b"\n")
+        if newline_at == -1:
+            return list(self._rows)   # only a partial tail so far: pending
+        complete = chunk[: newline_at + 1]
+        new_rows = []
+        index = self._line_index
+        for line in complete.decode("utf-8").split("\n")[:-1]:
+            try:
+                row = json.loads(line)
+                if not isinstance(row, dict) or "hash" not in row:
+                    raise ValueError("row is not an object or is missing its hash")
+                stored = row.pop("hash")
+                if row_hash(row) != stored:
+                    raise ValueError("hash mismatch")
+                row["hash"] = stored
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise JournalCorruption(f"stream line {index} corrupt: {exc}") from exc
+            new_rows.append(row)
+            index += 1
+        self._rows.extend(new_rows)
+        self._line_index = index
+        self._offset += newline_at + 1
+        return list(self._rows)
+
+
 class _StreamState:
     __slots__ = ("lock", "seq")
 

@@ -296,5 +296,61 @@ class TestReader(unittest.TestCase):
         self.assertEqual(result.reason, "invalid_quotes_only")
 
 
+class TestEligibleHistoryIndexIdentity(unittest.TestCase):
+    """eligible_history is served from a per-key precomputed ascending index
+    (bisect the end<=as_of cut, walk backwards under the watermark predicate):
+    the historical runners call it per (decision × symbol) and a per-call sort
+    + per-bar timestamp parse is O(B²) per symbol. This pins exact identity
+    against the naive §B definition over a grid of as_of instants, max_bars
+    values, and keys (incl. late/skewed watermarks and an unknown key)."""
+
+    def test_matches_naive_definition_over_grid(self):
+        from agent.bar_series import _parse_utc
+
+        rows = []
+        # buckets 13:30..13:37; every second bucket's watermark lands LATE
+        # (two minutes after its bucket) so eligibility ≠ bucket order.
+        for i in range(8):
+            ts_event = f"2026-06-15T13:3{i}:10.000000Z"
+            if i % 2 == 1 and i + 2 <= 9:
+                ts_recv = f"2026-06-15T13:3{i + 2}:30.000000Z"
+            else:
+                ts_recv = f"2026-06-15T13:3{i}:20.000000Z"
+            rows.append(_row(ts_event, ts_recv))
+        msft_rows = [_row("2026-06-15T13:31:05.000000Z",
+                          "2026-06-15T13:31:06.000000Z",
+                          symbol="MSFT", instrument_id=2002)]
+        bars_a, missing_a = _resample(rows)
+        bars_m, _ = _resample(msft_rows, symbol="MSFT", instrument_id=2002)
+        all_bars = list(bars_a) + list(bars_m)
+        reader = MidBarSeriesReader(all_bars, missing_a)
+
+        def naive(symbol, instrument_id, as_of_utc, max_bars):
+            as_of = _parse_utc(as_of_utc)
+            per = [b for b in all_bars
+                   if (b.symbol, b.instrument_id) == (symbol, instrument_id)]
+            eligible = [
+                b for b in sorted(per,
+                                  key=lambda b: _parse_utc(b.bucket_end_utc))
+                if _parse_utc(b.bucket_end_utc) <= as_of
+                and _parse_utc(b.watermark_utc) <= as_of]
+            if max_bars <= 0:
+                return ()
+            return tuple(eligible[-max_bars:])
+
+        instants = [f"2026-06-15T13:{mm}:{ss:02d}.000000Z"
+                    for mm in range(29, 42) for ss in (0, 15, 45)]
+        for as_of in instants:
+            for max_bars in (0, 1, 2, 3, 51):
+                for symbol, instrument_id in (("AAPL", 1001), ("MSFT", 2002),
+                                              ("NVDA", 3003)):
+                    self.assertEqual(
+                        reader.eligible_history(symbol, instrument_id,
+                                                as_of_utc=as_of,
+                                                max_bars=max_bars),
+                        naive(symbol, instrument_id, as_of, max_bars),
+                        msg=f"{symbol} as_of={as_of} max_bars={max_bars}")
+
+
 if __name__ == "__main__":
     unittest.main()

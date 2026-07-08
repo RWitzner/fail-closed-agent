@@ -264,6 +264,59 @@ class TestScoring(unittest.TestCase):
             self.assertEqual(clim_b.rate(symbol="AAPL", horizon="5m"), uninterrupted)
 
 
+class TestResolverSeenMemoization(unittest.TestCase):
+    """The scored stream is single-writer (S6): the resolver replays it ONCE
+    per instance and tracks its own writes in-memory — the M5 tick loop calls
+    resolve_due per bar batch, and a full re-read + re-hash per call is
+    O(day²) over a session. FD-8 rerun safety is unchanged: a FRESH resolver
+    re-replays on its first call and appends nothing."""
+
+    def test_scored_stream_replayed_once_per_instance(self):
+        import agent.calibration as calibration_mod
+
+        bars = [
+            _bar("14:00", "2026-06-15T13:59:59.000000Z", "100.000000"),
+            _bar("14:05", "2026-06-15T14:04:59.000000Z", "101.000000"),
+            _bar("14:10", "2026-06-15T14:09:59.000000Z", "102.000000"),
+        ]
+        rows1 = [_decision_row("f-1")]
+        rows2 = rows1 + [_decision_row("f-2", t0="14:05", th="14:10")]
+        with TemporaryDirectory() as tmpdir:
+            env = _LedgerEnv(tmpdir)
+            resolver = ForecastResolver(
+                reader=MidBarSeriesReader(bars), ledger=env.ledger,
+                scored_stream_path=env.path)
+            replay_calls = []
+            real_replay = calibration_mod.replay
+
+            def counting_replay(path):
+                replay_calls.append(str(path))
+                return real_replay(path)
+
+            calibration_mod.replay = counting_replay
+            try:
+                stats1 = resolver.resolve_due(
+                    rows1, now_utc="2026-06-15T15:00:00.000000Z")
+                stats2 = resolver.resolve_due(
+                    rows2, now_utc="2026-06-15T15:00:00.000000Z")
+            finally:
+                calibration_mod.replay = real_replay
+            self.assertEqual(len(replay_calls), 1)   # replayed exactly once
+            self.assertEqual(stats1.scored, 1)
+            self.assertEqual(stats2.scored, 1)                    # f-2 new
+            self.assertEqual(stats2.skipped_already_resolved, 1)  # f-1 known
+            self.assertEqual(len(replay(env.path)), 2)
+            # FD-8 unchanged: a FRESH resolver replays and appends nothing.
+            fresh = ForecastResolver(
+                reader=MidBarSeriesReader(bars), ledger=env.ledger,
+                scored_stream_path=env.path)
+            stats3 = fresh.resolve_due(
+                rows2, now_utc="2026-06-15T15:00:00.000000Z")
+            self.assertEqual(stats3.scored, 0)
+            self.assertEqual(stats3.skipped_already_resolved, 2)
+            self.assertEqual(len(replay(env.path)), 2)
+
+
 class TestLedgerValidation(unittest.TestCase):
     def test_rejects_bad_reason_outcome_and_future_receipt(self):
         with TemporaryDirectory() as tmpdir:

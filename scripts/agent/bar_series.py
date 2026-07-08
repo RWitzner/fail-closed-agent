@@ -12,6 +12,7 @@ wall-clock via zoneinfo, persisted UTC) — reimplemented per contract (the bar_
 helpers are private). Every minted timestamp uses the canonical surface form
 ``strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"``.
 """
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Context, Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
@@ -94,6 +95,8 @@ def _decimal_field(row: dict, key: str) -> Decimal:
     raw = row[key]
     if raw is None or isinstance(raw, float):
         raise ValueError(f"quote row field {key!r} is {raw!r}; M1 rows carry Decimal-strings")
+    if isinstance(raw, Decimal):
+        return raw   # value-identical to Decimal(str(raw)); hot on the live path
     try:
         return Decimal(str(raw))
     except InvalidOperation:
@@ -253,6 +256,19 @@ class MidBarSeriesReader:
             ends = list(self._bars.get(key, {})) + list(self._missing.get(key, {}))
             self._coverage[key] = (min(ends), max(ends))
 
+        # Per-key ascending (ends, watermarks, bars) parallel arrays, parsed
+        # ONCE at construction: eligible_history is called per (decision ×
+        # symbol) by the historical runners, and a per-call sort + per-bar
+        # watermark parse is O(B²) per symbol. The reader is immutable.
+        self._eligible_index: Dict[tuple, Tuple[list, list, list]] = {}
+        for key, table in self._bars.items():
+            ends = sorted(table)
+            self._eligible_index[key] = (
+                ends,
+                [_parse_utc(table[end].watermark_utc) for end in ends],
+                [table[end] for end in ends],
+            )
+
     def get(self, symbol: str, instrument_id: int, bucket_end_utc: str,
             *, as_of_utc: Optional[str] = None) -> Union[MidBar, MissingBar]:
         key = (symbol, instrument_id)
@@ -286,13 +302,23 @@ class MidBarSeriesReader:
 
     def eligible_history(self, symbol: str, instrument_id: int,
                          *, as_of_utc: str, max_bars: int) -> Tuple[MidBar, ...]:
-        """The last <= max_bars FD-2-eligible bars, ascending by bucket_end."""
-        as_of = _parse_utc(as_of_utc)
-        per_key = self._bars.get((symbol, instrument_id), {})
-        eligible = [
-            bar for end, bar in sorted(per_key.items())
-            if end <= as_of and _parse_utc(bar.watermark_utc) <= as_of
-        ]
-        if max_bars <= 0:
+        """The last <= max_bars FD-2-eligible bars, ascending by bucket_end.
+
+        Served from the construction-time index: bisect the ``end <= as_of``
+        cut, then walk BACKWARDS collecting bars whose watermark is eligible
+        until ``max_bars`` — the last-K of the filtered ascending list is
+        exactly the first K found walking backwards, reversed."""
+        index = self._eligible_index.get((symbol, instrument_id))
+        if index is None or max_bars <= 0:
             return ()
-        return tuple(eligible[-max_bars:])
+        as_of = _parse_utc(as_of_utc)
+        ends, watermarks, bars = index
+        cut = bisect_right(ends, as_of)
+        picked: List[MidBar] = []
+        for i in range(cut - 1, -1, -1):
+            if watermarks[i] <= as_of:
+                picked.append(bars[i])
+                if len(picked) == max_bars:
+                    break
+        picked.reverse()
+        return tuple(picked)
