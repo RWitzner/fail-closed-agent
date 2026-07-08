@@ -124,6 +124,19 @@ ticks, report, exit 0, zero orders). **Remaining before autonomous paper = the r
 verify, (C) an S9-passing reviewed artifact (M7d path; + the RS scan-adapter IF that family GOes), (D) the
 reviewed paper-phase caps commit (overlays are tighten-only), (E) runtime arming `.secrets/run_gates.json`. No
 unbuilt code stands in the path.**
+**OPTIMIZATION PASS PARTIAL 2026-07-08 (on `main`, suite now 1860 tests green):** the 2026-07-07 full-project
+optimization session (goal: optimize everything + finish the fully automated paper agent) died mid-run on API
+errors; the 4 finished tasks were committed 2026-07-08 as `62f9557` (perf: `IncrementalJournalReader` — the tick
+loop's per-bar-batch decisions read is now incremental+hash-verified instead of an O(day²) full re-read; the
+scored-stream replay runs once per resolver instance; `eligible_history` served from a construction-time bisect
+index — the M7d C2 dominant CPU term) + `7cfddbd` (paper ops: live-feed `source_exhausted_early` counting +
+fired-bucket row pruning so bbo-1s memory/resample stays bounded; `paper_session` feed-truncation ⇒
+`feed_truncated` + exit 1, and CLI exit codes 2=lock held / 3=journal corruption / 5=calendar coverage expired —
+was a silent 0). **PAUSED by Robin; 5 tasks remain** (tracked in the memory backlog `optimization-backlog.md`):
+`paper_report` completeness/restart-naming/`modeled_null_closes`/ET-date fixes; `agent.paper_autorun` (daily
+scheduler wrapper + launchd template); `agent.paper_phase_report` (weekly criteria aggregator); safety fixes
+F3–F6 (replay credential-inert, lock-reclaim race, blind-cap broker gate, drill hardening); step-D caps proposal
++ docs sync (runbook exit codes; `.gitignore`). Do not resume these without Robin's go.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
@@ -145,7 +158,7 @@ If a task implicitly requires breaching any of these, stop and ask.
 ## Commands
 
 M7 is stacked on `m6-reconcile` on branch `codex/m7-backtest-gate` (merged to `main` 2026-06-26). The **offline
-acceptance suite** (currently 1846 tests) remains stdlib-only for normal development — no install needed to run
+acceptance suite** (currently 1860 tests) remains stdlib-only for normal development — no install needed to run
 it on a bare checkout:
 
 ```bash
