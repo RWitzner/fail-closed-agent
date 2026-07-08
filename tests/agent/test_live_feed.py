@@ -334,6 +334,86 @@ class TestRecordingRoundTrip(unittest.TestCase):
                              live_bars[0].watermark_utc)
 
 
+class TestSourceExhaustionMarker(unittest.TestCase):
+    """A live source that ENDS before stop_at is a mid-session disconnect
+    (the credentialed generator otherwise heartbeats through quiet markets
+    until stop) — it must be counted so the session runner can refuse to
+    report a truncated day as clean."""
+
+    def test_exhaustion_before_stop_at_is_counted(self):
+        tm = _TimeMachine()
+        steps = [(10.0, lambda: _quote(tm))] * 3   # dies 13:30:30, stop 20:00
+        feed = _feed(tm, steps)
+        _run(feed)
+        self.assertEqual(
+            feed.data_quality_counts().get("source_exhausted_early"), 1)
+
+    def test_stop_at_end_is_not_exhaustion(self):
+        tm = _TimeMachine()
+        steps = [(30.0, None)] * 100
+        feed = _feed(tm, steps, stop_at="2026-07-06T13:35:00.000000Z")
+        _run(feed)
+        self.assertNotIn("source_exhausted_early", feed.data_quality_counts())
+
+    def test_max_runtime_end_is_not_exhaustion(self):
+        tm = _TimeMachine()
+        steps = [(30.0, None)] * 100
+        feed = _feed(tm, steps, max_runtime_ms=120_000)
+        _run(feed)
+        self.assertNotIn("source_exhausted_early", feed.data_quality_counts())
+
+
+class TestFiredRowPruning(unittest.TestCase):
+    """Rows for buckets that already fired must be pruned: a bbo-1s day is
+    ~23k rows/symbol and resampling the FULL history per delivered item is
+    O(day²) — the live session would fall behind irrecoverably by mid-day.
+    Pruning is behavior-identical because resample buckets are independent
+    (bar_series keys seen_any/best_valid per bucket) and a late row for a
+    fired bucket is already dropped at delivery (late_row_dropped). The
+    identity proof: the recorded stream replayed through ReplayQuoteFeed
+    resamples the full history at once and must yield the same bars."""
+
+    def test_bars_match_full_history_replay_and_rows_are_pruned(self):
+        tm = _TimeMachine()
+        with TemporaryDirectory() as tmp:
+            events_path = Path(tmp) / "events.jsonl"
+            writer = EventWriter(events_path, "run-prune",
+                                 clock=lambda: "2026-07-06T13:30:00.000000Z")
+            steps = []
+            # minutes 13:30..13:35: two valid quotes each (:20/:40), boundary
+            # crossed on a heartbeat …
+            for minute in range(6):
+                bid, ask = f"10{minute}.00", f"10{minute}.02"
+                steps.append(
+                    (20.0, lambda b=bid, a=ask: _quote(tm, bid=b, ask=a)))
+                steps.append(
+                    (20.0, lambda b=bid, a=ask: _quote(tm, bid=b, ask=a)))
+                steps.append((20.0, None))
+            # … then a bucket of ONLY invalid (crossed) quotes at 13:36 …
+            steps.append(
+                (20.0, lambda: _quote(tm, bid="200.10", ask="200.00")))
+            # … and a settle tail so the final buckets fire before shutdown.
+            steps.append((120.0, None))
+            feed = _feed(tm, steps, event_writer=writer)
+            _, live_bars = _run(feed)
+
+            replay = ReplayQuoteFeed(events_path)
+            replay_bars = []
+            replay.run(on_tick=lambda *, now_ms: None,
+                       on_bar_complete=replay_bars.append)
+            self.assertEqual(len(live_bars), 6)
+            self.assertEqual(
+                [(b.bucket_end_utc, b.mid, b.watermark_utc, b.bid, b.ask)
+                 for b in live_bars],
+                [(b.bucket_end_utc, b.mid, b.watermark_utc, b.bid, b.ask)
+                 for b in replay_bars])
+            counts = feed.data_quality_counts()
+            self.assertIsNone(counts.get("late_row_dropped"))
+            self.assertIsNone(counts.get("receipt_order_regression"))
+            # every fired bucket's rows are gone: nothing here is pending.
+            self.assertEqual(feed._rows.get(("AAPL", 1001)), [])
+
+
 class TestLiveSourceFailClosed(unittest.TestCase):
     def test_unverified_by_default_and_no_databento_import(self):
         with self.assertRaises(NotImplementedError):

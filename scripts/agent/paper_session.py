@@ -96,6 +96,7 @@ class SessionResult:
     sod_clean: Optional[bool]
     eod_clean: Optional[bool]
     drift_latched: bool
+    feed_truncated: bool
     report_path: Optional[Path]
     report: Optional[dict]
     exit_code: int
@@ -139,9 +140,14 @@ def run_paper_session(*, orchestrator, feed, journal_dir,
     drift = bool(getattr(orch, "drift_latched", False))
     sod_clean = None if sod is None else bool(sod.clean)
     eod_clean = None if eod is None else bool(eod.clean)
+    # A live source that died before stop_at truncated the session: the day is
+    # NOT clean evidence (the paper phase needs FULL RTH sessions) — exit 1 so
+    # unattended automation investigates instead of counting it.
+    feed_truncated = bool(data_quality.get("source_exhausted_early"))
     if kill_state == "halted":
         exit_code = 4
-    elif drift or sod_clean is False or eod_clean is False:
+    elif (drift or sod_clean is False or eod_clean is False
+          or feed_truncated):
         exit_code = 1
     else:
         exit_code = 0
@@ -154,14 +160,20 @@ def run_paper_session(*, orchestrator, feed, journal_dir,
         sod_clean=sod_clean,
         eod_clean=eod_clean,
         drift_latched=drift,
+        feed_truncated=feed_truncated,
         report_path=report_path,
         report=report,
         exit_code=exit_code,
     )
 
 
-def _main(argv: Optional[Sequence[str]] = None) -> int:  # pragma: no cover - thin CLI
+def _main(argv: Optional[Sequence[str]] = None) -> int:
+    """CLI. Exit codes (the daily-automation contract, mirrored in the paper
+    runbook): 0 clean (incl. non-trading day) · 1 unclean (reconcile drift /
+    truncated feed) · 2 lock held or usage · 3 journal corruption · 4
+    kill-switch HALTED · 5 calendar coverage expired (regenerate the fixture)."""
     import argparse
+    import sys
 
     from agent import orchestrator as orch_mod
 
@@ -205,9 +217,12 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:  # pragma: no cover - th
     try:
         schedule = provider.schedule_for(session_date)
     except UnknownSessionDate:
+        # Distinct exit code: for a cron/launchd operator this is the fixture
+        # EXPIRING (a silent 0 here would end the paper program unnoticed).
         print(f"session date {session_date} outside calendar coverage — "
-              "fail-closed, not trading")
-        return 0
+              "fail-closed, not trading; regenerate the session fixture "
+              "(agent.calendar_fixture) and review it", file=sys.stderr)
+        return 5
     if not schedule.is_trading_day:
         print(f"{session_date} is not a trading day; nothing to run")
         return 0
@@ -262,20 +277,27 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:  # pragma: no cover - th
     import platform
 
     strategy = build_strategy(args.strategy_id)
-    orch = orch_mod.Orchestrator(
-        journal_dir=args.journal_dir,
-        run_id=orch_mod.mint_run_id(
-            host=platform.node() or "unknown", pid=os.getpid(),
-            now_utc=datetime.now(timezone.utc)),
-        clock=feed.clock(),
-        quote_view=feed.quote_view(),
-        bar_reader=feed.bar_reader(),
-        calendar_provider=provider,
-        config=config,
-        strategy=strategy,
-        credentials_path=_SECRETS / "alpaca_paper.json",
-        run_gates_path=_SECRETS / "run_gates.json",
-    )
+    try:
+        orch = orch_mod.Orchestrator(
+            journal_dir=args.journal_dir,
+            run_id=orch_mod.mint_run_id(
+                host=platform.node() or "unknown", pid=os.getpid(),
+                now_utc=datetime.now(timezone.utc)),
+            clock=feed.clock(),
+            quote_view=feed.quote_view(),
+            bar_reader=feed.bar_reader(),
+            calendar_provider=provider,
+            config=config,
+            strategy=strategy,
+            credentials_path=_SECRETS / "alpaca_paper.json",
+            run_gates_path=_SECRETS / "run_gates.json",
+        )
+    except orch_mod.RunLockHeld as exc:
+        print(f"run lock held: {exc}", file=sys.stderr)
+        return 2
+    except orch_mod.JournalCorruption as exc:
+        print(f"journal corruption: {exc}", file=sys.stderr)
+        return 3
     try:
         result = run_paper_session(
             orchestrator=orch, feed=feed, journal_dir=args.journal_dir,

@@ -27,7 +27,14 @@ by WALL time and a live record source:
   they do not crash the session loop.
 - ``run()`` is single-shot and ends at ``stop_at_utc`` (wall), on source
   exhaustion, or at ``max_runtime_ms`` (a hard backstop so an unattended session
-  can never run away).
+  can never run away). A source that EXHAUSTS before ``stop_at_utc`` is a
+  mid-session disconnect (the credentialed generator otherwise heartbeats
+  through quiet markets until stop) and is counted ``source_exhausted_early``
+  so the session runner can refuse to report a truncated day as clean.
+- Bounded state: once a bucket fires (bar or missing), its rows are PRUNED —
+  behavior-identical because ``resample_midbars`` buckets are independent and a
+  late row for a fired bucket is already dropped at delivery. Without pruning a
+  bbo-1s day re-resamples O(day²) rows and the loop falls behind by mid-day.
 
 Import discipline: stdlib + ``agent.bar_series`` + ``agent.quote_quality`` +
 ``recorder.event``/``event_row`` types via duck use. No broker, no preflight, no
@@ -168,6 +175,10 @@ class LiveQuoteFeed:
         self._fired_bars: Dict[Tuple[str, int], List[MidBar]] = {}
         self._fired_missing: Dict[Tuple[str, int], list] = {}
         self._fired_ends: Dict[Tuple[str, int], set] = {}
+        # Running max of fired bucket ends per key (firing is strict in-order,
+        # so this is the last fired end): the per-record late-row check and the
+        # prune horizon read this instead of max()-ing the set per record.
+        self._fired_max: Dict[Tuple[str, int], datetime] = {}
         self._quality_counts: Dict[str, int] = {}
         self._ran = False
 
@@ -218,6 +229,12 @@ class LiveQuoteFeed:
             if now_ms >= next_due:
                 on_tick(now_ms=now_ms)
                 next_due = (now_ms // self._cadence_ms + 1) * self._cadence_ms
+        else:
+            # the loop ended by SOURCE EXHAUSTION (no break): before stop_at
+            # that is a disconnect, not a clean session end — count it so the
+            # runner/report can see the truncation.
+            if self._utc_now_fn() < self._stop_at:
+                self._count("source_exhausted_early")
 
         # final bar-close pass so a bucket completed by the clock (but not yet by
         # a subsequent event) still fires before shutdown/EOD accounting.
@@ -253,8 +270,8 @@ class LiveQuoteFeed:
         if last is not None and recv < last:
             self._count("receipt_order_regression")
             return
-        fired = self._fired_ends.get(key)
-        if fired and _parse_utc(prov.ts_event_utc) < max(fired):
+        fired_max = self._fired_max.get(key)
+        if fired_max is not None and _parse_utc(prov.ts_event_utc) < fired_max:
             # a row for a bucket that already fired: folding it would rewrite a
             # completed bar (lookahead in reverse) — drop + count.
             self._count("late_row_dropped")
@@ -326,18 +343,31 @@ class LiveQuoteFeed:
                      _parse_utc(miss.bucket_end_utc) + self._grace,
                      miss, False) for miss in missing],
                 key=lambda item: item[0])
+            fired_new = None
             for end, settle_at, record, is_bar in records:
                 if end in fired_ends:
                     continue
                 if wall_utc < settle_at:
                     break   # not settled: everything after must wait too
                 fired_ends.add(end)
+                fired_new = end
                 changed = True
                 if is_bar:
                     fired_bars.append(record)
                     on_bar_complete(record)
                 else:
                     fired_missing.append(record)
+            if fired_new is not None:
+                # strict in-order firing ⇒ the last fired end IS the max.
+                self._fired_max[key] = fired_new
+                # PRUNE rows of fired buckets: a row with ts_event < the fired
+                # horizon belongs to a fired bucket (minute-aligned boundary)
+                # and can never contribute again — the delivery-side late-row
+                # check refuses exactly the same rows. Keeps the per-item
+                # resample O(pending buckets) and the memory bounded.
+                self._rows[key] = [
+                    row for row in rows
+                    if _parse_utc(row["ts_event_utc"]) >= fired_new]
         if changed:
             all_bars: List[MidBar] = []
             all_missing: list = []
@@ -402,6 +432,7 @@ def databento_live_source(*, dataset: str, schema: str,
     records: "_queue.Queue" = _queue.Queue(maxsize=10_000)
     _SENTINEL = object()
     id_to_symbol: Dict[int, str] = {}
+    allowed_symbols = frozenset(symbols)
 
     def _pump() -> None:
         try:
@@ -434,7 +465,7 @@ def databento_live_source(*, dataset: str, schema: str,
                     yield None   # system/heartbeat/error records advance the clock
                     continue
                 symbol = id_to_symbol.get(getattr(record, "instrument_id", None))
-                if symbol is None or symbol not in set(symbols):
+                if symbol is None or symbol not in allowed_symbols:
                     yield None
                     continue
                 try:

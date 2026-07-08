@@ -121,7 +121,8 @@ class TestObserveRehearsal(unittest.TestCase):
     def test_observe_session_runs_and_reports_zero_submits(self):
         tm = _TimeMachine("2026-07-06T13:30:00.000000Z")
         steps = [(5.0, (lambda: _quote(tm)))] * 40
-        feed = _live_feed(tm, steps, stop_at="2026-07-06T20:15:00.000000Z")
+        # the feed runs INTO stop_at (a clean end, not a mid-session death)
+        feed = _live_feed(tm, steps, stop_at="2026-07-06T13:33:00.000000Z")
         with TemporaryDirectory() as tmp:
             orch = orch_mod.Orchestrator(
                 journal_dir=Path(tmp), run_id="run-session-observe",
@@ -139,6 +140,7 @@ class TestObserveRehearsal(unittest.TestCase):
             self.assertIsInstance(result, SessionResult)
             self.assertEqual(result.mode, "observe")
             self.assertEqual(result.exit_code, 0)
+            self.assertFalse(result.feed_truncated)
             self.assertIsNone(result.sod_clean)
             self.assertIsNone(result.eod_clean)
             self.assertGreater(result.ticks_run, 0)
@@ -174,7 +176,8 @@ class TestPaperSession(unittest.TestCase):
         steps = ([(10.0, (lambda: _quote(tm)))] * 11    # -> 19:59:50
                  + [(40.0, (lambda: _quote(tm)))]       # 20:00:30 post-close
                  + [(30.0, (lambda: _quote(tm)))]       # 20:01:00 completes bars
-                 + [(2.0, None), (2.0, None)])
+                 + [(2.0, None), (2.0, None)]
+                 + [(850.0, None)])                     # heartbeats to stop_at
         feed = _live_feed(tm, steps, stop_at="2026-07-06T20:15:00.000000Z")
         with TemporaryDirectory() as tmp:
             orch = self._paper_orch(tmp, feed)
@@ -190,6 +193,7 @@ class TestPaperSession(unittest.TestCase):
                 orch.close()
             self.assertEqual(result.mode, "paper")
             self.assertEqual(result.exit_code, 0)
+            self.assertFalse(result.feed_truncated)
             self.assertTrue(result.sod_clean)
             # the in-loop edge ran EOD; ensure_eod_reconcile was a no-op
             self.assertIsNone(result.eod_clean)
@@ -199,7 +203,7 @@ class TestPaperSession(unittest.TestCase):
             self.assertTrue(result.report["reconcile"]["all_clean"])
             self.assertEqual(result.kill_state, "monitoring")
 
-    def test_feed_dying_early_falls_back_to_ensure_eod(self):
+    def test_feed_dying_early_falls_back_to_ensure_eod_and_flags_truncation(self):
         tm = _TimeMachine("2026-07-06T19:58:00.000000Z")
         steps = [(10.0, (lambda: _quote(tm)))] * 3   # dies at 19:58:30
         feed = _live_feed(tm, steps, stop_at="2026-07-06T20:15:00.000000Z")
@@ -214,7 +218,12 @@ class TestPaperSession(unittest.TestCase):
                     utc_now_iso_fn=tm.utc_iso)
             finally:
                 orch.close()
-            self.assertEqual(result.exit_code, 0)
+            # a truncated day is NOT clean paper-phase evidence: exit 1, but
+            # the EOD fallback still ran so nothing dangles.
+            self.assertEqual(result.exit_code, 1)
+            self.assertTrue(result.feed_truncated)
+            self.assertEqual(
+                result.report["data_quality"].get("source_exhausted_early"), 1)
             self.assertTrue(result.sod_clean)
             self.assertTrue(result.eod_clean)   # the runner's fallback ran it
             self.assertEqual(_reconcile_phases(Path(tmp) / "journal"),
@@ -253,6 +262,70 @@ class TestPaperSession(unittest.TestCase):
                 orch.close()
             self.assertEqual(result.kill_state, "halted")
             self.assertEqual(result.exit_code, 4)
+
+
+class TestMainExitCodes(unittest.TestCase):
+    """The runbook's daily-automation contract, minted by _main itself:
+    2 lock held · 3 journal corruption · 5 calendar coverage expired (a
+    silent 0 would end an unattended paper program the day the fixture
+    runs out); non-trading days stay 0."""
+
+    _OBSERVE_EVENTS = (_REPO_ROOT / "tests" / "fixtures" / "execution"
+                       / "observe_session_tbbo.jsonl")
+
+    def _run_main(self, argv):
+        from agent.paper_session import _main
+        return _main(argv)
+
+    def test_calendar_coverage_expired_exits_5(self):
+        with TemporaryDirectory() as tmp:
+            rc = self._run_main([
+                "--journal-dir", str(Path(tmp) / "journal"),
+                "--replay", str(Path(tmp) / "missing.jsonl"),
+                "--session-date", "2027-01-05",
+                "--report-dir", str(Path(tmp) / "reports")])
+            self.assertEqual(rc, 5)
+
+    def test_non_trading_day_exits_0(self):
+        with TemporaryDirectory() as tmp:
+            rc = self._run_main([
+                "--journal-dir", str(Path(tmp) / "journal"),
+                "--replay", str(Path(tmp) / "missing.jsonl"),
+                "--session-date", "2026-09-07",   # Labor Day (fixture holiday)
+                "--report-dir", str(Path(tmp) / "reports")])
+            self.assertEqual(rc, 0)
+
+    def test_run_lock_held_exits_2(self):
+        from agent.run_lock import RunLock
+
+        with TemporaryDirectory() as tmp:
+            journal_dir = Path(tmp) / "journal"
+            lock = RunLock(journal_dir)
+            lock.acquire()   # a LIVE lock (our own pid)
+            try:
+                rc = self._run_main([
+                    "--journal-dir", str(journal_dir),
+                    "--replay", str(self._OBSERVE_EVENTS),
+                    "--symbols", "AAPL",
+                    "--session-date", "2026-07-06",
+                    "--report-dir", str(Path(tmp) / "reports")])
+            finally:
+                lock.release()
+            self.assertEqual(rc, 2)
+
+    def test_journal_corruption_exits_3(self):
+        with TemporaryDirectory() as tmp:
+            journal_dir = Path(tmp) / "journal"
+            journal_dir.mkdir(parents=True)
+            (journal_dir / "decisions.jsonl").write_text(
+                "not-a-journal-row\n", encoding="utf-8")
+            rc = self._run_main([
+                "--journal-dir", str(journal_dir),
+                "--replay", str(self._OBSERVE_EVENTS),
+                "--symbols", "AAPL",
+                "--session-date", "2026-07-06",
+                "--report-dir", str(Path(tmp) / "reports")])
+            self.assertEqual(rc, 3)
 
 
 class TestStrategyRegistry(unittest.TestCase):
