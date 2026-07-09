@@ -23,11 +23,16 @@ from types import SimpleNamespace
 from unittest import mock
 
 from agent import orchestrator as orch_mod
+from agent.broker.base import OrderIntent
 from agent.broker_reconcile import ReconcileError
 from agent.broker.alpaca import AlpacaPaperBroker, SyntheticConfinementError
 from agent.corporate_actions import DurableId
 from agent.exec_ledger import ExecLedger
-from agent.execution_preflight import unbind_runtime
+from agent.execution_preflight import (
+    authorization_of,
+    mint_reduce_only_token,
+    unbind_runtime,
+)
 from agent.journal import replay
 from agent.paper_book import PaperBook
 from agent.reconcile_ledger import (
@@ -837,16 +842,30 @@ class OrchestratorCase(unittest.TestCase):
     # Bounded blindness: > MAX_ACCOUNT_BLIND_MS of continuous non-fresh reads
     # WITH an open position => flatten-then-halt (cause=account_blind_cap).
 
+    @staticmethod
+    def _blind_positions(qty="10"):
+        qty = Decimal(qty)
+        return [{"symbol": "AAPL", "qty": str(qty),
+                 "market_value": str(qty * Decimal("200.00")),
+                 "instrument_id": 1001}]
+
     def _blind_pipeline(self, subdir, *, seed_position=True,
-                        account_payloads=None):
+                        broker_positions=None, broker_enabled=True,
+                        broker_qty="10", account_payloads=None,
+                        positions_payloads=None):
         journal_dir = self.tmp / subdir
         if seed_position:
             self._m6_open_prior_position(journal_dir)
+        if broker_positions is None:
+            broker_positions = seed_position
 
         def flatten_status(client_order_id):
+            submitted = api.submit_calls[-1]
             return order_payload(
-                client_order_id=client_order_id, symbol="AAPL", qty="10",
-                side="sell", status="filled", filled_qty="10",
+                client_order_id=client_order_id,
+                symbol=submitted["symbol"], qty=submitted["qty"],
+                side=submitted["side"], status="filled",
+                filled_qty=submitted["qty"],
                 filled_avg_price="200.00")
 
         api = ScriptedOrderApi({
@@ -860,14 +879,17 @@ class OrchestratorCase(unittest.TestCase):
                     limit_price=payload["limit_price"]),
             ],
         })
-        positions_row = [{"symbol": "AAPL", "qty": "10",
-                          "market_value": "2000.00", "instrument_id": 1001}]
+        positions_row = self._blind_positions(broker_qty)
         provider = FakeAccountProvider(
             account_payloads=(account_payloads if account_payloads is not None
                               else [account_payload(), None]),
-            positions_payloads=[positions_row if seed_position else []])
+            positions_payloads=(
+                positions_payloads if positions_payloads is not None
+                else [positions_row if broker_positions else []]))
         pipeline = self.make_pipeline(
-            subdir=subdir, broker=AlpacaPaperBroker(order_api=api),
+            subdir=subdir,
+            broker=(AlpacaPaperBroker(order_api=api)
+                    if broker_enabled else None),
             strategy=None, account_provider=provider, run_gates=None)
         return pipeline, api
 
@@ -897,6 +919,374 @@ class OrchestratorCase(unittest.TestCase):
                          "flatten-AAPL")
         closes = pipeline.rows_of("positions", "position_close")
         self.assertEqual([row["reason"] for row in closes], ["kill_flatten"])
+
+    def test_account_blind_beyond_cap_with_broker_only_position_halts(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-broker-only", seed_position=False,
+            broker_positions=True)
+        self.assertEqual(pipeline.orch._book._positions, {})
+        pipeline.tick_on_bar(1)
+        self.assertEqual(
+            [pos.symbol for pos in pipeline.orch._portfolio.positions],
+            ["AAPL"])
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        transitions = pipeline.rows_of("risk", "kill_switch_transition")
+        self.assertEqual([row["to_state"] for row in transitions],
+                         ["flattening", "halted"])
+        self.assertEqual({row["cause"] for row in transitions},
+                         {"account_blind_cap"})
+        self.assertEqual(len(api.submit_calls), 1)
+        self.assertEqual(api.submit_calls[0]["side"], "sell")
+        self.assertEqual(api.submit_calls[0]["client_order_id"],
+                         "flatten-AAPL")
+        self.assertEqual(
+            pipeline.rows_of("positions", "position_close"), [])
+
+    def test_account_blind_beyond_cap_brokerless_local_position_does_not_trip(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-brokerless-local", seed_position=True,
+            broker_positions=False, broker_enabled=False)
+        self.assertIsNone(pipeline.orch.broker)
+        self.assertTrue(any(
+            pos.status == "open"
+            for pos in pipeline.orch._book._positions.values()))
+        pipeline.tick_on_bar(1)
+        self.assertEqual(pipeline.orch._portfolio.positions, ())
+        for bar in range(2, 11):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "monitoring")
+        self.assertEqual(
+            pipeline.rows_of("risk", "kill_switch_transition"), [])
+        self.assertEqual(api.submit_calls, [])
+
+    def test_account_blind_local_only_with_broker_halts_without_submit(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-local-only", seed_position=True, broker_positions=False,
+            broker_enabled=True, positions_payloads=[[]])
+        pipeline.tick_on_bar(1)                    # fresh broker-flat read
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        transitions = pipeline.rows_of("risk", "kill_switch_transition")
+        self.assertEqual([row["to_state"] for row in transitions],
+                         ["flattening", "halted"])
+        self.assertEqual(transitions[-1]["flattened"], [])
+        self.assertEqual(transitions[-1]["residual"], ["AAPL"])
+        self.assertEqual(transitions[-1]["failed"],
+                         [["AAPL", "position_unconfirmed"]])
+        self.assertEqual(api.submit_calls, [])
+
+    def test_account_blind_invalid_current_positions_retains_exposure_without_submit(self):
+        captured_tokens = []
+        original_mint = orch_mod.mint_reduce_only_token
+
+        def capture_token(*args, **kwargs):
+            token = original_mint(*args, **kwargs)
+            captured_tokens.append(token)
+            return token
+
+        pipeline, api = self._blind_pipeline(
+            "blind-invalid-current", seed_position=False,
+            account_payloads=[account_payload(), None],
+            positions_payloads=[self._blind_positions(), {"bad": "shape"}])
+        pipeline.tick_on_bar(1)
+        with mock.patch("agent.kill_switch.mint_reduce_only_token",
+                        side_effect=capture_token):
+            for bar in range(2, 9):
+                pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        self.assertIsNone(pipeline.orch._portfolio)
+        self.assertEqual(
+            pipeline.orch._last_valid_portfolio.qty_for("AAPL"),
+            Decimal("10"))
+        transitions = pipeline.rows_of("risk", "kill_switch_transition")
+        self.assertEqual(transitions[-1]["flattened"], [])
+        self.assertEqual(transitions[-1]["residual"], ["AAPL"])
+        self.assertEqual(
+            transitions[-1]["failed"],
+            [["AAPL", "position_unconfirmed"]])
+        self.assertEqual(api.submit_calls, [])
+        self.assertEqual(len(captured_tokens), 1)
+        self.assertIsNone(authorization_of(captured_tokens[0]))
+
+    def test_account_blind_unavailable_current_positions_halts_without_submit(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-unavailable-current", seed_position=False,
+            account_payloads=[account_payload(), None],
+            positions_payloads=[self._blind_positions(), None])
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        self.assertIsNone(pipeline.orch._portfolio)
+        self.assertEqual(
+            pipeline.orch._last_valid_portfolio.qty_for("AAPL"),
+            Decimal("10"))
+        transitions = pipeline.rows_of("risk", "kill_switch_transition")
+        self.assertEqual(transitions[-1]["flattened"], [])
+        self.assertEqual(transitions[-1]["residual"], ["AAPL"])
+        self.assertEqual(transitions[-1]["failed"],
+                         [["AAPL", "position_unconfirmed"]])
+        self.assertEqual(api.submit_calls, [])
+
+    def test_account_blind_stale_cached_positions_halts_without_submit(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-stale-cache", seed_position=False,
+            broker_positions=True)
+        pipeline.tick_on_bar(1)
+        with mock.patch.object(pipeline.orch, "_refresh_account"):
+            for bar in range(2, 9):
+                pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        current = pipeline.orch._portfolio_read(pipeline.clock.now_ms())
+        self.assertIsNotNone(current)
+        self.assertTrue(current.stale)
+        transitions = pipeline.rows_of("risk", "kill_switch_transition")
+        self.assertEqual(transitions[-1]["flattened"], [])
+        self.assertEqual(transitions[-1]["residual"], ["AAPL"])
+        self.assertEqual(transitions[-1]["failed"],
+                         [["AAPL", "position_unconfirmed"]])
+        self.assertEqual(api.submit_calls, [])
+
+    def test_account_blind_fresh_flat_clears_stale_last_valid_exposure(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-fresh-flat", seed_position=False,
+            account_payloads=[account_payload(), None, account_payload(), None],
+            positions_payloads=[self._blind_positions(), None, [], None])
+        pipeline.tick_on_bar(1)                    # current long
+        pipeline.tick_on_bar(2, advance_ms=30_000)  # stale current
+        pipeline.tick_on_bar(3, advance_ms=3_000)   # fresh flat clears cache
+        for bar in range(4, 11):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "monitoring")
+        self.assertEqual(pipeline.orch._last_valid_portfolio.positions, ())
+        self.assertEqual(
+            pipeline.rows_of("risk", "kill_switch_transition"), [])
+        self.assertEqual(api.submit_calls, [])
+
+    def test_account_blind_fresh_short_replaces_last_valid_long(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-sign-flip", seed_position=False,
+            account_payloads=[account_payload(), account_payload(), None],
+            positions_payloads=[self._blind_positions("10"),
+                                self._blind_positions("-5")])
+        pipeline.tick_on_bar(1)                    # long
+        pipeline.tick_on_bar(2, advance_ms=3_000)  # fresh short replaces it
+        for bar in range(3, 10):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        self.assertEqual(
+            pipeline.orch._last_valid_portfolio.qty_for("AAPL"),
+            Decimal("-5"))
+        self.assertEqual(len(api.submit_calls), 1)
+        self.assertEqual(api.submit_calls[0]["side"], "buy")
+        self.assertEqual(api.submit_calls[0]["qty"], "5")
+
+    def test_account_blind_broker_only_short_submits_reduce_only_buy(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-broker-short", seed_position=False,
+            broker_positions=True, broker_qty="-7")
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        self.assertEqual(len(api.submit_calls), 1)
+        self.assertEqual(api.submit_calls[0]["side"], "buy")
+        self.assertEqual(api.submit_calls[0]["qty"], "7")
+
+    def test_account_blind_broker_larger_than_local_does_not_book_or_corrupt(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-local-broker-magnitude-drift", broker_qty="15")
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual([(call["side"], call["qty"])
+                          for call in api.submit_calls], [("sell", "15")])
+        self.assertEqual(pipeline.rows_of("positions", "position_close"), [])
+        self.assertEqual(pipeline.rows_of("fills", "broker_fill"), [])
+        live = [pos for pos in pipeline.orch._book._positions.values()
+                if pos.symbol == "AAPL" and pos.status == "open"]
+        self.assertEqual([pos.qty for pos in live], [Decimal("10")])
+
+        pipeline.close()
+        resumed, _ = self._blind_pipeline(
+            "blind-local-broker-magnitude-drift", seed_position=False,
+            broker_positions=False, positions_payloads=[[]])
+        rehydrated = [pos for pos in resumed.orch._book._positions.values()
+                      if pos.symbol == "AAPL" and pos.status == "open"]
+        self.assertEqual([pos.qty for pos in rehydrated], [Decimal("10")])
+
+    def test_account_blind_broker_short_does_not_partially_close_local_long(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-local-broker-sign-drift", broker_qty="-5")
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+
+        self.assertEqual([(call["side"], call["qty"])
+                          for call in api.submit_calls], [("buy", "5")])
+        self.assertEqual(pipeline.rows_of("positions", "position_close"), [])
+        self.assertEqual(pipeline.rows_of("fills", "broker_fill"), [])
+        live = [pos for pos in pipeline.orch._book._positions.values()
+                if pos.symbol == "AAPL" and pos.status == "open"]
+        self.assertEqual([pos.qty for pos in live], [Decimal("10")])
+
+    def test_account_blind_confirmation_forwards_exact_long_and_short(self):
+        for qty, side in ((Decimal("10"), "sell"),
+                          (Decimal("-7"), "buy")):
+            with self.subTest(qty=qty):
+                inner = SpyBroker()
+                intent = OrderIntent(
+                    symbol="AAPL", side=side, qty=abs(qty),
+                    is_reducing=True, intent_id="flatten-AAPL")
+                held = SimpleNamespace(symbol="AAPL", qty=qty)
+                token = mint_reduce_only_token(held, intent)
+                broker = orch_mod._AccountBlindFlattenBroker(
+                    inner=inner, confirmed_qty={"AAPL": qty})
+
+                broker.submit_order(intent, token)
+
+                self.assertEqual(inner.calls, [intent])
+                self.assertEqual(inner.submitted, [intent])
+                self.assertIsNone(authorization_of(token))
+
+    def test_account_blind_confirmation_consumes_token_on_mismatch(self):
+        cases = {
+            "missing": {},
+            "wrong_sign": {"AAPL": Decimal("-10")},
+            "wrong_qty": {"AAPL": Decimal("9")},
+        }
+        for name, confirmed_qty in cases.items():
+            with self.subTest(name=name):
+                inner = SpyBroker()
+                intent = OrderIntent(
+                    symbol="AAPL", side="sell", qty=Decimal("10"),
+                    is_reducing=True, intent_id="flatten-AAPL")
+                held = SimpleNamespace(symbol="AAPL", qty=Decimal("10"))
+                token = mint_reduce_only_token(held, intent)
+                broker = orch_mod._AccountBlindFlattenBroker(
+                    inner=inner, confirmed_qty=confirmed_qty)
+
+                with self.assertRaisesRegex(
+                        orch_mod._PositionUnconfirmed,
+                        "^position_unconfirmed$"):
+                    broker.submit_order(intent, token)
+
+                self.assertEqual(inner.calls, [])
+                self.assertIsNone(authorization_of(token))
+
+    def test_account_blind_retry_reconfirms_before_submit(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-retry-confirmation", seed_position=True,
+            account_payloads=[account_payload(), None],
+            positions_payloads=[self._blind_positions(), None])
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.residual_symbols(),
+                         ("AAPL",))
+        self.assertEqual(api.submit_calls, [])
+
+        captured_tokens = []
+        original_mint = orch_mod.mint_reduce_only_token
+
+        def capture_token(*args, **kwargs):
+            token = original_mint(*args, **kwargs)
+            captured_tokens.append(token)
+            return token
+
+        with mock.patch("agent.kill_switch.mint_reduce_only_token",
+                        side_effect=capture_token):
+            report = pipeline.orch.retry_residual()
+
+        self.assertEqual(report.flattened, ())
+        self.assertEqual(report.failed,
+                         (("AAPL", "position_unconfirmed"),))
+        self.assertEqual(report.residual, ("AAPL",))
+        self.assertEqual(api.submit_calls, [])
+        self.assertEqual(len(captured_tokens), 1)
+        self.assertIsNone(authorization_of(captured_tokens[0]))
+
+        pipeline.orch._account_provider = FakeAccountProvider(
+            account_payloads=[account_payload()],
+            positions_payloads=[self._blind_positions()])
+        pipeline.clock.advance(3_000)
+        pipeline.orch._refresh_account(pipeline.clock.now_ms())
+        report = pipeline.orch.retry_residual()
+
+        self.assertEqual(report.flattened, ("AAPL",))
+        self.assertEqual(report.failed, ())
+        self.assertEqual(report.residual, ())
+        self.assertEqual([call["side"] for call in api.submit_calls], ["sell"])
+        self.assertEqual(report.cause, "account_blind_cap")
+        closes = pipeline.rows_of("positions", "position_close")
+        self.assertEqual([row["reason"] for row in closes], ["kill_flatten"])
+        self.assertFalse(any(pos.status == "open"
+                             for pos in pipeline.orch._book._positions.values()))
+
+    def test_account_blind_divergent_retry_defers_local_book_to_reconcile(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-retry-divergent", seed_position=True,
+            account_payloads=[account_payload(), None],
+            positions_payloads=[self._blind_positions(), None])
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.residual_symbols(),
+                         ("AAPL",))
+
+        pipeline.orch._account_provider = FakeAccountProvider(
+            account_payloads=[account_payload()],
+            positions_payloads=[self._blind_positions("-5")])
+        pipeline.clock.advance(3_000)
+        pipeline.orch._refresh_account(pipeline.clock.now_ms())
+        report = pipeline.orch.retry_residual()
+
+        self.assertEqual(report.flattened, ("AAPL",))
+        self.assertEqual([(call["side"], call["qty"])
+                          for call in api.submit_calls], [("buy", "5")])
+        self.assertEqual(pipeline.rows_of("positions", "position_close"), [])
+        self.assertEqual(pipeline.rows_of("fills", "broker_fill"), [])
+        live = [pos for pos in pipeline.orch._book._positions.values()
+                if pos.symbol == "AAPL" and pos.status == "open"]
+        self.assertEqual([pos.qty for pos in live], [Decimal("10")])
+
+    def test_account_blind_retry_after_restart_preserves_cause(self):
+        pipeline, api = self._blind_pipeline(
+            "blind-retry-restart", seed_position=True,
+            account_payloads=[account_payload(), None],
+            positions_payloads=[self._blind_positions(), None])
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.residual_symbols(),
+                         ("AAPL",))
+        self.assertEqual(api.submit_calls, [])
+        pipeline.close()
+
+        resumed, resumed_api = self._blind_pipeline(
+            "blind-retry-restart", seed_position=False,
+            account_payloads=[account_payload()],
+            positions_payloads=[self._blind_positions()])
+        resumed.tick_on_bar(1)
+        report = resumed.orch.retry_residual()
+
+        self.assertEqual(report.cause, "account_blind_cap")
+        self.assertEqual(report.flattened, ("AAPL",))
+        self.assertEqual([call["side"] for call in resumed_api.submit_calls],
+                         ["sell"])
 
     def test_account_blind_below_cap_only_journals_skip(self):
         pipeline, api = self._blind_pipeline("blind-below")

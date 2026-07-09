@@ -356,6 +356,29 @@ class TestRehydrateMarkerGuard(unittest.TestCase):
             self.assertEqual(len(markers), 1)
             self.assertEqual(markers[0]["residual"], ["MSFT"])
 
+    def test_retry_after_rehydrate_preserves_kill_cause(self):
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "risk.jsonl"
+            ledger = RiskLedger(EventWriter(path, "run-1", clock=_CLOCK),
+                                rules_hash="rh")
+            ledger.record_kill_transition(
+                from_state="monitoring", to_state="flattening",
+                cause="account_blind_cap", generation=1, stale_inputs=True,
+                flattened=(), failed=(), residual=("AAPL",),
+                tradability_annotations=())
+            ledger.record_kill_transition(
+                from_state="flattening", to_state="halted",
+                cause="account_blind_cap", generation=1, stale_inputs=True,
+                flattened=(), failed=(("AAPL", "position_unconfirmed"),),
+                residual=("AAPL",), tradability_annotations=())
+            switch = RiskKillSwitch(cfg=_cfg(), ledger=None)
+            switch.rehydrate(replay_risk(path))
+
+            report = switch.retry_residual(
+                SpyBroker(), portfolio_fixture("long_only"))
+
+            self.assertEqual(report.cause, "account_blind_cap")
+
 
 class TestVocabAndDeterminism(unittest.TestCase):
     def test_out_of_vocab_and_reserved_cause_raise(self):

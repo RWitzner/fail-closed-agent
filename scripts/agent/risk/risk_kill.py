@@ -232,12 +232,13 @@ class RiskKillSwitch:
             self._state = require_kill_state(slice_["state"])
             self._generation = int(slice_["generation"])
             self._residual = tuple(sorted(slice_["residual"]))
-            self._cause = None
             self._last_report = None
             last_transition = None
             for row in sorted(rows, key=lambda r: r["seq"]):
                 if row.get("event_type") == EVT_KILL_TRANSITION:
                     last_transition = row
+            self._cause = (last_transition.get("cause")
+                           if last_transition is not None else None)
             # harden round 1, M4-R1-F2: the marker means "exposure remains broker-held".
             # Guard on the REBUILT residual (which already folds kill_retry_residual
             # rows) — after a fully-successful retry the flatten IS complete and a

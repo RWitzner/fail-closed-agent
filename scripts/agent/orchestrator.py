@@ -90,7 +90,7 @@ from agent.broker_reconcile import (
     require_phase,
     resolve_order_probe,
 )
-from agent.broker.base import OrderIntent
+from agent.broker.base import OrderIntent, require_token
 from agent.broker.order_state import (
     BrokerOrder,
     FillDelta,
@@ -173,7 +173,12 @@ from agent.risk.loss_limits import LossLimitsMonitor
 from agent.risk.pdt_compat import BrokerRejectionObservation, LegacyPdtCompatMode
 from agent.risk.risk_config import RiskConfig
 from agent.risk.risk_kill import MAX_ACCOUNT_BLIND_MS, RiskKillSwitch
-from agent.risk.risk_ledger import RiskLedger, replay_risk, rehydrate_risk_state
+from agent.risk.risk_ledger import (
+    EVT_KILL_TRANSITION,
+    RiskLedger,
+    replay_risk,
+    rehydrate_risk_state,
+)
 from agent.run_lock import RunLock, RunLockHeld
 from agent.secrets_runtime import (
     assemble_gates_view,
@@ -393,6 +398,38 @@ class _TickLimit(Exception):
     """Internal: stop a feed-driven run after --ticks N (observe CLI)."""
 
 
+class _PositionUnconfirmed(Exception):
+    """A presumed blind exposure is not confirmed by a fresh broker read."""
+
+
+class _AccountBlindFlattenBroker:
+    """Submit blind-cap reductions only against an exact current position."""
+
+    def __init__(self, *, inner, confirmed_qty: Mapping[str, Decimal]) -> None:
+        self._inner = inner
+        self._confirmed_qty = dict(confirmed_qty)
+
+    def submit_order(self, intent: OrderIntent, token):
+        qty = self._confirmed_qty.get(intent.symbol)
+        side = ("sell" if qty is not None and qty > 0
+                else "buy" if qty is not None and qty < 0
+                else None)
+        exact = (
+            self._inner is not None
+            and intent.is_reducing is True
+            and side == intent.side
+            and qty is not None
+            and abs(qty) == intent.qty
+        )
+        if not exact:
+            # Validate and consume the authentic reduce-only authorization even
+            # though no broker call is made.  A blind retry must never leave a
+            # reusable token stranded in the process registry.
+            require_token(intent, token)
+            raise _PositionUnconfirmed("position_unconfirmed")
+        return self._inner.submit_order(intent, token)
+
+
 @dataclass
 class _OrderTask:
     """One in-flight order (FD-M5-21: at most ONE globally, open OR close)."""
@@ -596,6 +633,10 @@ class Orchestrator:
         self._risk_kill = RiskKillSwitch(cfg=self._risk_config,
                                          ledger=self._risk_ledger)
         self._risk_kill.rehydrate(risk_rows)
+        self._kill_cause = None
+        for row in risk_rows:
+            if row.get("event_type") == EVT_KILL_TRANSITION:
+                self._kill_cause = row.get("cause")
         self._pdt = LegacyPdtCompatMode(ledger=self._risk_ledger,
                                         rehydrated_state=rehydrated["pdt"])
         self._loss = LossLimitsMonitor(cfg=self._risk_config,
@@ -752,6 +793,7 @@ class Orchestrator:
         self._last_scanned_bar: Dict[str, str] = {}
         self._instant_utc: Optional[str] = None
         self._portfolio = None
+        self._last_valid_portfolio = None
         self._last_account_ms: Optional[int] = None
         self._last_phase: Optional[SessionPhase] = None
         self._closed_sessions: set = set()
@@ -1214,6 +1256,7 @@ class Orchestrator:
         account_payload, positions_payload = self._provider_payloads()
         if (not isinstance(account_payload, Mapping)
                 or not isinstance(positions_payload, list)):
+            self._portfolio = None
             notes.append(("broker_read_failed", None, "payload shape"))
             return self._finish_reconcile_pass(
                 reconcile_id=reconcile_id, phase=phase,
@@ -1227,6 +1270,7 @@ class Orchestrator:
             account_payload, source=self._account_source,
             seen_at_ms=now, ts_read_utc=ts)
         if isinstance(parsed_account, AccountInvalid):
+            self._portfolio = None
             notes.append(("broker_read_failed", None, parsed_account.reason))
             completed = False
             portfolio = None
@@ -1235,8 +1279,9 @@ class Orchestrator:
                 portfolio = parse_positions_payload(
                     positions_payload, source=self._account_source,
                     seen_at_ms=now, stale=False)
-                self._portfolio = portfolio
+                self._accept_current_portfolio(portfolio)
             except ValueError as exc:
+                self._portfolio = None
                 notes.append(("broker_read_failed", None, str(exc)))
                 completed = False
                 portfolio = None
@@ -1622,6 +1667,7 @@ class Orchestrator:
             return
         account_payload, positions_payload = self._provider_payloads()
         if account_payload is None and positions_payload is None:
+            self._portfolio = None
             return
         self._last_account_ms = now_ms
         ts_read = self._instant_utc or "1970-01-01T00:00:00.000000Z"
@@ -1643,14 +1689,23 @@ class Orchestrator:
                     account,
                     session_date_et=self._calendar.session_date_for(
                         self._instant_utc))
+        if not isinstance(positions_payload, list):
+            self._portfolio = None
+            return
         try:
-            rows = positions_payload if positions_payload is not None else []
-            self._portfolio = parse_positions_payload(
-                rows, source=self._account_source, seen_at_ms=now_ms,
-                stale=False)
-            self._observe_durable_positions(self._portfolio, now_ms)
+            portfolio = parse_positions_payload(
+                positions_payload, source=self._account_source,
+                seen_at_ms=now_ms, stale=False)
         except ValueError:
             self._portfolio = None  # caller maps to portfolio_missing
+            return
+        self._accept_current_portfolio(portfolio)
+        self._observe_durable_positions(portfolio, now_ms)
+
+    def _accept_current_portfolio(self, portfolio) -> None:
+        """Publish a valid current read and replace the last-valid snapshot."""
+        self._portfolio = portfolio
+        self._last_valid_portfolio = portfolio
 
     def _portfolio_read(self, now_ms: int):
         if self._portfolio is None:
@@ -1700,8 +1755,9 @@ class Orchestrator:
         # halt under `account_blind_cap` — a cause that consumes no account
         # numbers. `missing` keeps its pre-existing no-skip-row semantics (an
         # observe composition reads `missing` every tick and must stay
-        # row-silent) but counts toward the blind clock; the flat-book guard
-        # keeps broker-less compositions from ever tripping.
+        # row-silent) but counts toward the blind clock. Escalation requires a
+        # flatten-capable broker plus either local or last-known broker
+        # exposure; broker-less observe/replay compositions cannot flatten.
         if self._kill_blind_since_ms is None:
             self._kill_blind_since_ms = now_ms
         if account.status != "missing" and not self._kill_skipped_latch:
@@ -1710,14 +1766,18 @@ class Orchestrator:
                 account_status=account.status,
                 generation=self._risk_kill.generation)
         if (now_ms - self._kill_blind_since_ms > MAX_ACCOUNT_BLIND_MS
+                and self.broker is not None
                 and self._has_open_positions()):
             self._kill_sequence("account_blind_cap", None, now_ms)
 
     def _has_open_positions(self) -> bool:
-        """Local book-of-record view (rehydrate-backed) — usable while the
-        broker account read is degraded."""
-        return any(pos.status == "open"
-                   for pos in self._book._positions.values())
+        """Conservative local/last-known-broker exposure union for blindness."""
+        local_open = any(
+            pos.status == "open" for pos in self._book._positions.values())
+        broker_open = (
+            self._last_valid_portfolio is not None
+            and bool(self._last_valid_portfolio.positions))
+        return local_open or broker_open
 
     def trigger_kill(self, cause: str = "drill") -> None:
         """Operator/drill entry into the §M.6 sequence."""
@@ -1726,8 +1786,15 @@ class Orchestrator:
     def retry_residual(self):
         """Operator-attended residual retry (HALTED only; M4 §I)."""
         now_ms = self._clock.now_ms()
-        return self._risk_kill.retry_residual(
-            self._flatten_broker(), self._flatten_portfolio(now_ms))
+        if self._kill_cause == "account_blind_cap":
+            report = self._risk_kill.retry_residual(
+                self._account_blind_flatten_broker(now_ms),
+                self._account_blind_portfolio(now_ms))
+        else:
+            report = self._risk_kill.retry_residual(
+                self._flatten_broker(), self._flatten_portfolio(now_ms))
+        self._book_flatten_closes(report, now_ms)
+        return report
 
     def _flatten_broker(self):
         from agent.broker.flatten_proxy import PriceCappedFlattenBroker  # lazy
@@ -1748,6 +1815,43 @@ class Orchestrator:
                 if pos.status == "open"]
         return parse_positions_payload(rows, source=self._account_source,
                                        seen_at_ms=now_ms, stale=False)
+
+    def _account_blind_portfolio(self, now_ms: int):
+        """Presumed exposure: local union last-valid broker; broker wins."""
+        rows = {
+            pos.symbol: {
+                "symbol": pos.symbol,
+                "qty": str(pos.qty),
+                "market_value": str(pos.broker_cost_usd),
+                "instrument_id": pos.instrument_id,
+            }
+            for pos in self._book._positions.values()
+            if pos.status == "open"
+        }
+        if self._last_valid_portfolio is not None:
+            for pos in self._last_valid_portfolio.positions:
+                rows[pos.symbol] = {
+                    "symbol": pos.symbol,
+                    "qty": str(pos.qty),
+                    "market_value": str(pos.market_value),
+                    "instrument_id": pos.instrument_id,
+                }
+        return parse_positions_payload(
+            list(rows.values()), source=self._account_source,
+            seen_at_ms=now_ms, stale=False)
+
+    def _account_blind_flatten_broker(self, now_ms: int):
+        """Require an exact fresh broker position before any real submission."""
+        current = self._portfolio_read(now_ms)
+        confirmed_qty = {}
+        if current is not None and not current.stale:
+            confirmed_qty = {
+                position.symbol: position.qty
+                for position in current.positions
+            }
+        inner = self._flatten_broker() if self.broker is not None else None
+        return _AccountBlindFlattenBroker(
+            inner=inner, confirmed_qty=confirmed_qty)
 
     def _kill_sequence(self, cause: str, evaluation, now_ms: int) -> None:
         """§M.6 (FD-M5-25, rev 2): cancel-opens -> void tokens -> trigger with
@@ -1792,7 +1896,11 @@ class Orchestrator:
         self._outstanding_open_tokens = []
         # (3) trigger with the FD-M5-1 proxy; account via AccountStore.get
         # (M5C-B5: no wrap() helper — the read carries its real freshness).
-        portfolio = self._flatten_portfolio(now_ms)
+        if self._risk_kill.state == "monitoring":
+            self._kill_cause = cause
+        account_blind = cause == "account_blind_cap"
+        portfolio = (self._account_blind_portfolio(now_ms)
+                     if account_blind else self._flatten_portfolio(now_ms))
         tradability = {}
         for pos in portfolio.positions:
             instrument_id = self._instrument_ids.get(pos.symbol)
@@ -1803,7 +1911,9 @@ class Orchestrator:
             tradability[pos.symbol] = self._cache.get(
                 pos.symbol, instrument_id, session_date, now_ms=now_ms)
         report = self._risk_kill.trigger(
-            cause, self._flatten_broker(), portfolio, evaluation=evaluation,
+            cause, (self._account_blind_flatten_broker(now_ms)
+                    if account_blind else self._flatten_broker()), portfolio,
+            evaluation=evaluation,
             account=self._account_store.get(now_ms=self._clock.now_ms()),
             tradability=tradability)
         # (4) book the flatten closes (reason="kill_flatten"); generation bump
@@ -1812,13 +1922,15 @@ class Orchestrator:
 
     def _book_flatten_closes(self, report, now_ms: int) -> None:
         for symbol in report.flattened:
-            position = None
-            for pos in self._book._positions.values():
-                if pos.symbol == symbol and pos.status == "open":
-                    position = pos
-                    break
-            if position is None:
+            positions = [
+                pos for pos in self._book._positions.values()
+                if pos.symbol == symbol and pos.status == "open"
+            ]
+            # A broker flatten is symbol-level.  More than one local lot is not
+            # unambiguously attributable; M6 reconcile owns that drift.
+            if len(positions) != 1:
                 continue
+            position = positions[0]
             payload = None
             try:
                 result = self.broker.order_status(f"flatten-{symbol}")
@@ -1833,6 +1945,19 @@ class Orchestrator:
                 continue
             delta = fill_delta(None, parsed)
             if not isinstance(delta, FillDelta):
+                continue
+            # The broker is position-of-record.  Attach its fill to the local
+            # long only when both the submitted flatten intent and observed fill
+            # prove the same symbol, sign and held quantity.  Otherwise leave the
+            # local book untouched for M6 reconcile.
+            if (position.side != "long"
+                    or position.qty <= 0
+                    or parsed.client_order_id != f"flatten-{symbol}"
+                    or parsed.symbol != symbol
+                    or parsed.side != "sell"
+                    or parsed.qty != position.qty
+                    or parsed.filled_qty > parsed.qty
+                    or delta.delta_qty > position.qty):
                 continue
             decision_id = "d-" + row_hash({
                 "run_id": self.run_id, "strategy_id": "kill_flatten",
