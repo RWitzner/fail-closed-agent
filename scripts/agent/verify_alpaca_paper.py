@@ -11,11 +11,12 @@ material, NEVER the full account number (last-4 only); paper-account BALANCES
 not secrets, and the arming checklist needs them (``reports/`` is gitignored).
 
 The optional ``--allow-order-drill`` exercises the full submit→status→cancel
-round trip with a deliberately NON-MARKETABLE 1-share DAY limit (far below any
-plausible price, so it can never fill) and cancels it immediately. It talks to
-the SDK directly — this is an OPERATOR account-level dry-run outside the agent
-loop; the agent's own ``submit_order`` seam stays token-gated and untouched.
-Default is OFF; the read-only pass never submits anything.
+round trip with a 1-share DAY limit intended to be non-marketable for the
+constrained large-cap drill symbol, then cancels it immediately. A fill is a
+hard verification failure, not an excluded outcome. It talks to the SDK directly
+— this is an OPERATOR account-level dry-run outside the agent loop; the agent's
+own ``submit_order`` seam stays token-gated and untouched. Default is OFF; the
+read-only pass never submits anything.
 
 Offline tests inject a fake client via ``client_factory``; the real SDK import
 lives only inside ``_build_real_client`` (never reached offline).
@@ -33,7 +34,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CREDENTIALS = _REPO_ROOT / ".secrets" / "alpaca_paper.json"
 _DEFAULT_REPORT = _REPO_ROOT / "reports" / "alpaca_paper" / "verified_account.json"
 PAPER_HOST = "https://paper-api.alpaca.markets"
-_DRILL_LIMIT = "1.00"   # non-marketable for any large-cap: the drill can never fill
+_DRILL_LIMIT = "1.00"   # intended non-marketable limit for the large-cap drill
+_DRILL_OBSERVATION_ATTEMPTS = 3
+_SAFE_DRILL_TERMINAL = frozenset({"canceled", "rejected", "expired"})
+_SAFE_DRILL_ALREADY_TERMINAL = _SAFE_DRILL_TERMINAL - {"canceled"}
+_DRILL_FILL_STATUSES = frozenset({"filled", "partially_filled"})
 
 
 def _utc_now_iso() -> str:
@@ -86,24 +91,134 @@ def _build_real_client(creds: Mapping):  # pragma: no cover - credentialed
 
 
 def _order_drill(client, request_factory, *, symbol: str, now_iso: str) -> dict:
-    """Submit a non-marketable 1-share DAY limit, then cancel it. Any failure is
-    RECORDED, never raised — the read-only verification stands on its own."""
+    """Submit an intended non-marketable 1-share DAY limit, then cancel it. Any
+    failure is RECORDED, never raised — the read-only verification stands."""
     client_order_id = f"verify-drill-{now_iso.replace(':', '').replace('.', '')}"
     drill = {"attempted": True, "symbol": symbol,
              "client_order_id": client_order_id, "submitted": False,
-             "canceled": False, "final_status": None, "error": None}
-    request = request_factory(symbol=symbol, client_order_id=client_order_id)
-    try:
-        submitted = client.submit_order(order_data=request)
-        drill["submitted"] = True
-        order_id = (submitted or {}).get("id")
-        if order_id:
+             "canceled": False, "final_status": None,
+             "terminal_verified": False, "error": None}
+    order_id = None
+    submit_attempted = False
+    last_lookup_error = None
+    last_cancel_error = None
+
+    def record_error(exc) -> None:
+        if drill["error"] is None:
+            drill["error"] = f"{type(exc).__name__}: {exc}"
+
+    def validate_observation(payload, *, allow_missing_id: bool):
+        """Bind every observed order to the requested client id and one stable
+        broker id. An empty lookup is delayed visibility, not an order."""
+        nonlocal order_id
+        if payload is None:
+            return None, False
+        if not isinstance(payload, Mapping):
+            raise ValueError("order observation must be a mapping")
+        if not payload:
+            return None, False
+        observed_client_id = payload.get("client_order_id")
+        if observed_client_id != client_order_id:
+            raise ValueError(
+                "client_order_id mismatch: expected "
+                f"{client_order_id!r}, got {observed_client_id!r}")
+        observed_order_id = payload.get("id")
+        if observed_order_id is None and allow_missing_id:
+            return payload.get("status"), False
+        if (not isinstance(observed_order_id, str)
+                or not observed_order_id.strip()):
+            raise ValueError("missing broker order id")
+        if order_id is not None and observed_order_id != order_id:
+            raise ValueError(
+                "broker order id changed: expected "
+                f"{order_id!r}, got {observed_order_id!r}")
+        # Identity is sufficient for best-effort cleanup even when later
+        # status/fill fields are malformed. Never bind a mismatched id above.
+        order_id = observed_order_id
+        status = payload.get("status")
+        if not isinstance(status, str) or not status:
+            raise ValueError("missing order status")
+        if status in _DRILL_FILL_STATUSES:
+            raise ValueError(f"order drill observed fill status {status!r}")
+        filled_qty = payload.get("filled_qty")
+        if not _decimal_ok(filled_qty):
+            raise ValueError("missing or invalid filled_qty")
+        if Decimal(filled_qty) != Decimal("0"):
+            raise ValueError(f"nonzero filled_qty: {filled_qty!r}")
+        return status, True
+
+    def attempt_cancel() -> None:
+        nonlocal last_cancel_error
+        if order_id is None or drill["canceled"]:
+            return
+        try:
             client.cancel_order_by_id(order_id)
             drill["canceled"] = True
-        final = client.get_order_by_client_id(client_order_id)
-        drill["final_status"] = (final or {}).get("status")
+            last_cancel_error = None
+        except Exception as exc:  # noqa: BLE001 — retry on next live observation
+            last_cancel_error = exc
+
+    try:
+        request = request_factory(symbol=symbol, client_order_id=client_order_id)
+        submit_attempted = True
+        submitted = client.submit_order(order_data=request)
+        drill["submitted"] = True
+        status, identity_bound = validate_observation(
+            submitted, allow_missing_id=True)
+        if identity_bound:
+            if status in _SAFE_DRILL_ALREADY_TERMINAL:
+                drill["final_status"] = status
+                drill["terminal_verified"] = True
+            else:
+                attempt_cancel()
     except Exception as exc:  # noqa: BLE001 — recorded, verification continues
-        drill["error"] = f"{type(exc).__name__}: {exc}"
+        record_error(exc)
+
+    if submit_attempted and not drill["terminal_verified"]:
+        for _ in range(_DRILL_OBSERVATION_ATTEMPTS):
+            try:
+                recovered = client.get_order_by_client_id(client_order_id)
+            except Exception as exc:  # noqa: BLE001 — bounded delayed visibility
+                last_lookup_error = exc
+                continue
+            try:
+                status, identity_bound = validate_observation(
+                    recovered, allow_missing_id=False)
+            except Exception as exc:  # noqa: BLE001 — unsafe identity is terminal
+                record_error(exc)
+                break
+            if not identity_bound:
+                continue
+            drill["final_status"] = status
+            if status in _SAFE_DRILL_ALREADY_TERMINAL:
+                drill["terminal_verified"] = True
+                break
+            if status == "canceled":
+                if drill["canceled"]:
+                    drill["terminal_verified"] = True
+                    break
+                attempt_cancel()
+                if not drill["canceled"]:
+                    break
+                continue
+            # Any newly visible nonterminal order is canceled immediately. A
+            # previously successful cancel is not repeated while finality is
+            # still propagating; the remaining bounded reads observe it.
+            attempt_cancel()
+
+    # One bounded cleanup retry for a broker id already identity-bound above.
+    # A successful request is not terminal evidence; the verdict still requires
+    # a verified safe terminal status from an observation.
+    if (not drill["terminal_verified"]
+            and order_id is not None
+            and not drill["canceled"]):
+        attempt_cancel()
+
+    if not drill["terminal_verified"] and drill["error"] is None:
+        if last_cancel_error is not None and not drill["canceled"]:
+            record_error(last_cancel_error)
+        elif last_lookup_error is not None and drill["final_status"] is None:
+            record_error(last_lookup_error)
     return drill
 
 
@@ -163,7 +278,13 @@ def verify_alpaca_paper(*, credentials_path=None,
                 f"{drill_symbol!r}")
         drill = _order_drill(client, drill_request_factory,
                              symbol=drill_symbol, now_iso=now_iso)
-        if drill["error"] is not None or not drill["submitted"]:
+        terminal_ok = (
+            drill["final_status"] in _SAFE_DRILL_ALREADY_TERMINAL
+            or (drill["final_status"] == "canceled" and drill["canceled"])
+        )
+        drill_ok = (drill["error"] is None and drill["submitted"]
+                    and drill["terminal_verified"] and terminal_ok)
+        if not drill_ok:
             failures.append("order_drill_failed")
 
     summary = {
