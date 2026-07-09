@@ -23,8 +23,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agent import config as agent_config
 from agent.gates import opening_allowed
@@ -279,6 +281,135 @@ class TestRunLock(_Tmp):
         self.assertEqual((self._journal_dir() / LOCK_FILENAME)
                          .read_text(encoding="ascii").strip(), str(os.getpid()))
         lock.release()
+
+    def test_concurrent_stale_reclaim_has_exactly_one_winner(self):
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        dead_pid = child.pid
+        journal = self._journal_dir()
+        journal.mkdir(parents=True)
+        (journal / LOCK_FILENAME).write_text(f"{dead_pid}\n", encoding="ascii")
+
+        stale_decision = threading.Barrier(2)
+        first_at_stale_probe = threading.Event()
+        first_recreated = threading.Event()
+        results_lock = threading.Lock()
+        winners = []
+        failures = []
+        real_create = RunLock._create
+        real_unlink = os.unlink
+
+        def liveness(pid):
+            if pid != dead_pid:
+                return True
+            if threading.current_thread().name == "first":
+                first_at_stale_probe.set()
+            try:
+                stale_decision.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+            return False
+
+        def create(lock):
+            lock_identity = real_create(lock)
+            if threading.current_thread().name == "first":
+                first_recreated.set()
+            return lock_identity
+
+        def unlink(path):
+            if threading.current_thread().name == "second":
+                if not first_recreated.wait(timeout=2):
+                    raise RuntimeError("first contender did not recreate the lock")
+            real_unlink(path)
+
+        def contend():
+            lock = RunLock(journal)
+            try:
+                lock.acquire()
+            except Exception as exc:
+                with results_lock:
+                    failures.append((threading.current_thread().name, exc))
+            else:
+                with results_lock:
+                    winners.append((threading.current_thread().name, lock))
+
+        threads = [
+            threading.Thread(name="first", target=contend),
+            threading.Thread(name="second", target=contend),
+        ]
+        with mock.patch("agent.run_lock._pid_alive", side_effect=liveness), \
+                mock.patch.object(RunLock, "_create", autospec=True,
+                                  side_effect=create), \
+                mock.patch("agent.run_lock.os.unlink", side_effect=unlink):
+            threads[0].start()
+            first_reached_probe = first_at_stale_probe.wait(timeout=2)
+            threads[1].start()
+            for thread in threads:
+                thread.join(timeout=3)
+
+        try:
+            self.assertTrue(first_reached_probe)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(len(winners), 1, winners)
+            self.assertEqual(len(failures), 1, failures)
+            self.assertIsInstance(failures[0][1], RunLockHeld)
+        finally:
+            for _, lock in winners:
+                lock.release()
+
+    def test_release_does_not_unlink_replacement_owner(self):
+        lock = RunLock(self._journal_dir())
+        lock.acquire()
+        replacement = lock.path.with_name(".lock.replacement")
+        replacement.write_text(f"{os.getpid()}\n", encoding="ascii")
+        acquired_identity = (lock.path.stat().st_dev, lock.path.stat().st_ino)
+        replacement_identity = (replacement.stat().st_dev,
+                                replacement.stat().st_ino)
+        self.assertNotEqual(acquired_identity, replacement_identity)
+        os.replace(replacement, lock.path)
+
+        try:
+            lock.release()
+            self.assertTrue(lock.path.exists())
+            self.assertEqual((lock.path.stat().st_dev, lock.path.stat().st_ino),
+                             replacement_identity)
+        finally:
+            lock.release()
+
+    def test_acquire_records_identity_from_create_fd(self):
+        lock = RunLock(self._journal_dir())
+        try:
+            with mock.patch(
+                    "agent.run_lock._identity",
+                    side_effect=AssertionError("acquire must not restat path")):
+                lock.acquire()
+            self.assertTrue(lock.held)
+        finally:
+            if lock.held:
+                lock.release()
+            elif lock.path.exists():
+                lock.path.unlink()
+
+    def test_release_identity_error_preserves_ownership_for_retry(self):
+        lock = RunLock(self._journal_dir())
+        lock.acquire()
+        try:
+            with mock.patch(
+                    "agent.run_lock._identity",
+                    side_effect=PermissionError("stat denied")):
+                with self.assertRaises(PermissionError):
+                    lock.release()
+
+            self.assertTrue(lock.held)
+            self.assertTrue(lock.path.exists())
+            lock.release()
+            self.assertFalse(lock.held)
+            self.assertFalse(lock.path.exists())
+        finally:
+            if lock.held:
+                lock.release()
+            elif lock.path.exists():
+                lock.path.unlink()
 
     def test_malformed_lock_file_refuses_fail_closed(self):
         # Liveness unverifiable => held (operator removes it manually).
