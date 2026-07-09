@@ -132,6 +132,30 @@ class TestBacktestGateV2(unittest.TestCase):
 
             self.assertEqual(self._verify(tmp).status, "hash_invalid")
 
+    def test_v2_hash_valid_claimed_pass_rejects_failed_actual_metrics(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _v2_metrics()
+            metrics["pnl"] = dict(
+                metrics["pnl"],
+                net_execution_realistic_pnl_usd="-999.00",
+                avg_trade_bps="-10.00",
+                profit_factor="0.10",
+            )
+            metrics["benchmark"] = dict(
+                metrics["benchmark"], active_pnl_usd="-888.00")
+            _write_artifact(tmp, _artifact_payload(metrics=metrics))
+
+            self.assertEqual(self._verify(tmp).status, "hash_invalid")
+
+    def test_v2_hash_valid_claimed_pass_rejects_quality_breach(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _v2_metrics()
+            metrics["quality"] = dict(
+                metrics["quality"], s1_canary_breach_count=1)
+            _write_artifact(tmp, _artifact_payload(metrics=metrics))
+
+            self.assertEqual(self._verify(tmp).status, "hash_invalid")
+
     def test_v2_wrong_basis_is_hash_invalid(self):
         with TemporaryDirectory() as tmp:
             payload = _artifact_payload(
@@ -205,6 +229,17 @@ class TestBacktestGateV2(unittest.TestCase):
     def test_v2_key_mismatch_still_distinct_after_metric_validation(self):
         with TemporaryDirectory() as tmp:
             _write_artifact(tmp, _artifact_payload())
+
+            self.assertEqual(
+                self._verify(tmp, data_pin="EQUS.MINI:tbbo:1m:other").status,
+                "key_mismatch")
+
+    def test_v2_key_mismatch_precedes_semantic_failure(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _v2_metrics()
+            metrics["quality"] = dict(
+                metrics["quality"], s1_canary_breach_count=1)
+            _write_artifact(tmp, _artifact_payload(metrics=metrics))
 
             self.assertEqual(
                 self._verify(tmp, data_pin="EQUS.MINI:tbbo:1m:other").status,

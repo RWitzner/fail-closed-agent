@@ -13,7 +13,9 @@ verifier + an EMPTY dir (`.gitkeep`) ⇒ every real strategy rejects fail-closed
 Fail-closed posture: `verify_artifact` NEVER raises on data — an absent file is
 `missing`; unreadable / malformed JSON / wrong shape / tampered hash / wrong
 metric basis all degrade to `hash_invalid`; a verified-but-stale key triple is
-`key_mismatch`. Imports: stdlib + `agent.serializer` ONLY (§3).
+`key_mismatch`. Module-scope imports remain stdlib + `agent.serializer` ONLY
+(§3); the canonical paper-phase evaluator is loaded lazily after structural
+validation and a successful key-triple match.
 """
 import json
 import os
@@ -302,5 +304,9 @@ def verify_artifact(strategy_id: str, *, rules_hash: str, data_pin: str,
             strategy_id, rules_hash, data_pin):
         return ArtifactCheck(status="key_mismatch", artifact_path=path,
                              artifact_hash=claimed_hash)
+    if version == 2:
+        from agent.paper_phase_criteria import evaluate_paper_phase_criteria
+        if not evaluate_paper_phase_criteria(metrics).passed:
+            return _hash_invalid(path, claimed_hash)
 
     return ArtifactCheck(status="ok", artifact_path=path, artifact_hash=claimed_hash)
