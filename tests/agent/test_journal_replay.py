@@ -6,10 +6,12 @@ hashes, and drops a single truncated trailing line (a crash mid-write) without
 treating it as fatal — but a corrupt non-trailing line IS fatal.
 """
 import json
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agent.journal import (
     IncrementalJournalReader,
@@ -133,6 +135,23 @@ class TestWriterLock(_Tmp):
         seqs = sorted(r["seq"] for r in rows)
         self.assertEqual(seqs, list(range(1, n_threads * per + 1)))
 
+    def test_active_writer_rejects_valid_external_rewrite(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"value": "AAAA"})
+        replacement = self.path.with_name("replacement.jsonl")
+        replacement_writer = JournalWriter(
+            replacement, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        replacement_writer.append("evt", {"value": "BBBB"})
+        self.path.write_bytes(replacement.read_bytes())
+
+        with self.assertRaises(JournalCorruption):
+            writer.append("evt", {"value": "CCCC"})
+
+        self.assertEqual([row["value"] for row in replay(self.path)], ["BBBB"])
+
 
 class TestCrashRecovery(_Tmp):
     def test_reopen_repairs_truncated_tail_then_appends_replay_clean(self):
@@ -156,6 +175,129 @@ class TestCrashRecovery(_Tmp):
         row = w2.append("decision", {"i": 2})
         self.assertEqual(row["seq"], 3)
         self.assertEqual(row["run_id"], "run-2")
+
+    def test_reopen_retries_if_external_append_lands_during_replay(self):
+        source = self.path.with_name("source.jsonl")
+        source_writer = JournalWriter(
+            source, run_id="source",
+            clock=lambda: "2026-07-09T00:00:00Z")
+        source_writer.append("evt", {"value": "one"})
+        source_writer.append("evt", {"value": "external-two"})
+        source_lines = source.read_bytes().splitlines(keepends=True)
+        self.path.write_bytes(source_lines[0])
+        real_loads = json.loads
+        appended = False
+
+        def append_after_first_parse(payload, *args, **kwargs):
+            nonlocal appended
+            row = real_loads(payload, *args, **kwargs)
+            if not appended:
+                with open(self.path, "ab") as fh:
+                    fh.write(source_lines[1])
+                appended = True
+            return row
+
+        with mock.patch(
+                "agent.journal.json.loads",
+                side_effect=append_after_first_parse):
+            writer = JournalWriter(
+                self.path, run_id="writer",
+                clock=lambda: "2026-07-09T00:00:01Z")
+
+        row = writer.append("evt", {"value": "writer-three"})
+        rows = replay(self.path)
+        self.assertTrue(appended)
+        self.assertEqual(row["seq"], 3)
+        self.assertEqual([item["seq"] for item in rows], [1, 2, 3])
+        self.assertEqual(
+            [item["value"] for item in rows],
+            ["one", "external-two", "writer-three"])
+
+    def test_tail_repair_never_overwrites_path_replacement(self):
+        writer = JournalWriter(
+            self.path, run_id="old",
+            clock=lambda: "2026-07-09T00:00:00Z")
+        writer.append("evt", {"value": "AAAA"})
+        with open(self.path, "ab") as fh:
+            fh.write(b'{"partial":')
+
+        replacement = self.path.with_name("replacement.jsonl")
+        replacement_writer = JournalWriter(
+            replacement, run_id="new",
+            clock=lambda: "2026-07-09T00:00:00Z")
+        replacement_writer.append("evt", {"value": "BBBB"})
+        real_write_bytes = Path.write_bytes
+        real_ftruncate = os.ftruncate
+        replaced = False
+
+        def replace_once():
+            nonlocal replaced
+            if not replaced:
+                os.replace(replacement, self.path)
+                replaced = True
+
+        def replace_before_path_write(path, data):
+            if path == self.path:
+                replace_once()
+            return real_write_bytes(path, data)
+
+        def replace_before_descriptor_truncate(fd, length):
+            replace_once()
+            return real_ftruncate(fd, length)
+
+        with mock.patch(
+                "pathlib.Path.write_bytes", autospec=True,
+                side_effect=replace_before_path_write), mock.patch(
+                    "agent.journal.os.ftruncate",
+                    side_effect=replace_before_descriptor_truncate):
+            reopened = JournalWriter(
+                self.path, run_id="repair",
+                clock=lambda: "2026-07-09T00:00:01Z")
+
+        self.assertTrue(replaced)
+        self.assertEqual(
+            [item["value"] for item in replay(self.path)], ["BBBB"])
+        row = reopened.append("evt", {"value": "CCCC"})
+        self.assertEqual(row["seq"], 2)
+        self.assertEqual(
+            [item["value"] for item in replay(self.path)],
+            ["BBBB", "CCCC"])
+
+    def test_tail_repair_replays_post_truncate_descriptor_version(self):
+        source = self.path.with_name("source.jsonl")
+        source_writer = JournalWriter(
+            source, run_id="source",
+            clock=lambda: "2026-07-09T00:00:00Z")
+        source_writer.append("evt", {"value": "AAAA"})
+        source_writer.append("evt", {"value": "BBBB"})
+        source_lines = source.read_bytes().splitlines(keepends=True)
+        self.assertEqual(len(source_lines[0]), len(source_lines[1]))
+        self.path.write_bytes(source_lines[0] + b'{"partial":')
+        real_ftruncate = os.ftruncate
+        rewritten = False
+
+        def rewrite_prefix_then_truncate(fd, length):
+            nonlocal rewritten
+            with open(self.path, "r+b") as external:
+                external.write(source_lines[1])
+                external.flush()
+            rewritten = True
+            return real_ftruncate(fd, length)
+
+        with mock.patch(
+                "agent.journal.os.ftruncate",
+                side_effect=rewrite_prefix_then_truncate):
+            reopened = JournalWriter(
+                self.path, run_id="repair",
+                clock=lambda: "2026-07-09T00:00:01Z")
+
+        row = reopened.append("evt", {"value": "CCCC"})
+        rows = replay(self.path)
+        self.assertTrue(rewritten)
+        self.assertEqual(row["seq"], 3)
+        self.assertEqual([item["seq"] for item in rows], [2, 3])
+        self.assertEqual(
+            [item["value"] for item in rows], ["BBBB", "CCCC"])
 
 
 class TestTailIntegrity(_Tmp):
@@ -221,6 +363,209 @@ class TestIncrementalJournalReader(_Tmp):
         rows = reader.read()
         rows.append({"poison": True})
         self.assertEqual([r["n"] for r in reader.read()], [1, 2, 3])
+
+    def test_returned_nested_rows_cannot_mutate_reader_cache(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"nested": {"value": 1}})
+        reader = IncrementalJournalReader(self.path)
+        rows = reader.read()
+        rows[0]["nested"]["value"] = 999
+
+        self.assertEqual(reader.read(), replay(self.path))
+
+    def test_same_size_replacement_forces_integrity_recheck(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"value": "AAAA"})
+        reader = IncrementalJournalReader(self.path)
+        reader.read()
+        original = self.path.read_bytes()
+        self.path.write_bytes(original.replace(b"AAAA", b"BBBB"))
+
+        with self.assertRaises(JournalCorruption):
+            reader.read()
+
+    def test_same_size_prefix_mutation_with_partial_tail_is_not_hidden(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"value": "AAAA"})
+        reader = IncrementalJournalReader(self.path)
+        reader.read()
+        with open(self.path, "ab") as fh:
+            fh.write(b'{"partial":')
+        self.assertEqual(reader.read(), replay(self.path))
+
+        original = self.path.read_bytes()
+        self.path.write_bytes(original.replace(b"AAAA", b"BBBB"))
+
+        with self.assertRaises(JournalCorruption):
+            replay(self.path)
+        with self.assertRaises(JournalCorruption):
+            reader.read()
+
+    def test_same_inode_truncate_and_larger_rewrite_forces_full_reread(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"value": "AAAA"})
+        reader = IncrementalJournalReader(self.path)
+        reader.read()
+        original_inode = self.path.stat().st_ino
+
+        replacement = self.path.with_name("replacement.jsonl")
+        replacement_writer = JournalWriter(
+            replacement, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        replacement_writer.append("evt", {"value": "BBBB"})
+        replacement_writer.append("evt", {"value": "CCCC"})
+        self.path.write_bytes(replacement.read_bytes())
+        self.assertEqual(self.path.stat().st_ino, original_inode)
+
+        self.assertEqual(reader.read(), replay(self.path))
+        self.assertEqual([row["value"] for row in reader.read()], ["BBBB", "CCCC"])
+
+    def test_path_replacement_between_metadata_and_open_never_yields_hybrid(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"value": "AAAA"})
+        reader = IncrementalJournalReader(self.path)
+        reader.read()
+        writer.append("evt", {"value": "DDDD"})
+
+        replacement = self.path.with_name("replacement.jsonl")
+        replacement_writer = JournalWriter(
+            replacement, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        replacement_writer.append("evt", {"value": "BBBB"})
+        replacement_writer.append("evt", {"value": "CCCC"})
+        real_open = open
+        replaced = False
+
+        def replace_before_open(path, *args, **kwargs):
+            nonlocal replaced
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if Path(path) == self.path and mode == "rb" and not replaced:
+                os.replace(replacement, self.path)
+                replaced = True
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=replace_before_open):
+            rows = reader.read()
+
+        self.assertTrue(replaced)
+        self.assertEqual(rows, replay(self.path))
+        self.assertEqual([row["value"] for row in rows], ["BBBB", "CCCC"])
+
+    def test_path_replacement_during_descriptor_read_retries_stably(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"value": "AAAA"})
+        reader = IncrementalJournalReader(self.path)
+        reader.read()
+        writer.append("evt", {"value": "DDDD"})
+
+        replacement = self.path.with_name("replacement.jsonl")
+        replacement_writer = JournalWriter(
+            replacement, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        replacement_writer.append("evt", {"value": "BBBB"})
+        replacement_writer.append("evt", {"value": "CCCC"})
+        real_open = open
+        replaced = False
+
+        class ReplacingReader:
+            def __init__(inner_self, fh):
+                inner_self._fh = fh
+
+            def __enter__(inner_self):
+                inner_self._fh.__enter__()
+                return inner_self
+
+            def __exit__(inner_self, *args):
+                return inner_self._fh.__exit__(*args)
+
+            def __getattr__(inner_self, name):
+                return getattr(inner_self._fh, name)
+
+            def read(inner_self, *args):
+                nonlocal replaced
+                if not replaced:
+                    os.replace(replacement, self.path)
+                    replaced = True
+                return inner_self._fh.read(*args)
+
+        def replacing_read_open(path, *args, **kwargs):
+            fh = real_open(path, *args, **kwargs)
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if Path(path) == self.path and mode == "rb" and not replaced:
+                return ReplacingReader(fh)
+            return fh
+
+        with mock.patch("builtins.open", side_effect=replacing_read_open):
+            rows = reader.read()
+
+        self.assertTrue(replaced)
+        self.assertEqual(rows, replay(self.path))
+        self.assertEqual([row["value"] for row in rows], ["BBBB", "CCCC"])
+
+    def test_true_append_parses_only_new_rows(self):
+        writer = JournalWriter(
+            self.path, run_id="run-1",
+            clock=lambda: "2026-07-06T00:00:00Z")
+        writer.append("evt", {"n": 1})
+        reader = IncrementalJournalReader(self.path)
+        reader.read()
+        old_size = self.path.stat().st_size
+        writer.append("evt", {"n": 2})
+        appended_size = self.path.stat().st_size - old_size
+        real_open = open
+        seeks = []
+        read_sizes = []
+
+        class TrackingReader:
+            def __init__(self, fh):
+                self._fh = fh
+
+            def __enter__(self):
+                self._fh.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self._fh.__exit__(*args)
+
+            def __getattr__(self, name):
+                return getattr(self._fh, name)
+
+            def seek(self, offset, whence=0):
+                seeks.append((offset, whence))
+                return self._fh.seek(offset, whence)
+
+            def read(self, *args):
+                data = self._fh.read(*args)
+                read_sizes.append(len(data))
+                return data
+
+        def tracking_open(path, *args, **kwargs):
+            fh = real_open(path, *args, **kwargs)
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if Path(path) == self.path and mode == "rb":
+                return TrackingReader(fh)
+            return fh
+
+        with mock.patch("builtins.open", side_effect=tracking_open):
+            with mock.patch("agent.journal.json.loads", wraps=json.loads) as loads:
+                rows = reader.read()
+
+        self.assertEqual([row["n"] for row in rows], [1, 2])
+        self.assertEqual(loads.call_count, 1)
+        self.assertEqual(seeks, [(old_size, 0)])
+        self.assertEqual(read_sizes, [appended_size])
 
     def test_complete_corrupt_row_raises_and_keeps_raising(self):
         w = JournalWriter(self.path, run_id="run-1",
