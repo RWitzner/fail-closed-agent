@@ -19,9 +19,11 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from agent import config as agent_config
 from agent import orchestrator as orch_mod
+from agent import paper_session
 from agent.bar_series import _parse_utc
 from agent.broker.alpaca import AlpacaPaperBroker
 from agent.market_calendar import FixtureScheduleProvider
@@ -230,6 +232,80 @@ class TestPaperSession(unittest.TestCase):
                              ["sod", "eod"])
             self.assertIsNone(result.report_path)
 
+    def test_feed_exception_still_attempts_eod_cleanup_and_reraises(self):
+        error = RuntimeError("feed exploded")
+
+        class ExplodingOrchestrator:
+            mode = "paper"
+            run_id = "run-explodes"
+            ticks_run = 0
+            drift_latched = False
+            risk_kill = type("Kill", (), {"state": "monitoring"})()
+
+            def __init__(self):
+                self.eod_calls = 0
+
+            def run_reconcile(self, **kwargs):
+                return type("Result", (), {"clean": True})()
+
+            def run_with_feed(self, feed):
+                raise error
+
+            def ensure_eod_reconcile(self, *args, **kwargs):
+                self.eod_calls += 1
+                return type("Result", (), {"clean": True})()
+
+        orch = ExplodingOrchestrator()
+        tm = _TimeMachine("2026-07-06T19:58:00.000000Z")
+        feed = _live_feed(
+            tm, [], stop_at="2026-07-06T20:15:00.000000Z")
+        with self.assertRaises(RuntimeError) as ctx:
+            run_paper_session(
+                orchestrator=orch, feed=feed, journal_dir=Path("unused"),
+                session_date_et="2026-07-06", report_dir=None,
+                utc_now_iso_fn=lambda: "2026-07-06T20:00:00.000000Z")
+        self.assertIs(ctx.exception, error)
+        self.assertEqual(orch.eod_calls, 1)
+
+    def test_feed_exception_remains_primary_when_eod_cleanup_fails(self):
+        feed_error = RuntimeError("feed exploded")
+        cleanup_error = ValueError("cleanup exploded")
+
+        class ExplodingOrchestrator:
+            mode = "paper"
+            run_id = "run-explodes"
+            ticks_run = 0
+            drift_latched = False
+            risk_kill = type("Kill", (), {"state": "monitoring"})()
+
+            def __init__(self):
+                self.eod_calls = 0
+
+            def run_reconcile(self, **kwargs):
+                return type("Result", (), {"clean": True})()
+
+            def run_with_feed(self, feed):
+                raise feed_error
+
+            def ensure_eod_reconcile(self, *args, **kwargs):
+                self.eod_calls += 1
+                raise cleanup_error
+
+        orch = ExplodingOrchestrator()
+        tm = _TimeMachine("2026-07-06T19:58:00.000000Z")
+        feed = _live_feed(
+            tm, [], stop_at="2026-07-06T20:15:00.000000Z")
+        with self.assertRaises(RuntimeError) as ctx:
+            run_paper_session(
+                orchestrator=orch, feed=feed, journal_dir=Path("unused"),
+                session_date_et="2026-07-06", report_dir=None,
+                utc_now_iso_fn=lambda: "2026-07-06T20:00:00.000000Z")
+        self.assertIs(ctx.exception, feed_error)
+        self.assertEqual(orch.eod_calls, 1)
+        self.assertTrue(any(
+            "cleanup exploded" in note
+            for note in getattr(ctx.exception, "__notes__", ())))
+
     def test_halted_prior_journal_exits_4(self):
         from agent.risk.risk_ledger import RiskLedger
         from recorder.persistence import EventWriter
@@ -276,6 +352,78 @@ class TestMainExitCodes(unittest.TestCase):
     def _run_main(self, argv):
         from agent.paper_session import _main
         return _main(argv)
+
+    def test_replay_runtime_paths_never_expose_credentials_or_gates(self):
+        self.assertEqual(
+            paper_session.runtime_paths_for(replay=True),
+            {"credentials_path": None, "run_gates_path": None},
+        )
+
+    def test_live_runtime_paths_use_repo_secrets(self):
+        self.assertEqual(
+            paper_session.runtime_paths_for(replay=False),
+            {
+                "credentials_path": _REPO_ROOT / ".secrets"
+                                    / "alpaca_paper.json",
+                "run_gates_path": _REPO_ROOT / ".secrets"
+                                  / "run_gates.json",
+            },
+        )
+
+    def test_main_uses_runtime_paths_for_replay_and_live_composition(self):
+        result = SessionResult(
+            mode="observe", session_date_et="2026-07-06", trading_day=True,
+            ticks_run=0, kill_state="monitoring", sod_clean=None,
+            eod_clean=None, drift_latched=False, feed_truncated=False,
+            report_path=None, report=None, exit_code=0)
+        credentials_path = mock.sentinel.credentials_path
+        run_gates_path = mock.sentinel.run_gates_path
+        selected_paths = {
+            "credentials_path": credentials_path,
+            "run_gates_path": run_gates_path,
+        }
+
+        for replay in (True, False):
+            with self.subTest(replay=replay):
+                feed = mock.Mock()
+                orch = mock.Mock()
+                argv = [
+                    "--journal-dir", "unused-journal",
+                    "--symbols", "AAPL",
+                    "--session-date", "2026-07-06",
+                    "--report-dir", "unused-reports",
+                ]
+                argv.extend(["--replay", "unused-events.jsonl"]
+                            if replay else ["--live"])
+                with mock.patch.object(
+                        paper_session, "runtime_paths_for",
+                        return_value=selected_paths, create=True) as paths_for, \
+                     mock.patch.object(
+                         orch_mod, "Orchestrator", return_value=orch) as ctor, \
+                     mock.patch.object(
+                         paper_session, "run_paper_session",
+                         return_value=result):
+                    if replay:
+                        feed_patch = mock.patch(
+                            "agent.marketdata.replay_feed.ReplayQuoteFeed",
+                            return_value=feed)
+                        source_patch = mock.patch(
+                            "agent.marketdata.live_feed.databento_live_source")
+                    else:
+                        feed_patch = mock.patch(
+                            "agent.marketdata.live_feed.LiveQuoteFeed",
+                            return_value=feed)
+                        source_patch = mock.patch(
+                            "agent.marketdata.live_feed.databento_live_source",
+                            return_value=iter(()))
+                    with feed_patch, source_patch:
+                        self.assertEqual(self._run_main(argv), 0)
+
+                paths_for.assert_called_once_with(replay=replay)
+                self.assertIs(ctor.call_args.kwargs["credentials_path"],
+                              credentials_path)
+                self.assertIs(ctor.call_args.kwargs["run_gates_path"],
+                              run_gates_path)
 
     def test_calendar_coverage_expired_exits_5(self):
         with TemporaryDirectory() as tmp:

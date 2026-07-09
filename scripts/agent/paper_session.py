@@ -61,6 +61,15 @@ STRATEGY_REGISTRY = {
 _CROSS_SECTIONAL_IDS = frozenset({"relative_strength.long_only_proxy_v1"})
 
 
+def runtime_paths_for(*, replay: bool) -> dict:
+    if replay:
+        return {"credentials_path": None, "run_gates_path": None}
+    return {
+        "credentials_path": _SECRETS / "alpaca_paper.json",
+        "run_gates_path": _SECRETS / "run_gates.json",
+    }
+
+
 def build_strategy(strategy_id: Optional[str]):
     """Resolve a strategy id to an instance; fail closed on unknown/unadapted ids."""
     if strategy_id is None:
@@ -119,7 +128,17 @@ def run_paper_session(*, orchestrator, feed, journal_dir,
         sod = orch.run_reconcile(phase="sod", ts_utc=now_iso(),
                                  now_ms=feed.clock().now_ms())
 
-    orch.run_with_feed(feed)
+    try:
+        orch.run_with_feed(feed)
+    except BaseException as primary_exc:
+        try:
+            orch.ensure_eod_reconcile(
+                session_date_et, ts_utc=now_iso(),
+                now_ms=feed.clock().now_ms())
+        except BaseException as cleanup_exc:
+            primary_exc.add_note(
+                f"EOD reconcile cleanup also failed: {cleanup_exc!r}")
+        raise
 
     eod = orch.ensure_eod_reconcile(session_date_et, ts_utc=now_iso(),
                                     now_ms=feed.clock().now_ms())
@@ -277,6 +296,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     import platform
 
     strategy = build_strategy(args.strategy_id)
+    runtime_paths = runtime_paths_for(replay=bool(args.replay))
     try:
         orch = orch_mod.Orchestrator(
             journal_dir=args.journal_dir,
@@ -289,8 +309,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             calendar_provider=provider,
             config=config,
             strategy=strategy,
-            credentials_path=_SECRETS / "alpaca_paper.json",
-            run_gates_path=_SECRETS / "run_gates.json",
+            **runtime_paths,
         )
     except orch_mod.RunLockHeld as exc:
         print(f"run lock held: {exc}", file=sys.stderr)
