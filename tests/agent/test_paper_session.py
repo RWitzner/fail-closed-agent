@@ -306,6 +306,82 @@ class TestPaperSession(unittest.TestCase):
             "cleanup exploded" in note
             for note in getattr(ctx.exception, "__notes__", ())))
 
+    def test_feed_exception_writes_incomplete_report(self):
+        error = RuntimeError("feed exploded")
+
+        class ExplodingOrchestrator:
+            mode = "paper"
+            run_id = "run-explodes"
+            ticks_run = 0
+            drift_latched = False
+            risk_kill = type("Kill", (), {"state": "monitoring"})()
+
+            def run_reconcile(self, **kwargs):
+                return type("Result", (), {"clean": True})()
+
+            def run_with_feed(self, feed):
+                raise error
+
+            def ensure_eod_reconcile(self, *args, **kwargs):
+                return type("Result", (), {"clean": True})()
+
+        tm = _TimeMachine("2026-07-06T19:58:00.000000Z")
+        feed = _live_feed(tm, [], stop_at="2026-07-06T20:15:00.000000Z")
+        with TemporaryDirectory() as tmp:
+            journal_dir = Path(tmp) / "journal"
+            journal_dir.mkdir(parents=True)
+            report_dir = Path(tmp) / "reports"
+            with self.assertRaises(RuntimeError) as ctx:
+                run_paper_session(
+                    orchestrator=ExplodingOrchestrator(), feed=feed,
+                    journal_dir=journal_dir, session_date_et="2026-07-06",
+                    report_dir=report_dir,
+                    utc_now_iso_fn=lambda: "2026-07-06T20:00:00.000000Z")
+            self.assertIs(ctx.exception, error)
+            report = json.loads(
+                (report_dir / "2026-07-06.json").read_text(encoding="utf-8"))
+            self.assertIs(report["session_incomplete"], True)
+            self.assertIn("feed exploded", report["session_failure"])
+            self.assertEqual(report["run_id"], "run-explodes")
+            self.assertEqual(report["mode"], "paper")
+
+    def test_feed_exception_report_failure_does_not_mask_original(self):
+        error = RuntimeError("feed exploded")
+
+        class ExplodingOrchestrator:
+            mode = "paper"
+            run_id = "run-explodes"
+            ticks_run = 0
+            drift_latched = False
+            risk_kill = type("Kill", (), {"state": "monitoring"})()
+
+            def run_reconcile(self, **kwargs):
+                return type("Result", (), {"clean": True})()
+
+            def run_with_feed(self, feed):
+                raise error
+
+            def ensure_eod_reconcile(self, *args, **kwargs):
+                return type("Result", (), {"clean": True})()
+
+        tm = _TimeMachine("2026-07-06T19:58:00.000000Z")
+        feed = _live_feed(tm, [], stop_at="2026-07-06T20:15:00.000000Z")
+        with TemporaryDirectory() as tmp:
+            journal_dir = Path(tmp) / "journal"
+            journal_dir.mkdir(parents=True)
+            blocker = Path(tmp) / "blocker"
+            blocker.write_text("a file, not a dir", encoding="utf-8")
+            with self.assertRaises(RuntimeError) as ctx:
+                run_paper_session(
+                    orchestrator=ExplodingOrchestrator(), feed=feed,
+                    journal_dir=journal_dir, session_date_et="2026-07-06",
+                    report_dir=blocker / "reports",
+                    utc_now_iso_fn=lambda: "2026-07-06T20:00:00.000000Z")
+            self.assertIs(ctx.exception, error)
+            self.assertTrue(any(
+                "incomplete-report" in note
+                for note in getattr(ctx.exception, "__notes__", ())))
+
     def test_halted_prior_journal_exits_4(self):
         from agent.risk.risk_ledger import RiskLedger
         from recorder.persistence import EventWriter
@@ -474,6 +550,28 @@ class TestMainExitCodes(unittest.TestCase):
                 "--session-date", "2026-07-06",
                 "--report-dir", str(Path(tmp) / "reports")])
             self.assertEqual(rc, 3)
+
+    def _run_main_with_session_raising(self, tmp, exc):
+        with mock.patch.object(paper_session, "run_paper_session",
+                               side_effect=exc):
+            return self._run_main([
+                "--journal-dir", str(Path(tmp) / "journal"),
+                "--replay", str(self._OBSERVE_EVENTS),
+                "--symbols", "AAPL",
+                "--session-date", "2026-07-06",
+                "--report-dir", str(Path(tmp) / "reports")])
+
+    def test_mid_session_journal_corruption_exits_3(self):
+        with TemporaryDirectory() as tmp:
+            rc = self._run_main_with_session_raising(
+                tmp, orch_mod.JournalCorruption("stream line 7 corrupt"))
+            self.assertEqual(rc, 3)
+
+    def test_mid_session_exception_exits_1_not_traceback(self):
+        with TemporaryDirectory() as tmp:
+            rc = self._run_main_with_session_raising(
+                tmp, RuntimeError("live source died"))
+            self.assertEqual(rc, 1)
 
 
 class TestStrategyRegistry(unittest.TestCase):

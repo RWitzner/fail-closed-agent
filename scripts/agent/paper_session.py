@@ -138,6 +138,25 @@ def run_paper_session(*, orchestrator, feed, journal_dir,
         except BaseException as cleanup_exc:
             primary_exc.add_note(
                 f"EOD reconcile cleanup also failed: {cleanup_exc!r}")
+        # Design failure table: "Cleanup, incomplete report, non-zero exit."
+        # Without this row the daily/weekly evidence has NO record the attempt
+        # happened. Best-effort: never mask the original feed failure.
+        try:
+            data_quality = (feed.data_quality_counts()
+                            if hasattr(feed, "data_quality_counts") else {})
+            report = build_daily_report(
+                journal_dir, session_date_et=session_date_et,
+                run_id=orch.run_id, mode=orch.mode,
+                kill_state=orch.risk_kill.state,
+                data_quality_counts=data_quality)
+            report["session_incomplete"] = True
+            report["session_failure"] = repr(primary_exc)
+            if report_dir is not None:
+                write_report(
+                    report, Path(report_dir) / f"{session_date_et}.json")
+        except BaseException as report_exc:
+            primary_exc.add_note(
+                f"incomplete-report write also failed: {report_exc!r}")
         raise
 
     eod = orch.ensure_eod_reconcile(session_date_et, ts_utc=now_iso(),
@@ -321,6 +340,19 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         result = run_paper_session(
             orchestrator=orch, feed=feed, journal_dir=args.journal_dir,
             session_date_et=session_date, report_dir=args.report_dir)
+    except orch_mod.JournalCorruption as exc:
+        # Mid-session corruption honors the same automation contract as the
+        # construction-time replay (a bare traceback reads as generic exit 1
+        # and unattended tooling would mis-classify it).
+        print(f"journal corruption: {exc}", file=sys.stderr)
+        return 3
+    except Exception:
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        print("session failed mid-run (incomplete report attempted); exit 1",
+              file=sys.stderr)
+        return 1
     finally:
         orch.close()
     if result.report is not None:
