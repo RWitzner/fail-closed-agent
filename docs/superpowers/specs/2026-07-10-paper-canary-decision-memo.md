@@ -1,6 +1,24 @@
 # Decision memo — paper trading without a validated edge (the S9 question)
 
-**Status:** PROPOSAL ONLY. Nothing in this memo is built or armed. Robin's
+**Status: DECIDED 2026-07-10 (~11:00 DK) — Option 1.** Robin's explicit call
+("GO på alle dine anbefalinger", 2026-07-10):
+
+- **Option 1 chosen:** observe-mode now — first live observe session starts the
+  same afternoon IF the 15:32 `verify_alpaca_feed` report is green (steps A ✅ +
+  B pending that report). S9 stays exactly as committed.
+- **Option 2 explicitly NOT taken now:** no preflight change, no config schema
+  change, no cap value committed. Revisit at the earliest AFTER the M7d result;
+  expectation is that it becomes moot either way (C2 GO ⇒ real artifact path;
+  NULL ⇒ no reason to canary this family).
+- **Option 3 superseded by 1+2 above:** M7d is separately run-authorized (see
+  PLAN.md — only remaining gate is the holdout completing ~2026-07-14), but
+  observe-mode does not wait for it.
+
+The original proposal text below is preserved unchanged for the record.
+
+---
+
+**Original status:** PROPOSAL ONLY. Nothing in this memo is built or armed. Robin's
 standing goal (2026-07-10: "vi skal ikke vente på M7d — vi skal i gang, det er
 okay at fejle, vi justerer løbende") collides with exactly ONE committed gate,
 and weakening a committed gate requires an explicit, separately-approved

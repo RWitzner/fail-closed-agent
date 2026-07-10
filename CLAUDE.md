@@ -77,9 +77,9 @@ NOT L2/MBP-10 (heaviest build) and NOT wider universe first.**
 1846 tests green):** packet `docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md` + GPT handoff
 `docs/superpowers/reviews/2026-06-26-M7d-predeclaration-gpt-review-handoff.md` — C2 = `1m`/`120m` sole decider on a
 fresh fixed-20-session post-2026-06-13 holdout (complete ~2026-07-14); C1 = `1m`/`60m` descriptive on the snooped
-window; pinned criteria unchanged; both benchmarks gated. STATUS = GPT-reviewed rev 3, not run-authorized; the
-credentialed pull/run stays gated on Robin choosing M7d rather than routing straight to a realism-matched lever,
-Robin's separate go, and the holdout. The 2026-07-02 full-project review (4
+window; pinned criteria unchanged; both benchmarks gated. STATUS = GPT-reviewed rev 3, **run-AUTHORIZED
+2026-07-10** (Robin chose M7d over routing straight to a realism-matched lever AND gave the separate go); the
+only remaining gate is the fresh holdout completing ~2026-07-14 (earliest run ~2026-07-15). The 2026-07-02 full-project review (4
 read-only deep-review agents + own-run reproduction; safety checklist 12/12 PASS in code; one pre-live MINOR for
 the M8 checklist: the loss/drawdown auto-kill is SKIPPED on a non-"fresh" account read) applied three fixes TDD:
 the cross-sectional runner now requires the DECISION bar to be FD-2-eligible at decision time (late-receipt bars
@@ -179,9 +179,16 @@ run pins the payload layout + record→replay round-trip AND measures statuses/l
 validates). Strategic two-track note: intraday-sporet er drift/ops (edge-spørgsmålet afgøres af M7d/stop-reglen);
 et LANGSIGTET fundamentals-spor (dagskadence, PIT-regnskabsdata, LLM-research, benchmark S&P500 TR) blev
 anbefalet som ny forskningslinje — kræver Robins "fresh explicit mandate" per PLAN.md's substratregel + eget
-predeclared packet. Stale worktrees (`autonomous-paper-hardening`, `task5-terminal-drill`,
-`task6-incremental-replay` under `~/.config/superpowers/worktrees/Stocks/`) er superseded af main og kan
-fjernes med `git worktree remove`.
+predeclared packet.
+**ROBINS GO PÅ ALLE ÅBNE BESLUTNINGER (2026-07-10 ~11:00 DK):** (1) S9 = Option 1 (observe-mode nu; memoet er
+DECIDED — Option 2 tages IKKE nu, genbesøges tidligst efter M7d-resultatet); første live observe-session starter
+samme eftermiddag HVIS 15:32-rapporten er grøn. (2) M7d run-AUTHORIZED (eneste resterende gate = holdoutet
+komplet ~2026-07-14; forventet NULL på realisme-caps, værdien er rute-A-vs-B-læsningen). (3) Data-trappen bliver
+på $0 IEX til noget validerer. (4) Fundamentals-mandatet GIVET, scoped til PACKET-DRAFTING + review alene
+(`docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`, DRAFT rev 1 — særskilt
+forskningslinje, forbruger IKKE intraday-substratbudgettet; data-spend/kørsel kræver eget go). (5) De tre stale
+worktrees er FJERNET (`git worktree remove`, 2026-07-10); Alpaca-nøgle-regenerering er fortsat Robins egen
+to-do. Gates urørte hele vejen.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 

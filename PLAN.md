@@ -23,6 +23,20 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   steps A–E + Track D drills + the S9 decision (`docs/superpowers/specs/2026-07-10-paper-canary-decision-memo.md`).
   Observe-mode needs only steps A/B. F2 (episode-scoped flatten client id) is a documented pre-arming item.
 
+- **Robin's GO on all open decisions (2026-07-10 ~11:00 DK):** (1) **S9 = Option 1 (observe-mode now)** —
+  decided in the memo itself; Option 2 (unvalidated canary) explicitly NOT taken now, revisit at the earliest
+  after the M7d result; first live observe session starts the same afternoon IF the 15:32 `verify_alpaca_feed`
+  report is green. (2) **M7d run-AUTHORIZED**: Robin chose M7d over routing straight to a realism-matched lever
+  AND gave the separate go — the only remaining gate is the fresh holdout completing ~2026-07-14 (earliest run
+  ~2026-07-15 when the last session's historical data is available). Expected outcome per the measured
+  feasibility: NULL on realism caps; the run's value is the route-A-vs-B edge read. (3) **Data ladder stays $0
+  (Alpaca IEX)**: no $99 SIP / $199 Databento spend until a strategy validates; the 15:32 report's
+  statuses/lulds counts feed that decision. (4) **Fundamentals long-horizon mandate granted for PACKET DRAFTING
+  ONLY** (the fresh explicit mandate the substrate rule requires, scoped to authoring+review of a predeclared
+  packet — see `docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`; any data spend or
+  credentialed run needs its own separate go). (5) Hygiene: the three stale superpowers worktrees removed;
+  Alpaca key regeneration remains Robin's own to-do.
+
 - Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
   workflow), reconciled. All external facts verified against primary sources.
 - **M0 built, hardened, and green (129 tests, deterministic).** TDD throughout; an adversarial review of the
@@ -386,9 +400,9 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   GPT review (2026-07-02) returned changes-required on two methodology items plus a strategic WATCH; rev 3 applied
   the must-fixes by removing the undefined "comfortable margin" gate, making route-B decomposition
   mechanism-classification only (no automatic second substrate spend), and reconciling current HEAD operational
-  state. STATUS = GPT-reviewed rev 3, not run-authorized; the credentialed pull/run stays gated on Robin choosing
-  M7d rather than routing straight to a realism-matched lever, Robin's separate go, and the fresh holdout (complete
-  ~2026-07-14). Paper/M8 blocked; run gates and pinned criteria unchanged.
+  state. STATUS = GPT-reviewed rev 3, **run-AUTHORIZED 2026-07-10** (Robin chose M7d over routing straight to a
+  realism-matched lever and gave the separate go); the only remaining gate is the fresh holdout completing
+  ~2026-07-14 (earliest run ~2026-07-15). Paper/M8 blocked; run gates and pinned criteria unchanged.
 
 - **Paper-operational readiness build (2026-07-02, 1846 tests green; commits `9c5590d`…`9d73528`):** closed every
   buildable gap between "spine done" and "an autonomous paper session can run", without flipping anything
@@ -496,7 +510,10 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   entry-latency — informed, not auto-selected, by the predeclared realism decomposition), as its own packet +
   review + separate go.
   A second substrate null ends the program: any continuation — including a daily-horizon/EOD family line, which
-  is a NEW substrate — requires a fresh explicit mandate from Robin, not a routing rule.
+  is a NEW substrate — requires a fresh explicit mandate from Robin, not a routing rule. **(2026-07-10: Robin
+  granted exactly such a fresh mandate for a long-horizon fundamentals line, scoped to PACKET DRAFTING + review
+  only — `docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`; it is a separate research
+  line, does NOT consume the intraday substrate budget, and any data spend/credentialed run needs its own go.)**
 - **Paper edge-validation phase** (post-passing-artifact, pre-M8): full autonomous paper run measured against the
   pre-pinned criteria — this run produces the "realized edge" evidence M8 requires.
 - **M8** Live canary (only after realized edge; two-key arming + flatten-then-halt + go-live checklist).
