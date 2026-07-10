@@ -75,6 +75,72 @@ def runtime_paths_for(*, replay: bool) -> dict:
     }
 
 
+def build_status_provider(*, replay: bool, schedule, symbols, clock):
+    """Track B composition (closes P0-1: without a composed status_provider the
+    production paper composition could never open — every symbol UNKNOWN).
+
+    Returns ``(provider, source_or_none)``:
+
+    - replay: the rehearsal-only calendar-RTH windows provider. This is NOT a
+      calendar-substitutes-for-status violation because nothing can open in
+      replay by construction (credentials_path/run_gates_path are None ⇒ the
+      orchestrator degrades to observe: no gates read, no broker, S1 zero
+      orders) — it exists so rehearsals exercise the tradability path.
+    - live: the REAL status plane. While the Alpaca statuses/lulds source is
+      UNVERIFIED (Track D drill pending) the provider composes DISCONNECTED —
+      every lookup None ⇒ UNKNOWN ⇒ opens blocked. Fail-closed, not
+      fail-crashed: the session still runs, journals, and reports; the caller
+      prints a loud attention note.
+    """
+    if replay:
+        from agent.orchestrator import status_provider_from_windows
+
+        windows = {symbol: [(schedule.rth_open_utc, schedule.rth_close_utc)]
+                   for symbol in symbols}
+        return status_provider_from_windows(windows), None
+    from agent.marketdata.status_plane import (
+        LiveStatusProvider,
+        alpaca_status_source,
+    )
+
+    provider = LiveStatusProvider(clock=clock)
+    try:
+        source = alpaca_status_source(symbols=list(symbols))
+    except NotImplementedError:
+        return provider, None
+    return provider, source
+
+
+def journal_status_transitions(journal_dir, provider, *, run_id: str,
+                               utc_now_iso_fn=None) -> int:
+    """Drain the status plane's transition rows into ``status_plane.jsonl``.
+
+    Best-effort evidence (design Track B: 'status transition rows are
+    journaled with source and timestamps') — never raises; returns the row
+    count written. Providers without ``drain_transitions`` (the rehearsal
+    windows provider) journal nothing."""
+    drain = getattr(provider, "drain_transitions", None)
+    if not callable(drain):
+        return 0
+    try:
+        rows = drain()
+        if not rows:
+            return 0
+        from agent.journal import JournalWriter
+
+        writer = JournalWriter(Path(journal_dir) / "status_plane.jsonl",
+                               run_id=run_id,
+                               clock=utc_now_iso_fn or _utc_now_iso)
+        for row in rows:
+            writer.append("status_transition", dict(row))
+        return len(rows)
+    except Exception as exc:  # noqa: BLE001 — evidence write must not mask the session
+        import sys
+
+        print(f"status-plane journaling failed: {exc!r}", file=sys.stderr)
+        return 0
+
+
 def build_strategy(strategy_id: Optional[str]):
     """Resolve a strategy id to an instance; fail closed on unknown/unadapted ids."""
     if strategy_id is None:
@@ -324,6 +390,15 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
 
     strategy = build_strategy(args.strategy_id)
     runtime_paths = runtime_paths_for(replay=bool(args.replay))
+    status_provider, status_source = build_status_provider(
+        replay=bool(args.replay), schedule=schedule, symbols=symbols,
+        clock=feed.clock())
+    if not args.replay and status_source is None:
+        print("ATTENTION: live status plane UNVERIFIED — composing a "
+              "DISCONNECTED status provider; every symbol stays UNKNOWN and "
+              "no position can open (fail-closed). Run the Track D "
+              "status-coverage drill to verify the Alpaca statuses/lulds "
+              "source.", file=sys.stderr)
     try:
         orch = orch_mod.Orchestrator(
             journal_dir=args.journal_dir,
@@ -336,6 +411,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             calendar_provider=provider,
             config=config,
             strategy=strategy,
+            status_provider=status_provider,
             **runtime_paths,
         )
     except orch_mod.RunLockHeld as exc:
@@ -344,6 +420,16 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     except orch_mod.JournalCorruption as exc:
         print(f"journal corruption: {exc}", file=sys.stderr)
         return 3
+    pump_thread = None
+    if status_source is not None:
+        import threading
+
+        from agent.marketdata.status_plane import pump_status_events
+
+        pump_thread = threading.Thread(
+            target=pump_status_events, args=(status_source, status_provider),
+            name="status-plane-pump", daemon=True)
+        pump_thread.start()
     try:
         result = run_paper_session(
             orchestrator=orch, feed=feed, journal_dir=args.journal_dir,
@@ -362,6 +448,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return 1
     finally:
+        journal_status_transitions(
+            Path(args.journal_dir), status_provider, run_id=orch.run_id)
         orch.close()
     if result.report is not None:
         print(render_text(result.report), end="")

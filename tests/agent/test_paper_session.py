@@ -500,6 +500,25 @@ class TestMainExitCodes(unittest.TestCase):
                               credentials_path)
                 self.assertIs(ctor.call_args.kwargs["run_gates_path"],
                               run_gates_path)
+                status_provider = ctor.call_args.kwargs["status_provider"]
+                if replay:
+                    # rehearsal windows provider: healthy inside RTH for the
+                    # composed universe, None otherwise
+                    self.assertIsNotNone(status_provider(
+                        "AAPL", "2026-07-06T14:00:00.000000Z"))
+                    self.assertIsNone(status_provider(
+                        "MSFT", "2026-07-06T14:00:00.000000Z"))
+                else:
+                    from agent.marketdata.status_plane import (
+                        LiveStatusProvider,
+                    )
+
+                    # UNVERIFIED live source ⇒ DISCONNECTED provider ⇒ every
+                    # lookup None ⇒ opens blocked (P0-1 closed fail-closed)
+                    self.assertIsInstance(status_provider,
+                                          LiveStatusProvider)
+                    self.assertIsNone(status_provider(
+                        "AAPL", "2026-07-06T14:00:00.000000Z"))
 
     def test_calendar_coverage_expired_exits_5(self):
         with TemporaryDirectory() as tmp:
@@ -623,6 +642,67 @@ class TestDailyReport(unittest.TestCase):
             self.assertEqual(report["trading"]["realized_broker_pnl_usd"], "0")
             self.assertIsNone(report["reconcile"]["all_clean"])
             self.assertEqual(report["counts_by_stream"], {})
+
+
+class TestBuildStatusProvider(unittest.TestCase):
+    """Track B composition seam: replay = rehearsal windows (nothing can open
+    in replay by construction); live = the real plane, DISCONNECTED while the
+    Alpaca source is UNVERIFIED."""
+
+    def test_replay_windows_and_live_disconnected(self):
+        from types import SimpleNamespace
+
+        from agent.paper_session import build_status_provider
+
+        schedule = SimpleNamespace(
+            rth_open_utc="2026-07-06T13:30:00.000000Z",
+            rth_close_utc="2026-07-06T20:00:00.000000Z")
+
+        provider, source = build_status_provider(
+            replay=True, schedule=schedule, symbols=["AAPL"], clock=None)
+        self.assertIsNone(source)
+        self.assertIsNotNone(
+            provider("AAPL", "2026-07-06T14:00:00.000000Z"))
+        self.assertIsNone(provider("AAPL", "2026-07-06T21:00:00.000000Z"))
+        self.assertIsNone(provider("MSFT", "2026-07-06T14:00:00.000000Z"))
+
+        class Clock:
+            def now_ms(self):
+                return 0
+
+        provider, source = build_status_provider(
+            replay=False, schedule=schedule, symbols=["AAPL"], clock=Clock())
+        self.assertIsNone(source)
+        self.assertIsNone(provider("AAPL", "2026-07-06T14:00:00.000000Z"))
+
+    def test_status_transitions_journaled(self):
+        from agent.marketdata.status_plane import LiveStatusProvider
+        from agent.paper_session import journal_status_transitions
+
+        class Clock:
+            def now_ms(self):
+                return 1_000
+
+        provider = LiveStatusProvider(clock=Clock())
+        provider.ingest({
+            "symbol": "AAPL",
+            "ts_event_utc": "2026-07-06T14:00:00.000000Z",
+            "source": "alpaca", "halt": "none", "halt_reason": "none"})
+        with TemporaryDirectory() as tmp:
+            written = journal_status_transitions(
+                Path(tmp), provider, run_id="run-x",
+                utc_now_iso_fn=lambda: "2026-07-06T14:00:01.000000Z")
+            self.assertEqual(written, 1)
+            from agent.journal import replay as journal_replay
+
+            rows = journal_replay(Path(tmp) / "status_plane.jsonl")
+            self.assertEqual(rows[0]["event_type"], "status_transition")
+            self.assertEqual(rows[0]["symbol"], "AAPL")
+            self.assertEqual(rows[0]["to"], "none")
+        # windows provider (no drain_transitions) journals nothing
+        with TemporaryDirectory() as tmp:
+            self.assertEqual(journal_status_transitions(
+                Path(tmp), lambda s, t: None, run_id="run-x"), 0)
 
 
 class TestDailyReportCompleteness(unittest.TestCase):
