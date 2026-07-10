@@ -5,7 +5,7 @@
 ``JournalCorruption`` semantics are inherited verbatim) and drives the observe-mode
 tick loop deterministically from RECORDED time:
 
-- Quote rows (schema ∈ ``QUOTE_SCHEMAS`` = {"tbbo", "bbo-1s"}) map to
+- Quote rows (schema ∈ ``QUOTE_SCHEMAS`` = {"tbbo", "bbo-1s", "mbp-1"}) map to
   ``agent.quote_quality.QuoteSnapshot`` — field map ``bid_px/ask_px/bid_sz/ask_sz``
   → ``bid/ask/bid_sz/ask_sz``, provenance carried VERBATIM, ``seen_at_ms`` = the
   ``ReplayClock`` offset of the row's ``ts_recv_utc``.
@@ -70,6 +70,13 @@ Documented build resolutions (none contradicts a frozen pin; report-listed):
     duplicating the frozen dataclass would violate the one-home discipline;
     ``execution_realism`` is itself in the §3 pure family, so the import keeps
     this module pure (no broker/preflight/kill/arming reachability).
+12. **``mbp-1`` added to ``QUOTE_SCHEMAS`` (2026-07-10):** the step-B
+    ALPACA.IEX route records event-driven L1 quotes as ``mbp-1``;
+    ``live_feed.LIVE_QUOTE_SCHEMAS`` was widened when that adapter was built
+    but this set was not, so the credentialed ``verify_alpaca_feed`` run
+    (2026-07-10 15:32 DK) failed its record→replay round-trip on an EMPTY
+    replayed stream. The two sets must stay in lockstep for every schema a
+    live source can record.
 
 Import discipline (§3): stdlib, ``agent.quote_quality``, ``agent.bar_series``,
 ``agent.execution_realism`` (erratum, above), ``recorder.persistence`` /
@@ -102,7 +109,11 @@ __all__ = [
     "ReplayQuoteFeed",
 ]
 
-QUOTE_SCHEMAS = frozenset({"tbbo", "bbo-1s"})   # §N frozen quote-row schema set
+# tbbo/bbo-1s = the §N Databento set; mbp-1 = the event-driven L1 tag (the
+# step-B ALPACA.IEX route) — widened 2026-07-10 in lockstep with
+# live_feed.LIVE_QUOTE_SCHEMAS after the credentialed verify caught recorded
+# mbp-1 events replaying as an empty stream (resolution 12).
+QUOTE_SCHEMAS = frozenset({"tbbo", "bbo-1s", "mbp-1"})
 DEPTH_SCHEMA = "mbp-10"
 BAR_INTERVAL = "1m"                              # FD-1: the only interval built
 DEFAULT_REFRESH_CADENCE_MS = 1000                # committed signal.refresh_cadence_ms

@@ -145,6 +145,81 @@ class TestQuoteFieldMapping(_Tmp):
         self.assertIsNone(feed.quote_view().latest("MSFT", 2002))
 
 
+class TestAlpacaMbp1Rows(_Tmp):
+    """The step-B ALPACA.IEX/mbp-1 route MUST replay (2026-07-10 live-verify
+    catch: LIVE_QUOTE_SCHEMAS was widened to mbp-1 but replay's QUOTE_SCHEMAS
+    was not, so recorded IEX events replayed as an EMPTY stream and the
+    record->replay round-trip failed). Mirrors verify_alpaca_feed's exact
+    production path: normalize -> parse -> EventWriter -> ReplayQuoteFeed."""
+
+    def _write_alpaca_stream(self, quotes):
+        from agent.marketdata.alpaca_feed import (
+            DATASET as ALPACA_DATASET,
+            SCHEMA as ALPACA_SCHEMA,
+            normalize_alpaca_quote,
+        )
+        writer = EventWriter(self.path, run_id="run-alpaca-replay-test",
+                             clock=lambda: WRITER_TS)
+        events = []
+        for symbol, ts_event, bid, bid_sz, ask, ask_sz, ts_recv in quotes:
+            record = normalize_alpaca_quote(
+                symbol=symbol, ts_event=ts_event, bid_price=bid,
+                bid_size=bid_sz, ask_price=ask, ask_size=ask_sz)
+            self.assertIsNotNone(record)
+            ev = parse(record, dataset=ALPACA_DATASET, schema=ALPACA_SCHEMA,
+                       reconnect_epoch=0, ts_recv_utc=ts_recv)
+            writer.write_event(ev)
+            events.append(ev)
+        return events
+
+    def test_mbp1_rows_deliver_and_roundtrip_verbatim(self):
+        # The verifier's round-trip contract: the LAST event per (symbol,
+        # instrument_id) must come back from quote_view().latest() with
+        # bid/ask/ts_recv_utc intact.
+        events = self._write_alpaca_stream([
+            ("AAPL", "2026-07-10T13:32:07.100000Z", 200.10, 40, 200.14, 120,
+             "2026-07-10T13:32:07.400000Z"),
+            ("AAPL", "2026-07-10T13:32:08.100000Z", 200.11, 80, 200.13, 40,
+             "2026-07-10T13:32:08.350000Z"),
+        ])
+        feed = ReplayQuoteFeed(self.path)
+        _, _, on_tick, on_bar = _collecting_callbacks()
+        feed.run(on_tick=on_tick, on_bar_complete=on_bar)
+
+        last = events[-1]
+        latest = feed.quote_view().latest(last.provenance.symbol,
+                                          last.provenance.instrument_id)
+        self.assertIsNotNone(
+            latest, "recorded ALPACA.IEX/mbp-1 rows replayed as an empty "
+                    "stream (schema filtered out)")
+        self.assertEqual(latest.bid, last.bid_px)
+        self.assertEqual(latest.ask, last.ask_px)
+        self.assertEqual(latest.ts_recv_utc, last.provenance.ts_recv_utc)
+        self.assertEqual(latest.schema, "mbp-1")
+        self.assertEqual(latest.dataset, "ALPACA.IEX")
+
+    def test_mbp1_rows_preload_1m_bars(self):
+        # Bars must resample from mbp-1 rows too (same pipeline the observe
+        # session's tick loop consumes); pin carries the real schema.
+        self._write_alpaca_stream([
+            ("MSFT", "2026-07-10T13:30:10.000000Z", 300.21, 80, 300.26, 40,
+             "2026-07-10T13:30:10.200000Z"),
+            ("MSFT", "2026-07-10T13:30:40.000000Z", 300.25, 40, 300.28, 40,
+             "2026-07-10T13:30:40.200000Z"),
+            ("MSFT", "2026-07-10T13:31:05.000000Z", 300.30, 40, 300.34, 40,
+             "2026-07-10T13:31:05.200000Z"),
+        ])
+        feed = ReplayQuoteFeed(self.path)
+        _, fired, on_tick, on_bar = _collecting_callbacks()
+        feed.run(on_tick=on_tick, on_bar_complete=on_bar)
+
+        self.assertTrue(fired, "no 1m bar completed from mbp-1 rows")
+        bar = fired[0]
+        self.assertEqual(bar.source_schema, "mbp-1")
+        self.assertEqual(bar.data_pin,
+                         "ALPACA.IEX:mbp-1:1m:replay:events.jsonl")
+
+
 class TestReplayClock(_Tmp):
     def _items(self):
         return [
