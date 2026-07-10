@@ -185,12 +185,17 @@ DECIDED — Option 2 tages IKKE nu, genbesøges tidligst efter M7d-resultatet); 
 samme eftermiddag HVIS 15:32-rapporten er grøn. (2) M7d run-AUTHORIZED (eneste resterende gate = holdoutet
 komplet ~2026-07-14; forventet NULL på realisme-caps, værdien er rute-A-vs-B-læsningen). (3) Data-trappen bliver
 på $0 IEX til noget validerer. (4) Fundamentals-mandatet GIVET, scoped til PACKET-DRAFTING + review alene
-(`docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`, DRAFT **rev 2** — 5-lens
-adversarielt review applied samme dag (8 blockers + ~23 majors, alle fixes i rev 2: bl.a. kanonisk PIT-regel,
-CIK-first identity-map mod survivorship, ROA i stedet for ROE, split-justerede shares, månedskonsistens-gate,
-metric-key-verificerbarhed, egen NY verifier ikke "tighten-only"); GPT-handoff klar i
-`docs/superpowers/reviews/2026-07-10-fundamentals-predeclaration-gpt-review-handoff.md` — særskilt
-forskningslinje, forbruger IKKE intraday-substratbudgettet; data-spend/F0-byg/kørsel kræver eget go). (5) De tre stale
+(`docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`, DRAFT **rev 3, GPT-REVIEWED
+samme aften** — rev 2 = 5-lens adversarielt review (8 blockers + ~23 majors); rev 3 = GPT-reviewet
+(gpt-5.6-sol/ultra via Codex read-only): verdikt **RECONSIDER-EXPERIMENT** + 5 blockers, ALLE bekræftet og
+applied — historisk vindue omklassificeret til REJECTION-only screen (promotion-evidens = forward-only), NY
+F−1 procurement-fase FØR F0 (EDGAR kan ikke levere en PIT security master — identitet er den bindende
+constraint), F0 splittet i F0A-freeze/F0B-materialisering, umulig 36-obs-kalender fixet
+(initialiserings-beslutning), design-digest-preregistreringslås, gate 9 hærdet + gate 11 økonomisk gulv +
+cap-weight-dekompositions-benchmark, fail-closed verifier-dispatch-registry. Handoff med fuldt verdikt:
+`docs/superpowers/reviews/2026-07-10-fundamentals-predeclaration-gpt-review-handoff.md`. **NÆSTE = Robins
+RUTEVALG: (a) F−1-go / (b) direkte paid-data-beslutning / (c) parkér linjen** — særskilt forskningslinje,
+forbruger IKKE intraday-substratbudgettet; F−1/F0/data-spend kræver hver sit eget go). (5) De tre stale
 worktrees er FJERNET (`git worktree remove`, 2026-07-10); Alpaca-nøgle-regenerering er fortsat Robins egen
 to-do. Gates urørte hele vejen.
 

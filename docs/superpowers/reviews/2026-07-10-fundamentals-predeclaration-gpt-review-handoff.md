@@ -16,10 +16,58 @@ GPT is embedded verbatim in the appendix.
 > cannot be cherry-picked. This line adds a trap no intraday packet had: the packet's own AUTHORS (an LLM
 > trained through ~2026, and Robin) already know how the 2023–2026 holdout played out.
 
-## Review outcome
+## Review outcome (2026-07-10 evening)
 
-**PENDING** — populated after GPT returns (verdict per dimension + overall APPROVE / CHANGES-REQUIRED /
-RECONSIDER-EXPERIMENT, each finding, and the rev-3 resolution).
+**Run mechanics:** executed same day via Codex CLI 0.144.1 (`codex exec`, read-only sandbox, workdir = repo,
+model `gpt-5.6-sol`, reasoning effort `ultra`) with the appendix prompt verbatim; the CLI had to be upgraded
+from 0.139.0 first (the model requires ≥ 0.144). Post-run git-audit clean (no files modified by the review).
+
+**Verdict: RECONSIDER-EXPERIMENT overall; CHANGES-REQUIRED on five blockers if the line is kept.** Per-
+dimension: A–F CHANGES-REQUIRED, G RECONSIDER-EXPERIMENT. Every finding was triaged by the orchestrator
+against the packet/repo/facts; **all five blockers CONFIRMED** — two of them corrected rev-2's own fixes:
+
+1. **[A/G] A fully-historical window cannot become confirmatory through post-outcome preregistration** — the
+   author-hindsight concession was honest but its claimed "bound" illusory. → Rev 3 RECLASSIFIES 2023-07 →
+   2026-06 as a retrospective screen with REJECTION authority only; promotion evidence is forward-only.
+2. **[B] EDGAR cannot supply the promised PIT security master** (CIK = filer identity, not security identity;
+   no effective-dated ticker/MIC/class/delisting history) — rev 2 had moved survivorship into an unverifiable
+   historical join. → Rev 3 requires a NAMED master + independent delisted-recall denominator, established in
+   a NEW bounded F−1 procurement phase BEFORE any F0 engineering.
+3. **[A/B] F0's gates were discretionary** ("adequate", "within tolerances") and could shape the screen
+   universe after names were visible. → Rev 3 splits F0 into F0A (dev-only calibration + numeric freeze of
+   every threshold) and F0B (one fail-closed screen materialization).
+4. **[A/C/D] The declared 36-observation calendar was impossible** (the 2026-06-end decision fills 2026-07-01,
+   AFTER the pinned 2026-06-30 terminal mark — a rev-2 error). → Rev 3 pins an initialization decision at
+   2023-06-end + 35 rebalances through 2026-05-end + terminal mark 2026-06-30 = exactly 36 realized
+   observations, with explicit date arrays in the design digest.
+5. **[C/F] The artifact hash was tamper-evident, not a preregistration lock** (a modified body re-hashes to a
+   new internally-consistent value). → Rev 3 requires ONE canonical design-body + expected digest committed
+   BEFORE any dev PnL; the verifier exact-matches against that external constant, with negative tests.
+
+Highs/mediums (all confirmed and applied in rev 3): CA/delisting/fill event-order ledger pinned (dividend
+entitlement at prior close; non-retroactive delisting recognition; cash-slot rule; unsupported-event
+fail-closed); factor/XBRL definitions made executable-frozen (issuance formula/endpoints, full context
+binding, fiscal-chain/duplicate/52-53-week rules, degenerate-case handling, tie-breaks); **the $0 price
+picture corrected UPWARD** (Alpaca free tier serves HISTORICAL SIP with a 15-minute delay ⇒ consolidated
+volume/closes are $0-feasible; identity/delisted/CA coverage remain the binding constraints; the "IEX runs no
+closing auction" claim softened to its listings-accurate form); **gate 9 hardened** (the orchestrator
+verified GPT's counterexample arithmetically: 19×+1bp + 1×+1000bp + 16×−40bp = 20/36 hits, PF 1.59, 98.1%
+of positive active from ONE month — passed the rev-2 gate; rev 3 adds a ≤ 40% max-month-share cap + a
+2-of-3-years breadth clause); **NEW gate 11 economic-materiality floor** (≥ +1.0%/yr active proposal — a
+few-bps "pass" must not trigger a years-long paper program); **NEW non-deciding `universe_cap_weight_tr_v1`**
+decomposition benchmark + "unresolved mixed benchmark result" routing (no post-hoc causal stories from the
+two-leg mix); the "shared delisting convention cancels in active" claim RETRACTED (identical conventions ≠
+identical weights; per-leg contributions now measured); a **fail-closed verifier DISPATCH registry**
+predeclared (verified: `orchestrator.py:77`/`:2218` import and call only the intraday verifier today); SPY
+reference/cost accounting made reproducible (cost formula pinned; reference pinning = F0A digest content);
+F2 explicitly consumes the second family slot.
+
+**The pivotal contingency FIRED (protocol step 2): GPT's dimension-G answer is that the current F0→F1
+sequence should NOT start on $0 — security identity, not historical bars, is the binding constraint, and the
+first spend should be a bounded F−1 procurement review.** Rev 3 restructures the packet accordingly, and the
+decision now sits with Robin (see Open decisions): (a) F−1 go, (b) straight to a paid-data decision, or
+(c) park the line. GPT's own framing: if Robin will neither buy the necessary identity/CA data nor accept a
+years-long forward clock, parking the line is the rational choice.
 
 ## What this packet is (and is NOT)
 
@@ -162,13 +210,18 @@ RECONSIDER-EXPERIMENT, each finding, and the rev-3 resolution).
 7. **Exit:** if GPT findings are fixed and no methodology blocker remains, mark the packet GPT-reviewed; it
    then waits on Robin's separate F0 go ($0-scope) — and any Databento/paid pull remains its own ask.
 
-## Open decisions (unchanged by this review until findings land)
+## Open decisions (NOW LIVE — the review landed and rev 3 is applied)
 
-- **Robin's F0 go** (after review): build the $0 data layer, or route straight to the paid-data decision the
-  packet predicts, or park the line.
+- **Robin's ROUTING CHOICE (the review's central output):** (a) give the bounded F−1 procurement review its
+  go ($0, no build, time-/request-capped — answers "does a survivor-complete PIT security master + CA source
+  exist at $0, and if not, what does one cost?"), (b) route straight to the paid-data decision, or (c) park
+  the line. GPT's recommendation: F−1 first; park if neither paid identity/CA data nor a years-long forward
+  clock is acceptable. F0 build authorization can only follow an F−1 outcome + a separate go.
+- **Gate-number freeze:** rev-3 proposals (gate 9's 20/36 / 1.15 / 40% / 2-of-3-years; gate 11's +1.0%/yr)
+  are Robin-approved numbers at freeze time, not settled.
 - **Priority vs the intraday track:** M7d's authorized run (holdout complete ~2026-07-14) and the paper
   observe-track are independent of this line; nothing here blocks or is blocked by them.
-- **Branch for any future F0 code loop:** a fresh branch off `main`, stated explicitly before starting.
+- **Branch for any future F−1/F0 code loop:** a fresh branch off `main`, stated explicitly before starting.
 
 ---
 

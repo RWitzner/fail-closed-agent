@@ -33,10 +33,14 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   (Alpaca IEX)**: no $99 SIP / $199 Databento spend until a strategy validates; the 15:32 report's
   statuses/lulds counts feed that decision. (4) **Fundamentals long-horizon mandate granted for PACKET DRAFTING
   ONLY** (the fresh explicit mandate the substrate rule requires, scoped to authoring+review of a predeclared
-  packet — see `docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`, now DRAFT rev 2
-  after the same-day 5-lens adversarial review (8 blockers + ~23 majors applied; GPT handoff ready in
-  `docs/superpowers/reviews/2026-07-10-fundamentals-predeclaration-gpt-review-handoff.md`); any data spend,
-  F0 build, or credentialed run needs its own separate go). (5) Hygiene: the three stale superpowers worktrees removed;
+  packet — see `docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`, now DRAFT rev 3
+  after TWO same-day adversarial passes: the 5-lens review (rev 2) and the GPT review (gpt-5.6-sol/ultra,
+  read-only Codex; verdict RECONSIDER-EXPERIMENT + 5 confirmed blockers, all applied — the historical window
+  is now a REJECTION-only screen, a bounded F−1 procurement phase precedes any F0 build, and the design is
+  locked by a committed design digest; full verdict in
+  `docs/superpowers/reviews/2026-07-10-fundamentals-predeclaration-gpt-review-handoff.md`). NEXT = Robin's
+  routing choice: F−1 go / straight-to-paid-data decision / park the line; F−1, F0, and any data spend each
+  need their own separate go). (5) Hygiene: the three stale superpowers worktrees removed;
   Alpaca key regeneration remains Robin's own to-do.
 
 - Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
