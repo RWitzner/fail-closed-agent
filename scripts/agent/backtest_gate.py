@@ -93,6 +93,19 @@ _PINNED_MAX_DRAWDOWN_PCT_ALLOCATED = Decimal("0.0150")
 _PINNED_WORST_DAY_PCT_ALLOCATED = Decimal("0.0075")
 _PINNED_P95_REALISM_GAP_BPS_MAX = Decimal("15")
 _PINNED_MAX_SINGLE_FILL_DIVERGENCE_BPS = Decimal("50")
+# Cross-sectional strategies carry a SECOND (equal-weight basket) benchmark in
+# provenance; the packet requires positive active PnL versus BOTH benchmarks,
+# so the verifier must re-check it (mirror of the writer's fail-closed gate in
+# backtest_historical, and of paper_session._CROSS_SECTIONAL_IDS).
+_CROSS_SECTIONAL_STRATEGY_IDS = frozenset({
+    "relative_strength.long_only_proxy_v1",
+})
+_PINNED_EQUAL_WEIGHT_BENCHMARK = "universe_equal_weight_long_v1"
+_EQUAL_WEIGHT_PROVENANCE_KEYS = frozenset({
+    "universe_equal_weight_long_benchmark",
+    "universe_equal_weight_long_benchmark_pnl_usd",
+    "universe_equal_weight_long_active_pnl_usd",
+})
 
 
 def _finite_decimal_string(value) -> bool:
@@ -224,6 +237,22 @@ def _valid_v2_metrics(metrics: dict, *, strategy_id: str) -> bool:
             continue
         if not _string(provenance[key]):
             return False
+
+    # Cross-sectional second-benchmark gate (mirror of the WRITER's fail-closed
+    # equal-weight gate): hash validity alone must not verify an artifact whose
+    # equal-weight active PnL the writer would have refused.
+    if (strategy_id in _CROSS_SECTIONAL_STRATEGY_IDS
+            and not _EQUAL_WEIGHT_PROVENANCE_KEYS <= keys):
+        return False
+    if "universe_equal_weight_long_benchmark" in keys:
+        if (provenance["universe_equal_weight_long_benchmark"]
+                != _PINNED_EQUAL_WEIGHT_BENCHMARK):
+            return False
+    if "universe_equal_weight_long_active_pnl_usd" in keys:
+        active = _decimal_value(
+            provenance["universe_equal_weight_long_active_pnl_usd"])
+        if active is None or active <= 0:
+            return False
     return True
 
 
@@ -290,23 +319,25 @@ def verify_artifact(strategy_id: str, *, rules_hash: str, data_pin: str,
         return _hash_invalid(path, claimed_hash)
 
     version = payload["v"]
-    if isinstance(version, bool) or version not in (1, 2):
+    if isinstance(version, bool) or version != 2:
+        # v1 acceptance removed: no writer emits v1 gate artifacts, and v1 was
+        # the last path that skipped BOTH the metric validation and the
+        # semantic criteria recompute below — a hand-built v1 artifact must
+        # never satisfy S9 (fail-closed).
         return _hash_invalid(path, claimed_hash)
 
     metrics = payload["metrics"]
     if not isinstance(metrics, dict) or metrics.get("basis") != _REQUIRED_BASIS:
         return _hash_invalid(path, claimed_hash)   # the S9 metric pin
-    if version == 2 and not _valid_v2_metrics(
-            metrics, strategy_id=payload["strategy_id"]):
+    if not _valid_v2_metrics(metrics, strategy_id=payload["strategy_id"]):
         return _hash_invalid(path, claimed_hash)
 
     if (payload["strategy_id"], payload["rules_hash"], payload["data_pin"]) != (
             strategy_id, rules_hash, data_pin):
         return ArtifactCheck(status="key_mismatch", artifact_path=path,
                              artifact_hash=claimed_hash)
-    if version == 2:
-        from agent.paper_phase_criteria import evaluate_paper_phase_criteria
-        if not evaluate_paper_phase_criteria(metrics).passed:
-            return _hash_invalid(path, claimed_hash)
+    from agent.paper_phase_criteria import evaluate_paper_phase_criteria
+    if not evaluate_paper_phase_criteria(metrics).passed:
+        return _hash_invalid(path, claimed_hash)
 
     return ArtifactCheck(status="ok", artifact_path=path, artifact_hash=claimed_hash)

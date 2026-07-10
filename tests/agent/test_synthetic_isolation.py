@@ -32,6 +32,7 @@ from agent.strategies.synthetic import (
     SyntheticStrategy,
 )
 from agent.strategy import ScanContext, Strategy
+from tests.lib.exec_fixtures import valid_v2_metrics
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _STRATEGIES_DIR = _REPO_ROOT / "scripts" / "agent" / "strategies"
@@ -316,16 +317,17 @@ class TestExitInstruction(unittest.TestCase):
 
 # --- verify_artifact matrix (FD-M5-27) — builders take MANDATORY artifacts_dir
 # (M5C-S12: no default pointing at the committed ARTIFACTS_DIR, so these tests
-# structurally cannot write into the committed dir). ---
+# structurally cannot write into the committed dir). v2-only since the S9
+# hardening (verify_artifact rejects v1 outright). ---
 
 def _artifact_payload(*, strategy_id="real.alpha_v1", rules_hash="rh-1",
                       data_pin=_DATA_PIN, basis="execution_realistic_pnl"):
     body = {
-        "v": 1,
+        "v": 2,
         "strategy_id": strategy_id,
         "rules_hash": rules_hash,
         "data_pin": data_pin,
-        "metrics": {"basis": basis, "sharpe": "1.10", "trades": 42},
+        "metrics": valid_v2_metrics(strategy_id, basis=basis),
         "created_utc": "2026-06-10T12:00:00.000000Z",
     }
     payload = dict(body)

@@ -296,16 +296,86 @@ def write_run_gates(dir_path, kind: str = "valid") -> Path:
 
 
 # --- backtest-artifact builders (FD-M5-27; MANDATORY artifacts_dir — M5C-S12) ------------
+# v2-only since the S9 hardening: verify_artifact rejects v1 outright (v1 was
+# the last semantic-recompute bypass), so "a valid artifact" means a v2 payload
+# whose metrics pass the pinned paper-phase criteria.
+
+
+def valid_v2_metrics(strategy_id: str, *,
+                     basis: str = "execution_realistic_pnl") -> dict:
+    """Canonical criteria-PASSING v2 metrics block for test artifacts."""
+    return {
+        "basis": basis,
+        "pass": True,
+        "runner_version": "m7-backtest-v1",
+        "strategy_version": strategy_id,
+        "sample": {
+            "start_utc": "2026-06-01T13:30:00.000000Z",
+            "end_utc": "2026-06-30T20:00:00.000000Z",
+            "session_count": 20,
+            "decision_count": 250,
+            "trade_count": 42,
+            "traded_session_count": 6,
+            "symbols": ["AAPL"],
+        },
+        "pnl": {
+            "gross_modeled_usd": "125.00",
+            "fees_usd": "7.50",
+            "net_execution_realistic_pnl_usd": "117.50",
+            "avg_trade_bps": "3.10",
+            "profit_factor": "1.25",
+        },
+        "benchmark": {
+            "method": "exposure_matched_midbar_v1",
+            "benchmark_pnl_usd": "12.00",
+            "active_pnl_usd": "105.50",
+        },
+        "risk": {
+            "max_drawdown_usd": "25.00",
+            "max_drawdown_pct_allocated": "0.0100",
+            "worst_day_usd": "-12.00",
+            "worst_day_pct_allocated": "0.0075",
+            "p95_realism_gap_bps": "10.00",
+            "max_single_fill_divergence_bps": "40.00",
+        },
+        "quality": {
+            "future_receipt_count": 0,
+            "missing_bar_count": 1,
+            "ca_blackout_skips": 0,
+            "data_quality_skip_count": 2,
+            "unresolved_reconcile_drift_count": 0,
+            "s1_canary_breach_count": 0,
+            "live_broker_submit_count": 0,
+            "artifact_mismatch_count": 0,
+            "unhandled_exception_count": 0,
+        },
+        "thresholds": {
+            "min_sessions": 20,
+            "min_trades": 30,
+            "min_traded_sessions": 5,
+            "require_positive_net_pnl": True,
+            "require_positive_active_pnl": True,
+            "profit_factor_min": "1.10",
+            "max_drawdown_pct_allocated": "0.0150",
+            "worst_day_pct_allocated": "0.0075",
+            "p95_realism_gap_bps_max": "15",
+            "max_single_fill_divergence_bps": "50",
+        },
+        "provenance": {
+            "input_manifest_hash": "mh-fixture",
+            "builder_git_commit": "test",
+            "tier": "fixture",
+        },
+    }
 
 
 def _artifact_payload(strategy_id: str, rules_hash_value: str, data_pin: str) -> dict:
     body = {
-        "v": 1,
+        "v": 2,
         "strategy_id": strategy_id,
         "rules_hash": rules_hash_value,
         "data_pin": data_pin,
-        "metrics": {"basis": "execution_realistic_pnl",
-                    "sharpe": "0.5", "n_trades": "100"},
+        "metrics": valid_v2_metrics(strategy_id),
         "created_utc": "2026-06-10T00:00:00.000000Z",
     }
     body["artifact_hash"] = row_hash(body)

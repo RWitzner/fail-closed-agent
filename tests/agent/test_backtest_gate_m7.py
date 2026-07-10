@@ -1,8 +1,9 @@
 """M7 Wave 1 - v2 backtest-artifact gate tests.
 
-These tests extend the M5 verifier without weakening the existing v1 matrix in
-test_synthetic_isolation.py. Builders use a mandatory temp artifacts_dir; the
-committed production dir is not written.
+These tests extend the M5 verifier matrix in test_synthetic_isolation.py
+(v2-only since the S9 hardening; v1 artifacts are rejected outright). Builders
+use a mandatory temp artifacts_dir; the committed production dir is not
+written.
 """
 import json
 import os
@@ -255,3 +256,100 @@ class TestBacktestGateV2(unittest.TestCase):
             _write_artifact(tmp, _artifact_payload(metrics=metrics))
 
             self.assertEqual(self._verify(tmp).status, "hash_invalid")
+
+
+_XS_STRATEGY_ID = "relative_strength.long_only_proxy_v1"
+_EQUAL_WEIGHT_PROVENANCE = {
+    "universe_equal_weight_long_benchmark": "universe_equal_weight_long_v1",
+    "universe_equal_weight_long_benchmark_pnl_usd": "12.00",
+    "universe_equal_weight_long_active_pnl_usd": "105.50",
+}
+
+
+def _xs_metrics(**provenance_overrides):
+    metrics = _v2_metrics(strategy_version=_XS_STRATEGY_ID)
+    provenance = dict(metrics["provenance"])
+    provenance.update(_EQUAL_WEIGHT_PROVENANCE)
+    provenance.update(provenance_overrides)
+    metrics["provenance"] = provenance
+    return metrics
+
+
+class TestBacktestGateVersionAndCrossSectional(unittest.TestCase):
+    """S9 hardening: v1 artifacts are dead weight (no writer emits them) and
+    were the last semantic-recompute bypass; the equal-weight second benchmark
+    the cross-sectional WRITER gates must also hold at VERIFY time."""
+
+    def _verify(self, artifacts_dir, *, strategy_id=_STRATEGY_ID):
+        return verify_artifact(strategy_id, rules_hash=_RULES_HASH,
+                               data_pin=_DATA_PIN, artifacts_dir=artifacts_dir)
+
+    def test_v1_artifact_is_rejected(self):
+        body = {
+            "v": 1,
+            "strategy_id": _STRATEGY_ID,
+            "rules_hash": _RULES_HASH,
+            "data_pin": _DATA_PIN,
+            "metrics": {"basis": "execution_realistic_pnl",
+                        "net": "-999999.00"},
+            "created_utc": "2026-06-10T00:00:00.000000Z",
+        }
+        payload = dict(body)
+        payload["artifact_hash"] = row_hash(body)
+        with TemporaryDirectory() as tmp:
+            _write_artifact(tmp, payload)
+
+            self.assertEqual(self._verify(tmp).status, "hash_invalid")
+
+    def test_cross_sectional_missing_equal_weight_provenance_is_rejected(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _v2_metrics(strategy_version=_XS_STRATEGY_ID)
+            _write_artifact(tmp, _artifact_payload(
+                strategy_id=_XS_STRATEGY_ID, metrics=metrics))
+
+            self.assertEqual(
+                self._verify(tmp, strategy_id=_XS_STRATEGY_ID).status,
+                "hash_invalid")
+
+    def test_cross_sectional_negative_equal_weight_active_pnl_is_rejected(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _xs_metrics(
+                universe_equal_weight_long_active_pnl_usd="-710.00")
+            _write_artifact(tmp, _artifact_payload(
+                strategy_id=_XS_STRATEGY_ID, metrics=metrics))
+
+            self.assertEqual(
+                self._verify(tmp, strategy_id=_XS_STRATEGY_ID).status,
+                "hash_invalid")
+
+    def test_cross_sectional_wrong_equal_weight_benchmark_id_is_rejected(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _xs_metrics(
+                universe_equal_weight_long_benchmark="some_other_benchmark")
+            _write_artifact(tmp, _artifact_payload(
+                strategy_id=_XS_STRATEGY_ID, metrics=metrics))
+
+            self.assertEqual(
+                self._verify(tmp, strategy_id=_XS_STRATEGY_ID).status,
+                "hash_invalid")
+
+    def test_equal_weight_positivity_applies_when_key_present_off_family(self):
+        with TemporaryDirectory() as tmp:
+            metrics = _v2_metrics()
+            metrics["provenance"] = dict(
+                metrics["provenance"],
+                universe_equal_weight_long_active_pnl_usd="-1.00")
+            _write_artifact(tmp, _artifact_payload(metrics=metrics))
+
+            self.assertEqual(self._verify(tmp).status, "hash_invalid")
+
+    def test_cross_sectional_positive_equal_weight_verifies_ok(self):
+        with TemporaryDirectory() as tmp:
+            payload = _artifact_payload(
+                strategy_id=_XS_STRATEGY_ID, metrics=_xs_metrics())
+            path = _write_artifact(tmp, payload)
+
+            self.assertEqual(
+                self._verify(tmp, strategy_id=_XS_STRATEGY_ID),
+                ArtifactCheck(status="ok", artifact_path=path,
+                              artifact_hash=payload["artifact_hash"]))
