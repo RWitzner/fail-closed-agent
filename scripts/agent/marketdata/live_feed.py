@@ -56,6 +56,7 @@ __all__ = [
     "LIVE_QUOTE_SCHEMAS",
     "LiveClock",
     "LiveQuoteFeed",
+    "ReconnectingQuoteSource",
     "databento_live_source",
 ]
 
@@ -198,8 +199,17 @@ class LiveQuoteFeed:
 
     def data_quality_counts(self) -> Dict[str, int]:
         """Per-reason dropped-record counts (fail-closed per record, journaled by
-        the session runner — a live stream degrades loudly, never silently)."""
-        return dict(self._quality_counts)
+        the session runner — a live stream degrades loudly, never silently).
+        A reconnecting source's stats are folded in so the daily report shows
+        disconnect/reconnect churn alongside the drop counts."""
+        counts = dict(self._quality_counts)
+        stats = getattr(self._source, "stats", None)
+        if isinstance(stats, dict):
+            for key, value in stats.items():
+                if value:
+                    counts[f"source_{key}"] = (
+                        counts.get(f"source_{key}", 0) + int(value))
+        return counts
 
     # -- drive loop --
 
@@ -378,10 +388,84 @@ class LiveQuoteFeed:
             self._bar_reader._rebuild(all_bars, all_missing)
 
 
+class ReconnectingQuoteSource:
+    """Bounded live-source reconnection (P0-3b) — an ITERABLE over a source
+    FACTORY: ``factory(reconnect_epoch=n) -> iterable``.
+
+    When the inner source exhausts or raises before ``stop_at_utc``, the
+    wrapper emits ``None`` heartbeats through a bounded exponential backoff
+    (so the feed keeps ticking and firing bar closes), then builds the next
+    epoch's source — every quote after a reconnect carries the bumped
+    ``reconnect_epoch`` natively because the factory receives it. After
+    ``max_reconnects`` rebuilds, or once the stop instant has passed, the
+    iterator ENDS: the feed's existing ``source_exhausted_early`` accounting
+    turns that into the truncated-day exit-1 path. Fail-closed: inner source
+    exceptions are a DISCONNECT, never a session crash. A healthy delivery
+    resets the backoff ladder. ``sleep_fn`` is injectable for deterministic
+    offline tests; ``stats`` is folded into the feed's data-quality counts."""
+
+    def __init__(self, factory, *, utc_now_fn, stop_at_utc: str,
+                 max_reconnects: int = 5,
+                 backoff_initial_ms: int = 1_000,
+                 backoff_multiplier: float = 2.0,
+                 backoff_max_ms: int = 30_000,
+                 heartbeat_slice_ms: int = 250,
+                 sleep_fn: Optional[Callable[[float], None]] = None) -> None:
+        self._factory = factory
+        self._utc_now_fn = utc_now_fn
+        self._stop_at = _parse_utc(stop_at_utc)
+        self._max_reconnects = int(max_reconnects)
+        self._backoff_initial_ms = int(backoff_initial_ms)
+        self._backoff_multiplier = float(backoff_multiplier)
+        self._backoff_max_ms = int(backoff_max_ms)
+        self._heartbeat_slice_ms = max(1, int(heartbeat_slice_ms))
+        self._sleep_fn = sleep_fn or _time.sleep
+        self.stats: Dict[str, int] = {
+            "reconnects": 0, "reconnect_gave_up": 0, "connect_failures": 0,
+        }
+
+    def __iter__(self):
+        epoch = 0
+        backoff_ms = self._backoff_initial_ms
+        while True:
+            try:
+                source = self._factory(reconnect_epoch=epoch)
+            except Exception:  # noqa: BLE001 — connect failure = disconnect
+                self.stats["connect_failures"] += 1
+                source = None
+            if source is not None:
+                try:
+                    for item in source:
+                        if item is not None:
+                            # healthy stream: reset the backoff ladder
+                            backoff_ms = self._backoff_initial_ms
+                        yield item
+                except Exception:  # noqa: BLE001 — disconnect, not a crash
+                    pass
+            if self._utc_now_fn() >= self._stop_at:
+                return  # session over — a clean end, never reconnect past stop
+            if self.stats["reconnects"] >= self._max_reconnects:
+                self.stats["reconnect_gave_up"] = 1
+                return
+            self.stats["reconnects"] += 1
+            epoch += 1
+            remaining = min(backoff_ms, self._backoff_max_ms)
+            while remaining > 0:
+                if self._utc_now_fn() >= self._stop_at:
+                    return
+                slice_ms = min(self._heartbeat_slice_ms, remaining)
+                self._sleep_fn(slice_ms / 1000.0)
+                remaining -= slice_ms
+                yield None  # heartbeat: bar closes keep firing while we wait
+            backoff_ms = min(int(backoff_ms * self._backoff_multiplier),
+                             self._backoff_max_ms)
+
+
 def databento_live_source(*, dataset: str, schema: str,
                           symbols: Sequence[str],
                           credentials_path=None,
                           heartbeat_seconds: float = 1.0,
+                          reconnect_epoch: int = 0,
                           allow_unverified_live: bool = False):
     """The credentialed realtime source (M1 tier-2b) — fail-closed until verified.
 
@@ -478,7 +562,8 @@ def databento_live_source(*, dataset: str, schema: str,
                 try:
                     yield recorder_parse(
                         record_dict, dataset=dataset, schema=schema,
-                        reconnect_epoch=0, ts_recv_utc=ts_recv_utc)
+                        reconnect_epoch=reconnect_epoch,
+                        ts_recv_utc=ts_recv_utc)
                 except (MalformedRecord, NonFinitePrice, PrecisionLoss):
                     yield None   # vendor decode anomaly dropped (fail-closed)
         finally:

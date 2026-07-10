@@ -362,6 +362,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
 
         from agent.marketdata.live_feed import (
             LiveQuoteFeed,
+            ReconnectingQuoteSource,
             databento_live_source,
         )
         from agent.bar_series import _parse_utc
@@ -372,16 +373,37 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         post_close = _parse_utc(schedule.post_close_utc)
         if stop_at > post_close:
             stop_at = post_close
+        stop_at_str = stop_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         writer = None
         if args.record_events:
             writer = EventWriter(args.record_events,
                                  f"live-{session_date}")
-        feed = LiveQuoteFeed(
-            record_source=databento_live_source(
+
+        def _fresh_source(*, reconnect_epoch: int):
+            return databento_live_source(
                 dataset=args.dataset, schema=args.schema, symbols=symbols,
-                allow_unverified_live=args.allow_unverified_live),
+                reconnect_epoch=reconnect_epoch,
+                allow_unverified_live=args.allow_unverified_live)
+
+        # Eager epoch-0 construction keeps the UNVERIFIED tier-2b refusal
+        # fail-FAST (at composition, not mid-session); later epochs are built
+        # by the reconnect wrapper with the bumped reconnect_epoch.
+        initial_source = _fresh_source(reconnect_epoch=0)
+        initial_served = []
+
+        def _source_factory(*, reconnect_epoch: int):
+            if reconnect_epoch == 0 and not initial_served:
+                initial_served.append(True)
+                return initial_source
+            return _fresh_source(reconnect_epoch=reconnect_epoch)
+
+        feed = LiveQuoteFeed(
+            record_source=ReconnectingQuoteSource(
+                _source_factory,
+                utc_now_fn=lambda: datetime.now(timezone.utc),
+                stop_at_utc=stop_at_str),
             symbols=symbols, dataset=args.dataset, schema=args.schema,
-            stop_at_utc=stop_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            stop_at_utc=stop_at_str,
             event_writer=writer,
             max_runtime_ms=14 * 3600 * 1000)
 

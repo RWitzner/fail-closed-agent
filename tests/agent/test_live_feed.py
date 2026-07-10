@@ -28,6 +28,7 @@ from agent.bar_series import MidBar, _parse_utc
 from agent.marketdata.live_feed import (
     LiveClock,
     LiveQuoteFeed,
+    ReconnectingQuoteSource,
     databento_live_source,
 )
 from agent.marketdata.replay_feed import ReplayQuoteFeed
@@ -464,6 +465,122 @@ class TestObserveComposition(unittest.TestCase):
                 orch.close()
             decisions = (Path(tmp) / "decisions.jsonl")
             self.assertTrue(decisions.exists())
+
+
+class _WallClock:
+    """Scripted wall clock for the reconnect wrapper (advances on demand)."""
+
+    def __init__(self, start_utc: str):
+        self.now = _parse_utc(start_utc)
+
+    def utc_now(self):
+        return self.now
+
+    def advance_past_stop(self, stop_utc: str):
+        self.now = _parse_utc(stop_utc) + timedelta(seconds=1)
+
+
+class TestReconnectingQuoteSource(unittest.TestCase):
+    """P0-3b: bounded reconnection with epoch bump — a disconnect before the
+    stop instant reconnects through heartbeat-sliced backoff; give-up ends the
+    iterator (=> the feed's source_exhausted_early truncation path)."""
+
+    _STOP = "2026-07-06T20:15:00.000000Z"
+
+    def _wrapper(self, factory, wall, **kwargs):
+        sleeps = []
+        wrapper = ReconnectingQuoteSource(
+            factory, utc_now_fn=wall.utc_now, stop_at_utc=self._STOP,
+            backoff_initial_ms=100, backoff_multiplier=2.0,
+            backoff_max_ms=400, heartbeat_slice_ms=100,
+            sleep_fn=sleeps.append, **kwargs)
+        return wrapper, sleeps
+
+    def test_reconnects_with_epoch_bump_and_heartbeats(self):
+        wall = _WallClock("2026-07-06T14:00:00.000000Z")
+        epochs = []
+
+        def factory(*, reconnect_epoch):
+            epochs.append(reconnect_epoch)
+            if reconnect_epoch == 0:
+                return iter(["q0"])
+            if reconnect_epoch == 1:
+                return iter(["q1"])
+            wall.advance_past_stop(self._STOP)
+            return iter(())
+
+        wrapper, sleeps = self._wrapper(factory, wall)
+        items = list(wrapper)
+
+        self.assertEqual([i for i in items if i is not None], ["q0", "q1"])
+        self.assertIn(None, items)               # backoff heartbeats emitted
+        self.assertEqual(epochs, [0, 1, 2])
+        self.assertEqual(wrapper.stats["reconnects"], 2)
+        self.assertEqual(wrapper.stats["reconnect_gave_up"], 0)
+        self.assertTrue(sleeps)                   # bounded waits, injectable
+
+    def test_source_exception_is_a_disconnect_not_a_crash(self):
+        wall = _WallClock("2026-07-06T14:00:00.000000Z")
+
+        def factory(*, reconnect_epoch):
+            if reconnect_epoch == 0:
+                def exploding():
+                    yield "q0"
+                    raise RuntimeError("stream died")
+                return exploding()
+            wall.advance_past_stop(self._STOP)
+            return iter(())
+
+        wrapper, _ = self._wrapper(factory, wall)
+        items = list(wrapper)
+        self.assertEqual([i for i in items if i is not None], ["q0"])
+        self.assertEqual(wrapper.stats["reconnects"], 1)
+
+    def test_gives_up_after_max_reconnects(self):
+        wall = _WallClock("2026-07-06T14:00:00.000000Z")
+
+        def factory(*, reconnect_epoch):
+            raise RuntimeError("no connection")
+
+        wrapper, sleeps = self._wrapper(factory, wall, max_reconnects=3)
+        items = list(wrapper)
+        self.assertEqual([i for i in items if i is not None], [])
+        self.assertEqual(wrapper.stats["reconnects"], 3)
+        self.assertEqual(wrapper.stats["reconnect_gave_up"], 1)
+        self.assertEqual(wrapper.stats["connect_failures"], 4)
+        self.assertLessEqual(len(sleeps), 3 + 2 + 4)   # 100,200,400ms in 100ms slices
+
+    def test_never_reconnects_past_stop(self):
+        wall = _WallClock("2026-07-06T14:00:00.000000Z")
+        calls = []
+
+        def factory(*, reconnect_epoch):
+            calls.append(reconnect_epoch)
+            wall.advance_past_stop(self._STOP)
+            return iter(["q0"])
+
+        wrapper, _ = self._wrapper(factory, wall)
+        items = list(wrapper)
+        self.assertEqual(items, ["q0"])
+        self.assertEqual(calls, [0])
+        self.assertEqual(wrapper.stats["reconnects"], 0)
+
+    def test_feed_folds_wrapper_stats_into_data_quality(self):
+        class _StatsSource:
+            stats = {"reconnects": 2, "reconnect_gave_up": 1,
+                     "connect_failures": 0}
+
+            def __iter__(self):
+                return iter(())
+
+        feed = LiveQuoteFeed(
+            record_source=_StatsSource(), symbols=["AAPL"],
+            dataset="EQUS.MINI", schema="bbo-1s",
+            stop_at_utc="2026-07-06T20:15:00.000000Z")
+        counts = feed.data_quality_counts()
+        self.assertEqual(counts["source_reconnects"], 2)
+        self.assertEqual(counts["source_reconnect_gave_up"], 1)
+        self.assertNotIn("source_connect_failures", counts)
 
 
 if __name__ == "__main__":
