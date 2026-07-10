@@ -625,5 +625,120 @@ class TestDailyReport(unittest.TestCase):
             self.assertEqual(report["counts_by_stream"], {})
 
 
+class TestDailyReportCompleteness(unittest.TestCase):
+    """2026-07-10 completeness fixes: a report the weekly aggregator can trust
+    — session fields, a visible modeled-null counter, ET-correct fallback
+    date filtering, and restart-safe report naming."""
+
+    def _write_positions(self, journal_dir, rows, *, clocks):
+        from agent.journal import JournalWriter
+
+        it = iter(clocks)
+        writer = JournalWriter(journal_dir / "positions.jsonl", run_id="run-r",
+                               clock=lambda: next(it))
+        for row in rows:
+            body = dict(row)
+            writer.append(body.pop("event_type"), body)
+
+    def test_modeled_null_closes_counted(self):
+        with TemporaryDirectory() as tmp:
+            jd = Path(tmp)
+            self._write_positions(jd, [
+                {"event_type": "position_close",
+                 "realized_broker_pnl": "1.00",
+                 "realized_modeled_pnl": "0.90"},
+                {"event_type": "position_close",
+                 "realized_broker_pnl": "2.00"},
+                {"event_type": "position_close",
+                 "realized_broker_pnl": "3.00",
+                 "realized_modeled_pnl": None},
+            ], clocks=["2026-07-06T14:00:00.000000Z"] * 3)
+
+            report = build_daily_report(jd, run_id="run-r")
+
+            self.assertEqual(report["trading"]["position_closes"], 3)
+            self.assertEqual(report["trading"]["modeled_null_closes"], 2)
+
+    def test_fallback_date_filter_is_et_not_utc(self):
+        # 2026-07-07T00:30Z is 2026-07-06 20:30 ET — evidence written after
+        # 20:00 ET belongs to the 07-06 session, not the next UTC date.
+        with TemporaryDirectory() as tmp:
+            jd = Path(tmp)
+            self._write_positions(jd, [
+                {"event_type": "position_close",
+                 "realized_broker_pnl": "1.00",
+                 "realized_modeled_pnl": "1.00"},
+                {"event_type": "position_close",
+                 "realized_broker_pnl": "1.00",
+                 "realized_modeled_pnl": "1.00"},
+            ], clocks=["2026-07-06T14:00:00.000000Z",
+                       "2026-07-07T00:30:00.000000Z"])
+
+            same_day = build_daily_report(jd, session_date_et="2026-07-06")
+            next_day = build_daily_report(jd, session_date_et="2026-07-07")
+
+            self.assertEqual(same_day["trading"]["position_closes"], 2)
+            self.assertEqual(next_day["trading"]["position_closes"], 0)
+
+    def test_session_block_carries_completeness_fields(self):
+        with TemporaryDirectory() as tmp:
+            report = build_daily_report(
+                Path(tmp), ticks_run=42, sod_clean=True, eod_clean=False,
+                data_quality_counts={"source_exhausted_early": 1})
+
+            self.assertEqual(report["session"], {
+                "ticks_run": 42, "sod_clean": True, "eod_clean": False,
+                "feed_truncated": True})
+
+    def test_restart_safe_report_naming(self):
+        from agent.paper_report import next_report_path
+
+        with TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            first = next_report_path(d, "2026-07-06")
+            self.assertEqual(first.name, "2026-07-06.json")
+            first.parent.mkdir(parents=True, exist_ok=True)
+            first.write_text("{}", encoding="utf-8")
+            second = next_report_path(d, "2026-07-06")
+            self.assertEqual(second.name, "2026-07-06.1.json")
+            second.write_text("{}", encoding="utf-8")
+            self.assertEqual(next_report_path(d, "2026-07-06").name,
+                             "2026-07-06.2.json")
+
+    def test_runner_same_day_restart_does_not_overwrite_report(self):
+        class QuietOrchestrator:
+            mode = "observe"
+            run_id = "run-quiet"
+            ticks_run = 0
+            drift_latched = False
+            risk_kill = type("Kill", (), {"state": "monitoring"})()
+
+            def run_with_feed(self, feed):
+                return None
+
+            def ensure_eod_reconcile(self, *args, **kwargs):
+                return None
+
+        with TemporaryDirectory() as tmp:
+            journal_dir = Path(tmp) / "journal"
+            journal_dir.mkdir(parents=True)
+            report_dir = Path(tmp) / "reports"
+            paths = []
+            for _ in range(2):
+                tm = _TimeMachine("2026-07-06T19:58:00.000000Z")
+                feed = _live_feed(tm, [],
+                                  stop_at="2026-07-06T20:15:00.000000Z")
+                result = run_paper_session(
+                    orchestrator=QuietOrchestrator(), feed=feed,
+                    journal_dir=journal_dir, session_date_et="2026-07-06",
+                    report_dir=report_dir,
+                    utc_now_iso_fn=lambda: "2026-07-06T20:00:00.000000Z")
+                paths.append(result.report_path)
+            self.assertEqual([p.name for p in paths],
+                             ["2026-07-06.json", "2026-07-06.1.json"])
+            self.assertEqual(paths[0].read_text(encoding="utf-8") == "",
+                             False)
+
+
 if __name__ == "__main__":
     unittest.main()

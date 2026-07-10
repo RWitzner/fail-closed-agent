@@ -10,6 +10,7 @@ missing streams roll up as zeros — a report can always be produced.
 This is an OPERATOR evidence artifact, not the paper-phase criteria evaluator
 (``paper_phase_criteria.evaluate_paper_phase_criteria`` owns the formal gate).
 """
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Dict, Mapping, Optional
@@ -20,12 +21,33 @@ from agent.serializer import dumps
 _STREAMS = ("decisions", "orders", "fills", "positions", "risk",
             "reconcile_alerts", "status")
 
+try:
+    from zoneinfo import ZoneInfo
+
+    _ET = ZoneInfo("America/New_York")
+except Exception:  # pragma: no cover — missing tz database on an exotic host
+    _ET = None
+
+
+def _et_date(ts_utc: str) -> Optional[str]:
+    """ET civil date for a pinned-format UTC timestamp; None if unparseable."""
+    try:
+        instant = datetime.strptime(
+            ts_utc, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if _ET is None:  # pragma: no cover
+        return ts_utc[:10]
+    return instant.astimezone(_ET).date().isoformat()
+
 
 def _rows(journal_dir: Path, stream: str, session_date_et: Optional[str],
           run_id: Optional[str]) -> list:
     """Rows for THIS session: filtered by run_id when given (the runner's own
     run — journals persist across days for rehydrate continuity), else by the
-    row ts_utc date, else everything."""
+    row's ET date (evidence written 20:00–24:00 ET lands on the NEXT UTC date
+    but belongs to this session), else everything. Rows without a parseable
+    ts_utc are kept — never silently lose evidence."""
     path = journal_dir / f"{stream}.jsonl"
     if not path.exists():
         return []
@@ -37,7 +59,15 @@ def _rows(journal_dir: Path, stream: str, session_date_et: Optional[str],
     kept = []
     for row in rows:
         ts = row.get("ts_utc")
-        if not isinstance(ts, str) or ts.startswith(session_date_et):
+        if not isinstance(ts, str):
+            kept.append(row)
+            continue
+        et_date = _et_date(ts)
+        if et_date is None:
+            if ts.startswith(session_date_et):
+                kept.append(row)
+            continue
+        if et_date == session_date_et:
             kept.append(row)
     return kept
 
@@ -69,7 +99,10 @@ def build_daily_report(journal_dir, *, session_date_et: Optional[str] = None,
                        run_id: Optional[str] = None,
                        mode: Optional[str] = None,
                        kill_state: Optional[str] = None,
-                       data_quality_counts: Optional[Mapping[str, int]] = None
+                       data_quality_counts: Optional[Mapping[str, int]] = None,
+                       ticks_run: Optional[int] = None,
+                       sod_clean: Optional[bool] = None,
+                       eod_clean: Optional[bool] = None,
                        ) -> dict:
     journal_dir = Path(journal_dir)
     streams = {name: _rows(journal_dir, name, session_date_et, run_id)
@@ -127,8 +160,21 @@ def build_daily_report(journal_dir, *, session_date_et: Optional[str] = None,
                 closes, "realized_broker_pnl")),
             "realized_modeled_pnl_usd": str(_sum_decimal(
                 closes, "realized_modeled_pnl")),
+            # Closes with NO modeled PnL vanish from the modeled sum above; a
+            # visible counter keeps the modeled/broker split honest for the
+            # weekly aggregator (missing evidence is never a silent zero).
+            "modeled_null_closes": sum(
+                1 for row in closes
+                if row.get("realized_modeled_pnl") is None),
             "fees_usd": str(fees),
             "closes_by_reason": _count_by(closes, "reason"),
+        },
+        "session": {
+            "ticks_run": ticks_run,
+            "sod_clean": sod_clean,
+            "eod_clean": eod_clean,
+            "feed_truncated": bool(
+                (data_quality_counts or {}).get("source_exhausted_early")),
         },
         "fills": {
             "broker_fills": by_type.get("fills", {}).get("broker_fill", 0),
@@ -166,9 +212,14 @@ def render_text(report: Mapping) -> str:
     trading = report.get("trading", {})
     reconcile = report.get("reconcile", {})
     kill = report.get("kill", {})
+    session = report.get("session", {})
     lines = [
         f"paper daily report — {report.get('session_date_et')} "
         f"(mode={report.get('mode')}, run_id={report.get('run_id')})",
+        f"  session: ticks={session.get('ticks_run')} "
+        f"sod_clean={session.get('sod_clean')} "
+        f"eod_clean={session.get('eod_clean')} "
+        f"feed_truncated={session.get('feed_truncated')}",
         f"  opens={trading.get('position_opens')} "
         f"closes={trading.get('position_closes')} "
         f"broker_pnl={trading.get('realized_broker_pnl_usd')} "
@@ -186,6 +237,18 @@ def render_text(report: Mapping) -> str:
         f"  data_quality: {report.get('data_quality')}",
     ]
     return "\n".join(lines) + "\n"
+
+
+def next_report_path(report_dir, session_date_et: str) -> Path:
+    """Restart-safe report path: `<date>.json`, then `<date>.1.json`, … — a
+    same-day restart must never overwrite the first attempt's evidence."""
+    directory = Path(report_dir)
+    candidate = directory / f"{session_date_et}.json"
+    suffix = 0
+    while candidate.exists():
+        suffix += 1
+        candidate = directory / f"{session_date_et}.{suffix}.json"
+    return candidate
 
 
 def write_report(report: Mapping, path) -> Path:

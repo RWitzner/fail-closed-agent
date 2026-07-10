@@ -44,7 +44,12 @@ from agent.market_calendar import (
     MarketCalendar,
     UnknownSessionDate,
 )
-from agent.paper_report import build_daily_report, render_text, write_report
+from agent.paper_report import (
+    build_daily_report,
+    next_report_path,
+    render_text,
+    write_report,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SECRETS = _REPO_ROOT / ".secrets"
@@ -148,12 +153,14 @@ def run_paper_session(*, orchestrator, feed, journal_dir,
                 journal_dir, session_date_et=session_date_et,
                 run_id=orch.run_id, mode=orch.mode,
                 kill_state=orch.risk_kill.state,
-                data_quality_counts=data_quality)
+                data_quality_counts=data_quality,
+                ticks_run=getattr(orch, "ticks_run", None),
+                sod_clean=None if sod is None else bool(sod.clean))
             report["session_incomplete"] = True
             report["session_failure"] = repr(primary_exc)
             if report_dir is not None:
                 write_report(
-                    report, Path(report_dir) / f"{session_date_et}.json")
+                    report, next_report_path(report_dir, session_date_et))
         except BaseException as report_exc:
             primary_exc.add_note(
                 f"incomplete-report write also failed: {report_exc!r}")
@@ -162,26 +169,27 @@ def run_paper_session(*, orchestrator, feed, journal_dir,
     eod = orch.ensure_eod_reconcile(session_date_et, ts_utc=now_iso(),
                                     now_ms=feed.clock().now_ms())
 
-    data_quality = (feed.data_quality_counts()
-                    if hasattr(feed, "data_quality_counts") else {})
-    report = build_daily_report(
-        journal_dir, session_date_et=session_date_et,
-        run_id=orch.run_id, mode=orch.mode,
-        kill_state=orch.risk_kill.state,
-        data_quality_counts=data_quality)
-    report_path = None
-    if report_dir is not None:
-        report_path = write_report(
-            report, Path(report_dir) / f"{session_date_et}.json")
-
     kill_state = orch.risk_kill.state
     drift = bool(getattr(orch, "drift_latched", False))
     sod_clean = None if sod is None else bool(sod.clean)
     eod_clean = None if eod is None else bool(eod.clean)
+    data_quality = (feed.data_quality_counts()
+                    if hasattr(feed, "data_quality_counts") else {})
     # A live source that died before stop_at truncated the session: the day is
     # NOT clean evidence (the paper phase needs FULL RTH sessions) — exit 1 so
     # unattended automation investigates instead of counting it.
     feed_truncated = bool(data_quality.get("source_exhausted_early"))
+    report = build_daily_report(
+        journal_dir, session_date_et=session_date_et,
+        run_id=orch.run_id, mode=orch.mode,
+        kill_state=kill_state,
+        data_quality_counts=data_quality,
+        ticks_run=orch.ticks_run,
+        sod_clean=sod_clean, eod_clean=eod_clean)
+    report_path = None
+    if report_dir is not None:
+        report_path = write_report(
+            report, next_report_path(report_dir, session_date_et))
     if kill_state == "halted":
         exit_code = 4
     elif (drift or sod_clean is False or eod_clean is False
