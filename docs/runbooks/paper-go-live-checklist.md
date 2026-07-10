@@ -76,20 +76,29 @@ The steps below are ordered. A, B and C are independent and can run in parallel;
 **Route B-0 (chosen 2026-07-10, $0): the Alpaca IEX feed** — the free market-data plan on the
 step-A paper account. The adapter is built (`agent.marketdata.alpaca_feed`; provenance pinned
 `ALPACA.IEX`/`mbp-1`, synthetic instrument ids, realism-gap numbers NOT comparable with the
-Databento-based backtest caps — predeclared) and is UNVERIFIED-fail-closed until one verification
-session during market hours:
+Databento-based backtest caps — predeclared). **VERIFIED 2026-07-10** (`agent.verify_alpaca_feed`
+15:20:03Z RTH, 75 s, AAPL+MSFT: 4978/4978 quotes parsed, 0 one-sided drops, record→replay
+round-trip IDENTICAL; report `reports/alpaca_feed/verified_feed.json`. The earlier 13:32Z run
+failed only because replay's `QUOTE_SCHEMAS` lacked `mbp-1` — fixed + TDD'ed same day; the red
+report is preserved as `verified_feed.failed-1532.json`). The seam default is flipped; rerun for
+re-verification if the vendor payload ever drifts:
 
 ```bash
 PYTHONPATH=scripts .venv/bin/python3 -m agent.verify_alpaca_feed --symbols AAPL,MSFT --seconds 60
 ```
 
-Green ⇒ flip the seam's `allow_unverified_live` default in a reviewed commit (one line, exists for
-exactly this), review the printed quote samples for size-unit semantics, and read the report's
-`statuses`/`lulds` counts — the same run measures whether the FREE feed carries the halt/LULD
-channels the status plane needs. Live sessions then use `--live-source alpaca-iex`. Caveats: IEX ≈
-2% of consolidated volume (NBBO approximation — fine for mega-caps, thin for small-caps); if the
-drill shows no LULD coverage, opens stay fail-closed-blocked until the $99 Alpaca SIP upgrade
-(full consolidated feed incl. LULD) or route B-1.
+**Size-unit pin (human-reviewed):** quote sizes are ROUND LOTS (×100 shares — Alpaca docs: "bid
+size in round lots"; live samples 40/80/120/160 are all sub-100 non-multiples of 100, impossible
+as displayed share counts). Recorded VERBATIM in vendor units — convert at read time.
+
+**Status/LULD coverage measured (Track B/D input):** `statuses` subscribe was ACCEPTED (0 events
+in 75 s proves acceptance only — halts are rare intraday; the Track D drill still owes a real
+halt observation). `lulds` subscribe helper is **ABSENT in alpaca-py 0.43.5** ⇒ NO LULD coverage
+on the free feed ⇒ the status plane keeps LULD `UNKNOWN` and **opens stay fail-closed-blocked**
+until the $99 Alpaca SIP upgrade (full consolidated feed incl. LULD) or route B-1. Live sessions
+use `--live-source alpaca-iex` (observe-mode is unaffected by the LULD hole — nothing opens
+there by design). Caveat unchanged: IEX ≈ 2% of consolidated volume (NBBO approximation — fine
+for mega-caps, thin for small-caps).
 
 **Route B-1 (upgrade, paid): Databento live realtime `EQUS.MINI`** — full research↔live data
 symmetry (same dataset as every backtest); worth buying when a strategy actually validates (can be

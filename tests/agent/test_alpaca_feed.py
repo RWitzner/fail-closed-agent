@@ -2,8 +2,9 @@
 
 Pins: deterministic synthetic instrument ids; normalization → recorder.parse
 round-trip with the pinned ALPACA.IEX/mbp-1 provenance; one-sided/malformed
-quotes drop to None (fail-closed); the source is UNVERIFIED-fail-closed with
-NO SDK import on the refusal path; LiveQuoteFeed accepts the mbp-1 schema;
+quotes drop to None (fail-closed); the source default is VERIFIED-True
+(2026-07-10) while explicit allow_unverified_live=False re-arms the refusal
+with NO SDK import on that path; LiveQuoteFeed accepts the mbp-1 schema;
 the paper_session --live-source alpaca-iex composition pins dataset/schema."""
 import sys
 import unittest
@@ -89,10 +90,20 @@ class TestNormalization(unittest.TestCase):
 
 
 class TestSourceGate(unittest.TestCase):
-    def test_unverified_by_default_and_no_sdk_import(self):
+    def test_default_is_verified_true(self):
+        # Flipped in the reviewed 2026-07-10 commit after the credentialed
+        # verification session (4978/4978 quotes, round-trip identical).
+        import inspect
+        default = inspect.signature(alpaca_quote_source).parameters[
+            "allow_unverified_live"].default
+        self.assertIs(default, True)
+
+    def test_explicit_false_rearms_refusal_with_no_sdk_import(self):
+        # The emergency fail-closed lever survives the flip: passing False
+        # refuses BEFORE any credential read or SDK import.
         before = "alpaca" in sys.modules
         with self.assertRaisesRegex(NotImplementedError, "UNVERIFIED"):
-            alpaca_quote_source(symbols=["AAPL"])
+            alpaca_quote_source(symbols=["AAPL"], allow_unverified_live=False)
         if not before:
             self.assertNotIn("alpaca", sys.modules)
 
@@ -137,10 +148,10 @@ class TestPaperSessionComposition(unittest.TestCase):
         kwargs = feed_ctor.call_args.kwargs
         self.assertEqual(kwargs["dataset"], "ALPACA.IEX")
         self.assertEqual(kwargs["schema"], "mbp-1")
-        # eager epoch-0 construction keeps fail-fast semantics
+        # eager epoch-0 construction keeps fail-fast semantics; the verified
+        # adapter default governs (no allow_unverified_live override here)
         source.assert_called_once_with(
-            symbols=["AAPL"], reconnect_epoch=0,
-            allow_unverified_live=False)
+            symbols=["AAPL"], reconnect_epoch=0)
 
 
 if __name__ == "__main__":

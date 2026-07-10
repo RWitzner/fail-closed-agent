@@ -394,9 +394,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             args.schema = alpaca_feed.SCHEMA
 
             def _fresh_source(*, reconnect_epoch: int):
+                # the IEX seam is VERIFIED (2026-07-10): the adapter default
+                # governs, so a future fail-closed re-flip there cannot be
+                # overridden here; --allow-unverified-live stays databento-only
                 return alpaca_feed.alpaca_quote_source(
-                    symbols=symbols, reconnect_epoch=reconnect_epoch,
-                    allow_unverified_live=args.allow_unverified_live)
+                    symbols=symbols, reconnect_epoch=reconnect_epoch)
         else:
             def _fresh_source(*, reconnect_epoch: int):
                 return databento_live_source(

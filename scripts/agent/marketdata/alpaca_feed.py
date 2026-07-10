@@ -18,14 +18,26 @@ Predeclared data-provenance change (2026-07-10, Robins valg — billig først):
   OPS evidence is unaffected, the formal edge-validation comparability note
   lives in the runbook.
 
-Fail-closed posture mirrors ``databento_live_source`` (tier-2b discipline):
-UNVERIFIED until one credentialed verification session
-(``agent.verify_alpaca_feed``) pins the real payload layout + the
-record→replay round-trip; until the flag flips in a reviewed commit the
-source refuses to run. The SDK import lives ONLY inside
-``_build_real_client`` (FD-M5-5 wall — third sanctioned site, consciously
-allow-listed in the AST guard). Size-unit semantics (shares vs round lots)
-are pinned by the verification session, not assumed here.
+VERIFIED 2026-07-10 (tier-2b one-session posture, mirroring
+``databento_live_source``): the credentialed RTH run of
+``agent.verify_alpaca_feed`` (15:20:03Z, 75 s, AAPL+MSFT) parsed 4978/4978
+quotes with zero one-sided drops and an IDENTICAL record→replay round-trip
+(report: ``reports/alpaca_feed/verified_feed.json``; the first run at
+13:32Z failed only because replay's ``QUOTE_SCHEMAS`` lacked ``mbp-1`` —
+fixed + TDD'ed same day). ``allow_unverified_live`` therefore defaults to
+True and remains the emergency fail-closed lever: flip it back to False in
+a reviewed commit if the vendor payload ever drifts. The SDK import lives
+ONLY inside ``_build_real_client`` (FD-M5-5 wall — third sanctioned site,
+consciously allow-listed in the AST guard).
+
+SIZE-UNIT PIN (the verification session's human review): Alpaca stock quote
+sizes are ROUND LOTS (×100 shares) — the docs say "bid size in round lots" /
+"ask size in round lots", and the live samples (sizes 40/80/120/160: all
+sub-100 and none a multiple of 100) can only be lot counts for displayed
+protected quotes. ``bid_sz``/``ask_sz`` are recorded VERBATIM in vendor
+units (recorder provenance discipline — no silent ×100); size-consuming
+features must convert at read time, and the Databento realism-comparability
+break above already covers the unit difference.
 """
 import hashlib
 from datetime import datetime, timezone
@@ -114,12 +126,13 @@ def alpaca_quote_source(*, symbols: Sequence[str],
                         credentials_path=None,
                         heartbeat_seconds: float = 1.0,
                         reconnect_epoch: int = 0,
-                        allow_unverified_live: bool = False):
-    """Live IEX quote source — fail-closed until verified (tier-2b posture).
+                        allow_unverified_live: bool = True):
+    """Live IEX quote source — VERIFIED 2026-07-10 (module docstring).
 
-    The verification session (``agent.verify_alpaca_feed``, run during market
-    hours) asserts the real quote payload layout, the size-unit semantics and
-    the record→replay round-trip; then this flag flips in a reviewed commit.
+    The one-session verification asserted the real payload layout, the
+    size-unit semantics (round lots) and the record→replay round-trip, so
+    ``allow_unverified_live`` now defaults to True. Passing False re-arms
+    the refusal — the emergency lever if the vendor payload ever drifts.
     """
     if not allow_unverified_live:
         raise NotImplementedError(
