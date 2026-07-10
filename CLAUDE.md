@@ -185,8 +185,12 @@ DECIDED — Option 2 tages IKKE nu, genbesøges tidligst efter M7d-resultatet); 
 samme eftermiddag HVIS 15:32-rapporten er grøn. (2) M7d run-AUTHORIZED (eneste resterende gate = holdoutet
 komplet ~2026-07-14; forventet NULL på realisme-caps, værdien er rute-A-vs-B-læsningen). (3) Data-trappen bliver
 på $0 IEX til noget validerer. (4) Fundamentals-mandatet GIVET, scoped til PACKET-DRAFTING + review alene
-(`docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`, DRAFT rev 1 — særskilt
-forskningslinje, forbruger IKKE intraday-substratbudgettet; data-spend/kørsel kræver eget go). (5) De tre stale
+(`docs/superpowers/specs/2026-07-10-fundamentals-longterm-research-packet.md`, DRAFT **rev 2** — 5-lens
+adversarielt review applied samme dag (8 blockers + ~23 majors, alle fixes i rev 2: bl.a. kanonisk PIT-regel,
+CIK-first identity-map mod survivorship, ROA i stedet for ROE, split-justerede shares, månedskonsistens-gate,
+metric-key-verificerbarhed, egen NY verifier ikke "tighten-only"); GPT-handoff klar i
+`docs/superpowers/reviews/2026-07-10-fundamentals-predeclaration-gpt-review-handoff.md` — særskilt
+forskningslinje, forbruger IKKE intraday-substratbudgettet; data-spend/F0-byg/kørsel kræver eget go). (5) De tre stale
 worktrees er FJERNET (`git worktree remove`, 2026-07-10); Alpaca-nøgle-regenerering er fortsat Robins egen
 to-do. Gates urørte hele vejen.
 
