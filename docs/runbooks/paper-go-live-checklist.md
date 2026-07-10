@@ -1,12 +1,34 @@
 # Paper Go-Live Checklist
 
-- **Date:** 2026-07-02
+- **Date:** 2026-07-02 (updated 2026-07-10 — live view, autorun, status plane, reconnect)
 - **Scope:** everything between "the code is done" and "the agent paper-trades autonomously every
   session". This runbook flips nothing: every arming step is an explicit Robin action, and the
   committed repo stays fail-closed (S1: committed config ⇒ zero opening submits — pinned by canary
   tests).
 - **Sibling runbooks:** `docs/runbooks/m7-paper-edge-validation.md` (the formal edge-validation
   criteria the paper phase is measured against), `docs/runbooks/m6-reconcile.md`.
+
+## Start TODAY (no decisions, no credentials, nothing armed)
+
+Watch a full session in the live view right now — replay rehearsal with real order lifecycle
+evidence in the browser:
+
+```bash
+PYTHONPATH=scripts python3 -m agent.paper_session \
+  --journal-dir reports/demo/journal --replay tests/fixtures/execution/observe_session_tbbo.jsonl \
+  --symbols AAPL --session-date 2026-07-06 --report-dir reports/demo/reports
+PYTHONPATH=scripts python3 -m dashboard --journal-dir reports/demo/journal \
+  --report-dir reports/demo/reports        # → http://127.0.0.1:8788/
+```
+
+**Robins tre eksterne trin** (the ONLY things code cannot do — each is a single action):
+
+1. **Alpaca paper-konto** → step A below (≈15 min, gratis) — unlocks the account verifier + drill.
+2. **Betalt Databento live-realtime-abonnement** → step B below — unlocks OBSERVE-mode (live data,
+   nul ordrer) same-day, and the tier-2b verification session.
+3. **Arming-beslutningerne** → steps C/D/E below — and the S9 question (paper uden valideret edge?)
+   which is deliberately NOT coded around: read
+   `docs/superpowers/specs/2026-07-10-paper-canary-decision-memo.md` and choose.
 
 ## Phase map (observe → paper → live) and today's status
 
@@ -164,12 +186,38 @@ EOF
 
 ## Daily operation (once A–E hold)
 
-One command per session day (cron/launchd or by hand, any time before the open):
+One command per session day — either the supervisor (recommended for unattended days):
+
+```bash
+PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_autorun \
+  --journal-dir journal --symbols AAPL,MSFT,... --strategy-id <GOED_STRATEGY>
+```
+
+(bounded retry ONLY on a truncated feed; append-only `autorun_log.jsonl`; loud
+`ATTENTION-<date>.txt` on any unclean day; launchd template:
+`docs/runbooks/com.stocks-agent.paper-autorun.plist.template`) — or the runner directly:
 
 ```bash
 PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_session \
   --journal-dir journal --live --symbols AAPL,MSFT,... --strategy-id <GOED_STRATEGY> \
   --record-events data/live/$(date +%F).events.jsonl
+```
+
+**Follow it live** (read-only, loopback-only; works during the session AND afterwards):
+
+```bash
+PYTHONPATH=scripts python3 -m dashboard --journal-dir journal
+# → http://127.0.0.1:8788/ — decisions, orders, fills, positions,
+#   Broker-vs-Modeled PnL (never conflated), kill state, status plane, reports
+```
+
+**Weekly**, aggregate the evidence against the pinned criteria (missing evidence stays
+missing — never silently zero):
+
+```bash
+PYTHONPATH=scripts python3 -m agent.paper_phase_report \
+  --report-dir reports/paper_sessions --journal-dir journal \
+  --allocated-notional-usd <ROBINS_ALLOKERING>
 ```
 
 What it does autonomously: skips non-trading days (calendar fixture `xnys_sessions_2026H2_v1`,

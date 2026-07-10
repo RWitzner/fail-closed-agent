@@ -8,18 +8,23 @@ An autonomous **US-equities** trading agent built with the same `observe → pap
 Polymarket agent: it starts **paper-only with "nothing opens by default"** and is otherwise live-like (live data,
 live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-**Current state:** M0-M7 are done. **M7 (backtest gate + first directional strategy) is review-hardened and
-closed offline on branch `codex/m7-backtest-gate`** (1683 tests green). M1 tier-2 (2b live-verified) remains
-deferred pending the unprovisioned live realtime subscription. M7 adds deterministic anti-lookahead backtest
-primitives, v2 artifact verifier/metrics, full-triple artifact cache hardening, a temp-only fixture builder,
-paper-phase criteria/runbook, and `directional.momentum_v1`. Production `artifacts/backtests/` still contains
-only `.gitkeep`; the AAPL-only, broader, and earlier holdout historical reviewed-artifact attempts all failed M7
-criteria. The broader rerun also hardened the historical input contract against impossible receive-before-event
-quote rows; future reviewed manifests must also hash-bind the predeclared universe hypothesis to block
-cherry-picking.
-Next loop is **strategy/universe hardening until a reviewed artifact verifies `ok`**, then paper edge-validation.
-M8 is blocked until passing artifact + positive realized paper edge satisfy the pinned criteria. See `PLAN.md` for
-live status.
+**Current state (2026-07-10):** M0-M7 done and MERGED TO MAIN; research families momentum (M7)
+and relative-strength proxy (M7c) both NULLED under the pinned criteria; the predeclared M7d
+longer-horizon experiment is GPT-reviewed but NOT run (fresh holdout completes ~2026-07-14; run
+gated on Robin). Production `artifacts/backtests/` still contains only `.gitkeep` — **no strategy
+has a passing reviewed artifact, so S9 blocks every real-strategy open**; that is the standing
+posture, not a bug. The 2026-07-09 correctness wave (terminal-fill flatten gating, owner-safe run
+lock, replay credential-inertness, semantic artifact re-verification, drill terminal evidence,
+journal integrity) and the 2026-07-10 paper-live-loop wave are consolidated on main: Track B
+status data plane (`agent.marketdata.status_plane`, Alpaca source UNVERIFIED-fail-closed),
+live-feed bounded reconnect with epoch bump, incomplete-report + honest exit codes, restart-safe
+report naming, `agent.paper_autorun` (daily supervisor + launchd template),
+`agent.paper_phase_report` (weekly criteria aggregator, missing evidence never zero-filled), and
+the local read-only live view `python3 -m dashboard`. Remaining before an ARMED autonomous paper
+trader = Robin's external steps in `docs/runbooks/paper-go-live-checklist.md` (Alpaca paper
+account, paid Databento live subscription + tier-2b verify, an S9-passing artifact via research,
+reviewed caps commit, runtime arming) + the Track D credentialed drills. Observe-mode (live data,
+zero orders) needs only steps A/B. See `PLAN.md` for live status and test counts.
 
 ## Scope
 

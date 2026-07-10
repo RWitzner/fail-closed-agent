@@ -137,6 +137,34 @@ was a silent 0). **PAUSED by Robin; 5 tasks remain** (tracked in the memory back
 scheduler wrapper + launchd template); `agent.paper_phase_report` (weekly criteria aggregator); safety fixes
 F3–F6 (replay credential-inert, lock-reclaim race, blind-cap broker gate, drill hardening); step-D caps proposal
 + docs sync (runbook exit codes; `.gitignore`). Do not resume these without Robin's go.
+**PAPER-LIVE-LOOP WAVE DONE 2026-07-10 (Robin's /goal: "vi venter ikke på M7d — live visning + i gang nu"; on
+`main`, suite 1988 tests green, gates untouched, S1 canary green):** (1) the 2026-07-09 GPT correctness wave
+(3 divergerende branches + 628 ucommittede linjer) was reviewed (7 agenter; safe-to-merge; task5's F5-version
+BUGGY og droppet) and CONSOLIDATED to main — terminal-fill flatten gating, owner-safe run lock, replay
+credential-inertness, semantic artifact re-verify, drill terminal evidence, journal integrity; (2) the two
+remaining verifier bypasses CLOSED (v1 rejected outright; equal-weight second benchmark now re-checked at
+verify — both were empirically forged pre-fix); (3) feed exceptions now write an `session_incomplete` daily
+report + honest exit codes (mid-session JournalCorruption ⇒ 3); (4) journal `read_new()` delta API kills the
+O(day²) deepcopy (tick loop accumulates deltas); (5) `paper_report`: session block, `modeled_null_closes`,
+ET-date fallback, restart-safe naming (`<date>.json`, `<date>.1.json`, …); (6) **Track B status data plane
+BUILT + WIRED (`agent.marketdata.status_plane`)** — closes P0-1: fail-closed halt/LULD/SSR provider (stream
+stale/disconnect ⇒ UNKNOWN ⇒ opens blocked; reconnect ⇒ re-observation epoch; most-restrictive conflicts;
+transitions journaled to `status_plane.jsonl`); the Alpaca `statuses`/`lulds` source is UNVERIFIED-fail-closed
+until the Track D drill, so live composes DISCONNECTED (runs, journals, cannot open) with a loud ATTENTION note;
+replay composes the rehearsal RTH-windows provider (nothing can open in replay by construction); (7) live-feed
+**bounded reconnect with epoch bump** (`ReconnectingQuoteSource`) closes P0-3b — heartbeat-sliced backoff,
+give-up ⇒ the existing truncation exit-1 path, stats folded into data-quality; (8) **`agent.paper_autorun`**
+(in-process daily supervisor: append-only `autorun_log.jsonl`, retry ONLY truncation-exit-1, ATTENTION-file
+escalation, launchd template in `docs/runbooks/`) + **`agent.paper_phase_report`** (weekly PINNED-criteria
+aggregator; missing evidence — incl. the paper benchmark leg — stays `missing:`, never zero); (9) **the local
+live view `python3 -m dashboard --journal-dir journal`** (stdlib, loopback-only, read-only, hash-verified
+incremental reads): decisions/orders/fills/positions, BrokerUSD vs ModeledUSD split, kill state, status plane,
+reports — verified END-TO-END against a replay-observe session (74 ticks, exit 0, zero orders) and a synthetic
+session, including cross-process live updates while a session runs (demo artifacts under gitignored
+`reports/demo_live_view/`). F2 (episode-scoped flatten client id) is a documented pre-arming runbook item.
+Remaining before ARMED autonomous paper: runbook steps A–E (Robins eksterne trin) + Track D drills + the S9
+decision — see `docs/superpowers/specs/2026-07-10-paper-canary-decision-memo.md` for the default-OFF proposal
+awaiting Robin's explicit choice.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 

@@ -5,7 +5,23 @@
 Build an autonomous US-equities trading agent, paper-first but live-like, reusing the Polymarket engineering
 spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
-## Current status (2026-07-02)
+## Current status (2026-07-10)
+
+- **2026-07-09 correctness wave + 2026-07-10 paper-live-loop wave — CONSOLIDATED ON MAIN, 1988 tests green,
+  gates untouched, S1 canary green.** The 2026-07-09 wave (Codex/GPT: terminal-fill flatten gating, owner-safe
+  run lock, replay credential-inertness, semantic artifact re-verify, drill terminal evidence, journal
+  integrity) was independently reviewed (7 agents; task5's blindness-guard variant was BUGGY and dropped) and
+  merged. The 2026-07-10 wave (Robin's goal: live view + get going without waiting on M7d) closed the verifier
+  v1/equal-weight bypasses, added incomplete-report + honest exit codes on feed exceptions, the `read_new()`
+  journal delta API (O(day²) copy removed), the paper_report completeness fields + restart-safe naming, **the
+  Track B status data plane (`agent.marketdata.status_plane`, closes P0-1; Alpaca source
+  UNVERIFIED-fail-closed pending the Track D drill)**, **live-feed bounded reconnect with epoch bump (closes
+  P0-3b)**, **`agent.paper_autorun`** (daily supervisor + launchd template), **`agent.paper_phase_report`**
+  (weekly pinned-criteria aggregator; missing evidence never zero-filled), and **the local live view
+  `python3 -m dashboard`** — verified end-to-end (replay-observe 74 ticks/exit 0/zero orders; synthetic session
+  with the full order lifecycle; cross-process live updates). Remaining before ARMED autonomous paper: runbook
+  steps A–E + Track D drills + the S9 decision (`docs/superpowers/specs/2026-07-10-paper-canary-decision-memo.md`).
+  Observe-mode needs only steps A/B. F2 (episode-scoped flatten client id) is a documented pre-arming item.
 
 - Design spec + M0/M1 plans written, externally reviewed (twice) + internally reviewed (5-lens adversarial
   workflow), reconciled. All external facts verified against primary sources.
@@ -339,7 +355,7 @@ spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-des
   fast-forward-merged into `main` (`main` = `19786cf` = M7 tip; was M2 `a82be6d`; all safety gates verified closed
   first; no remote, locally reversible).**
 - **M7d predeclaration committed + full-project review applied (2026-06-26 → 2026-07-02, 1777 tests at that checkpoint;
-  current suite 1846 after paper-operational readiness):**
+  current suite 1988 after the 2026-07-09 correctness wave + the 2026-07-10 paper-live-loop wave):**
   the longer-horizon packet + GPT-review handoff were committed `013f9b6`
   (`docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md`, C2 = `1m`/`120m` sole decider on a
   fresh fixed-20-session post-2026-06-13 holdout; C1 = `1m`/`60m` descriptive on the snooped window; pinned
