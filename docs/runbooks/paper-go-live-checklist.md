@@ -71,12 +71,30 @@ The steps below are ordered. A, B and C are independent and can run in parallel;
    it leaves a 1-share paper position to flatten by hand). The drill requires terminal proof:
    `canceled`/`rejected`/`expired` with `filled_qty` exactly 0 — a bare cancel request is not ok.
 
-## Step B — Databento live realtime subscription (Robin decision: paid)
+## Step B — live quote data (2026-07-10: the $0 route is DEFAULT, paid Databento is the upgrade)
 
-The entitled key is **historical-only** — this is the one paid decision. The paper data plane as
-designed needs live realtime `EQUS.MINI` (L1). Pinned live schema: **`bbo-1s`** (1-second NBBO;
-shares the `BBOMsg` layout the 2026-06-26 credentialed historical pull verified; `tbbo` stays
-unverified).
+**Route B-0 (chosen 2026-07-10, $0): the Alpaca IEX feed** — the free market-data plan on the
+step-A paper account. The adapter is built (`agent.marketdata.alpaca_feed`; provenance pinned
+`ALPACA.IEX`/`mbp-1`, synthetic instrument ids, realism-gap numbers NOT comparable with the
+Databento-based backtest caps — predeclared) and is UNVERIFIED-fail-closed until one verification
+session during market hours:
+
+```bash
+PYTHONPATH=scripts .venv/bin/python3 -m agent.verify_alpaca_feed --symbols AAPL,MSFT --seconds 60
+```
+
+Green ⇒ flip the seam's `allow_unverified_live` default in a reviewed commit (one line, exists for
+exactly this), review the printed quote samples for size-unit semantics, and read the report's
+`statuses`/`lulds` counts — the same run measures whether the FREE feed carries the halt/LULD
+channels the status plane needs. Live sessions then use `--live-source alpaca-iex`. Caveats: IEX ≈
+2% of consolidated volume (NBBO approximation — fine for mega-caps, thin for small-caps); if the
+drill shows no LULD coverage, opens stay fail-closed-blocked until the $99 Alpaca SIP upgrade
+(full consolidated feed incl. LULD) or route B-1.
+
+**Route B-1 (upgrade, paid): Databento live realtime `EQUS.MINI`** — full research↔live data
+symmetry (same dataset as every backtest); worth buying when a strategy actually validates (can be
+bought month-by-month for the edge-validation phase). Pinned live schema: **`bbo-1s`** (shares the
+`BBOMsg` layout the 2026-06-26 credentialed historical pull verified; `tbbo` stays unverified).
 
 1. Provision the live realtime subscription for `EQUS.MINI` on the Databento account; confirm the
    existing `.secrets/databento.json` key carries the live entitlement (or write the new key there).

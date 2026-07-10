@@ -165,6 +165,23 @@ session, including cross-process live updates while a session runs (demo artifac
 Remaining before ARMED autonomous paper: runbook steps A–E (Robins eksterne trin) + Track D drills + the S9
 decision — see `docs/superpowers/specs/2026-07-10-paper-canary-decision-memo.md` for the default-OFF proposal
 awaiting Robin's explicit choice.
+**SAME DAY (2026-07-10 formiddag): STEP A DONE** — Robin created the Alpaca paper account;
+`agent.verify_alpaca_paper` green (account ACTIVE …REDACTED, $100k paper equity) AND the order drill green
+(submitted→canceled, terminal_verified, filled 0); evidence `reports/alpaca_paper/verified_account.json`;
+credentials in `.secrets/alpaca_paper.json` (600, git-ignored). **STEP B rerouted to $0 (Robins call — no $199
+Databento while nothing is validated):** `agent.marketdata.alpaca_feed` built (`5925ed3`, suite 1997) — the free
+IEX feed behind the same seam (`--live-source alpaca-iex`, provenance ALPACA.IEX/mbp-1, synthetic instrument
+ids, FD-M5-5 wall consciously widened to a third `_build_real_client` site, realism-comparability break
+predeclared), UNVERIFIED-fail-closed until `agent.verify_alpaca_feed` runs during RTH (≈15:30 DK) — that one
+run pins the payload layout + record→replay round-trip AND measures statuses/lulds coverage on the free feed
+(the Track B/D question). Green ⇒ flip the flag in a reviewed commit ⇒ first live observe-session via
+`--live-source alpaca-iex` + dashboard. Databento $199 = deferred upgrade (buy month-by-month IF a strategy
+validates). Strategic two-track note: intraday-sporet er drift/ops (edge-spørgsmålet afgøres af M7d/stop-reglen);
+et LANGSIGTET fundamentals-spor (dagskadence, PIT-regnskabsdata, LLM-research, benchmark S&P500 TR) blev
+anbefalet som ny forskningslinje — kræver Robins "fresh explicit mandate" per PLAN.md's substratregel + eget
+predeclared packet. Stale worktrees (`autonomous-paper-hardening`, `task5-terminal-drill`,
+`task6-incremental-replay` under `~/.config/superpowers/worktrees/Stocks/`) er superseded af main og kan
+fjernes med `git worktree remove`.
 
 ## Hard boundaries (do not cross without explicit instruction from Robin)
 
