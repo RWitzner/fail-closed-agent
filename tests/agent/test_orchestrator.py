@@ -14,6 +14,7 @@ Compositions are REAL parts only: FakeClock, ScriptedOrderApi, real ledgers
 into tmp dirs, real risk components over the permissive fixture config.
 """
 import ast
+import json
 import shutil
 import tempfile
 import unittest
@@ -1521,6 +1522,47 @@ class OrchestratorCase(unittest.TestCase):
         self.assertEqual(report.flattened, ("AAPL",))
         self.assertEqual([call["side"] for call in resumed_api.submit_calls],
                          ["sell"])
+
+    def test_account_blind_crash_before_halted_row_refuses_blind_resubmit(self):
+        """F1 (2026-07-10 review): a crash in the window between the
+        flattening and halted transition rows rehydrates with EMPTY
+        residual-failure reasons, so a retry probe's explicit 404 is NOT
+        proof the flatten order was never wired — the adapter must refuse
+        to resubmit (conservative: residual stays operator-attended, no
+        possible duplicate sell). Pins the integrated probe path the
+        naive-SpyBroker risk_kill tests cannot reach."""
+        pipeline, api = self._blind_pipeline(
+            "blind-crash-window", seed_position=True,
+            account_payloads=[account_payload(), None],
+            positions_payloads=[self._blind_positions(), None])
+        pipeline.tick_on_bar(1)
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.residual_symbols(),
+                         ("AAPL",))
+        self.assertEqual(api.submit_calls, [])
+        pipeline.close()
+
+        risk_path = self.tmp / "blind-crash-window" / "risk.jsonl"
+        lines = risk_path.read_bytes().splitlines(keepends=True)
+        halted_at = max(
+            i for i, line in enumerate(lines)
+            if json.loads(line).get("event_type") == "kill_switch_transition"
+            and json.loads(line).get("to_state") == "halted")
+        risk_path.write_bytes(b"".join(lines[:halted_at]))
+
+        resumed, resumed_api = self._blind_pipeline(
+            "blind-crash-window", seed_position=False,
+            account_payloads=[account_payload()],
+            positions_payloads=[self._blind_positions()])
+        resumed.tick_on_bar(1)
+        report = resumed.orch.retry_residual()
+
+        self.assertEqual(report.flattened, ())
+        self.assertEqual(report.residual, ("AAPL",))
+        self.assertEqual(resumed_api.get_calls, ["flatten-AAPL"])
+        self.assertEqual(resumed_api.submit_calls, [])
+        self.assertEqual(resumed.orch.risk_kill.state, "halted")
 
     def test_account_blind_restart_with_partial_never_resubmits_or_books(self):
         pipeline, api = self._blind_pipeline(

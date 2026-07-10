@@ -26,7 +26,7 @@ Alert on every non-zero exit.
 | --- | --- | --- |
 | 0 | Completed and clean; drift latch clear. | No action. |
 | 1 | Drift found this pass, or a drift latch remains set. | Inspect `journal/reconcile_alerts.jsonl`, then resolve or explicitly rebaseline cash if adjudicated. |
-| 2 | Usage/mode error or run lock held. | Check for a live or hung agent process. If the `.lock` file is malformed and the owner is known dead, remove it manually and rerun. |
+| 2 | Usage/mode error or run lock held. | Check for a live or hung agent process. If the `.lock` file is malformed and the owner is known dead, remove `.lock` manually and rerun — but NEVER delete the sibling `.lock.guard` (recreating it breaks the reclaim serialization; stale dead-PID locks are reclaimed automatically). |
 | 3 | Could not reconcile: broker unreadable, credentials degrade, parse failure, or journal corruption. | Retry only after checking broker credentials/connectivity and journal health. A corrupt complete journal line is fatal and writes no reconcile row. |
 
 Exit 3 takes precedence over exit 1 when a pass both journals drift and fails to

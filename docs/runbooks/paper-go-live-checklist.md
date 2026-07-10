@@ -43,7 +43,11 @@ The steps below are ordered. A, B and C are independent and can run in parallel;
    ```
 
    Both must pass before any armed session. `alpaca-py==0.43.5` is already pinned and installed in
-   `.venv`; the offline suite never needs it.
+   `.venv`; the offline suite never needs it. Precondition if you override `--drill-symbol`: the
+   symbol must trade ABOVE $1.00 (the drill is a buy at a fixed $1.00 limit — on a sub-$1 symbol
+   it becomes marketable and can fill; a fill is still a hard failure with best-effort cancel, but
+   it leaves a 1-share paper position to flatten by hand). The drill requires terminal proof:
+   `canceled`/`rejected`/`expired` with `filled_qty` exactly 0 — a bare cancel request is not ok.
 
 ## Step B — Databento live realtime subscription (Robin decision: paid)
 
@@ -149,6 +153,14 @@ EOF
    `orch.trigger_kill("drill")` via a python one-liner against a scratch journal dir, or rely on
    the suite's kill-flatten E2E; verify the journal shows `flattening → halted` and (with a held
    fixture position) a reduce-only sell.
+4. OPEN pre-arming item (F2, 2026-07-10 review): the kill-flatten client id is
+   `flatten-<symbol>` — deterministic but NOT episode-scoped. Across session days on the same
+   Alpaca paper account, a retained prior `flatten-AAPL` order can make a fresh session's
+   residual-retry probe read a STALE terminal fill as "already flattened" (or bounce a first
+   submit on a duplicate client id). Before the first ARMED multi-session week, scope the id per
+   kill episode (e.g. `flatten-<kill_generation>-<session_date_et>-<symbol>`, rehydrate-stable
+   within an episode) end-to-end through the M0 actuator, the probe, `confirm_residual_flat`,
+   and `_book_flatten_closes` — a TDD pass of its own, not an edit-and-run.
 
 ## Daily operation (once A–E hold)
 
@@ -167,9 +179,19 @@ ladder; marks; exits); at the RTH close: cancel-open-orders, margin close-of-day
 (in-loop, with an idempotent fallback); daily report to `reports/paper_sessions/<date>.json`;
 records the live stream so every session is replayable.
 
-Exit codes: `0` clean · `1` reconcile drift/unclean (investigate before the next session; the
-drift latch already blocks new opens) · `2/3` lock/journal-corruption (from startup) · `4`
-kill-switch HALTED (operator attention required; re-arm = a deliberate NEW run after review).
+Exit codes: `0` clean · `1` unclean (reconcile drift, a TRUNCATED live feed —
+`source_exhausted_early`, the day is not full-session evidence — or a mid-session crash; a
+crashed session still best-effort writes its daily report with `session_incomplete: true`) ·
+`2` run lock held/usage · `3` journal corruption (startup OR mid-session) · `4` kill-switch
+HALTED (operator attention required; re-arm = a deliberate NEW run after review) · `5` calendar
+fixture coverage expired (regenerate with `agent.calendar_fixture` + review — a silent 0 here
+would end the paper program unnoticed).
+
+Lock hygiene: each journal tree holds a `.lock` (owner PID) and a persistent `.lock.guard`
+sidecar. **Never delete `.lock.guard` by hand** — recreating it gives concurrent processes a
+new inode to flock and silently breaks the one-session-per-journal-tree serialization. A stale
+`.lock` from a dead PID is reclaimed automatically; only remove `.lock` manually if it is
+malformed AND the owning PID is confirmed dead.
 
 Bounded-blindness note: if broker account reads go non-fresh for >120s while positions are held,
 the agent flattens-then-halts on its own (`account_blind_cap`) — expect exit 4 + a journaled
