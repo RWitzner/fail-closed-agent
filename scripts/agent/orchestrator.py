@@ -402,14 +402,156 @@ class _PositionUnconfirmed(Exception):
     """A presumed blind exposure is not confirmed by a fresh broker read."""
 
 
-class _AccountBlindFlattenBroker:
-    """Submit blind-cap reductions only against an exact current position."""
+class _FlattenPending(Exception):
+    """A deterministic flatten order lacks terminal full-fill evidence."""
 
-    def __init__(self, *, inner, confirmed_qty: Mapping[str, Decimal]) -> None:
+
+_SAFE_NOT_FOUND_RESUBMIT_REASONS = frozenset({
+    "position_unconfirmed",
+    "no_price_for_cap",
+})
+
+
+class _TerminalFlattenBroker:
+    """Expose success to M0 only after deterministic terminal evidence.
+
+    M0's legacy actuator treats any non-raising ``submit_order`` return as a
+    completed flatten.  Broker submit acknowledgements are not completion: an
+    accepted or partially-filled order remains exposure.  This adapter keeps
+    M0 unchanged while translating only an identity-matched full fill into
+    success.  On retry it probes the deterministic client id first and submits
+    only after an explicit 404, so an ambiguous/new/partial order is never
+    duplicated.
+    """
+
+    def __init__(self, *, inner, status_reader, source: str,
+                 probe_existing: bool,
+                 allow_submit_after_not_found=()) -> None:
         self._inner = inner
-        self._confirmed_qty = dict(confirmed_qty)
+        self._status_reader = status_reader
+        self._source = source
+        self._probe_existing = bool(probe_existing)
+        self._allow_submit_after_not_found = frozenset(
+            allow_submit_after_not_found)
+
+    def _is_terminal_full(self, result, intent: OrderIntent) -> bool:
+        if not isinstance(result, Mapping):
+            return False
+        parsed = parse_order_payload(result, source=self._source)
+        if not isinstance(parsed, BrokerOrder):
+            return False
+        delta = fill_delta(None, parsed)
+        return (
+            parsed.client_order_id == intent.intent_id
+            and parsed.symbol == intent.symbol
+            and parsed.side == intent.side
+            and parsed.qty == intent.qty
+            and parsed.state == "filled"
+            and parsed.filled_qty == parsed.qty
+            and isinstance(delta, FillDelta)
+            and delta.delta_qty == intent.qty
+        )
+
+    def _is_symbol_terminal_full(self, result, symbol: str) -> bool:
+        """Terminal evidence for a residual whose prior qty is unavailable."""
+        if not isinstance(result, Mapping):
+            return False
+        parsed = parse_order_payload(result, source=self._source)
+        if not isinstance(parsed, BrokerOrder):
+            return False
+        delta = fill_delta(None, parsed)
+        return (
+            parsed.client_order_id == f"flatten-{symbol}"
+            and parsed.symbol == symbol
+            and parsed.side in {"buy", "sell"}
+            and parsed.state == "filled"
+            and parsed.qty > 0
+            and parsed.filled_qty == parsed.qty
+            and isinstance(delta, FillDelta)
+            and delta.delta_qty == parsed.qty
+        )
+
+    @staticmethod
+    def _consume_pending(intent: OrderIntent, token):
+        require_token(intent, token)
+        raise _FlattenPending("flatten_pending")
+
+    def _probe(self, intent: OrderIntent, token) -> bool:
+        """Return True only for an explicit not-found safe-to-submit result."""
+        if self._status_reader is None:
+            self._consume_pending(intent, token)
+        try:
+            result = self._status_reader.order_status(intent.intent_id)
+        except Exception as err:  # noqa: BLE001 — ambiguous probe: never submit
+            if getattr(err, "status_code", None) == 404:
+                return True
+            self._consume_pending(intent, token)
+        if self._is_terminal_full(result, intent):
+            # No broker submit occurs in this pass, so consume the freshly
+            # minted retry authorization here before reporting success.
+            require_token(intent, token)
+            return False
+        if getattr(result, "status_code", None) == 404:
+            return True
+        self._consume_pending(intent, token)
+
+    def _submit_or_pending(self, intent: OrderIntent, token):
+        if self._inner is None:
+            self._consume_pending(intent, token)
+        result = self._inner.submit_order(intent, token)
+        if self._is_terminal_full(result, intent):
+            return result
+        # The underlying broker consumed (or explicitly voided) the token.
+        raise _FlattenPending("flatten_pending")
 
     def submit_order(self, intent: OrderIntent, token):
+        if self._probe_existing:
+            safe_to_submit = self._probe(intent, token)
+            if not safe_to_submit:
+                # _probe returned only after consuming a token for a proven
+                # terminal full fill.  M0 ignores the return payload.
+                return {"client_order_id": intent.intent_id,
+                        "status": "filled"}
+            if intent.symbol not in self._allow_submit_after_not_found:
+                self._consume_pending(intent, token)
+        return self._submit_or_pending(intent, token)
+
+
+class _AccountBlindFlattenBroker(_TerminalFlattenBroker):
+    """Terminal gate plus exact fresh-position confirmation for blind caps."""
+
+    def __init__(self, *, inner, status_reader, source: str,
+                 probe_existing: bool,
+                 confirmed_qty: Mapping[str, Decimal],
+                 current_is_fresh: bool,
+                 allow_submit_after_not_found=()) -> None:
+        super().__init__(inner=inner, status_reader=status_reader,
+                         source=source, probe_existing=probe_existing,
+                         allow_submit_after_not_found=(
+                             allow_submit_after_not_found))
+        self._confirmed_qty = dict(confirmed_qty)
+        self._current_is_fresh = bool(current_is_fresh)
+
+    def submit_order(self, intent: OrderIntent, token):
+        if self._probe_existing:
+            safe_to_submit = self._probe(intent, token)
+            if not safe_to_submit:
+                return {"client_order_id": intent.intent_id,
+                        "status": "filled"}
+            # A 404 after a submit ack/timeout can be delayed visibility, not
+            # proof that no order exists.  Only a journaled pre-wire failure
+            # makes another submit (or flat resolution) safe.
+            if intent.symbol not in self._allow_submit_after_not_found:
+                self._consume_pending(intent, token)
+
+        if self._current_is_fresh and intent.symbol not in self._confirmed_qty:
+            # A valid current broker snapshot with no symbol is authoritative
+            # only after the deterministic order probe above has ruled out a
+            # known pending order.
+            require_token(intent, token)
+            return {"client_order_id": intent.intent_id,
+                    "status": "broker_flat"}
+
         qty = self._confirmed_qty.get(intent.symbol)
         side = ("sell" if qty is not None and qty > 0
                 else "buy" if qty is not None and qty < 0
@@ -427,7 +569,34 @@ class _AccountBlindFlattenBroker:
             # reusable token stranded in the process registry.
             require_token(intent, token)
             raise _PositionUnconfirmed("position_unconfirmed")
-        return self._inner.submit_order(intent, token)
+        return self._submit_or_pending(intent, token)
+
+    def confirm_residual_flat(self, symbol: str) -> bool:
+        """Resolve a broker-only residual without inventing a position qty.
+
+        Retry portfolios can be empty after restart when the original exposure
+        existed only at the broker.  Poll the deterministic order id first.  A
+        terminal full fill proves completion; otherwise only explicit 404 plus
+        a known pre-wire prior failure plus a fresh absent position is safe.
+        """
+        if self._status_reader is None:
+            return False
+        try:
+            result = self._status_reader.order_status(f"flatten-{symbol}")
+        except Exception as err:  # noqa: BLE001 — ambiguous means unresolved
+            if getattr(err, "status_code", None) != 404:
+                return False
+            result = err
+        if self._is_symbol_terminal_full(result, symbol):
+            return True
+        if isinstance(result, Mapping):
+            return False
+        return (
+            getattr(result, "status_code", None) == 404
+            and symbol in self._allow_submit_after_not_found
+            and self._current_is_fresh
+            and symbol not in self._confirmed_qty
+        )
 
 
 @dataclass
@@ -1786,23 +1955,38 @@ class Orchestrator:
     def retry_residual(self):
         """Operator-attended residual retry (HALTED only; M4 §I)."""
         now_ms = self._clock.now_ms()
-        if self._kill_cause == "account_blind_cap":
-            report = self._risk_kill.retry_residual(
-                self._account_blind_flatten_broker(now_ms),
-                self._account_blind_portfolio(now_ms))
-        else:
-            report = self._risk_kill.retry_residual(
-                self._flatten_broker(), self._flatten_portfolio(now_ms))
+        failures = self._risk_kill.residual_failures()
+        safe_after_not_found = {
+            symbol for symbol, reason in failures.items()
+            if reason in _SAFE_NOT_FOUND_RESUBMIT_REASONS
+        }
+        # Every residual retry uses fresh broker-position confirmation, not
+        # only account-blind retries: broker is position-of-record.  The union
+        # portfolio retains local/broker-only residuals long enough for the
+        # adapter (or its absent-residual probe) to resolve them safely.
+        report = self._risk_kill.retry_residual(
+            self._account_blind_flatten_broker(
+                now_ms, probe_existing=True,
+                allow_submit_after_not_found=safe_after_not_found),
+            self._account_blind_portfolio(now_ms))
         self._book_flatten_closes(report, now_ms)
         return report
 
-    def _flatten_broker(self):
+    def _price_capped_flatten_broker(self):
         from agent.broker.flatten_proxy import PriceCappedFlattenBroker  # lazy
         instrument_ids = dict(self._instrument_ids)  # universe ∪ held (M5C-S8)
         return PriceCappedFlattenBroker(
             inner=self.broker, quote_view=self._quote_view,
             instrument_ids=instrument_ids, cap_bps=FLATTEN_CAP_BPS,
             void_token=void_token)   # SF-2: void a stranded reduce auth on raise
+
+    def _flatten_broker(self, *, probe_existing: bool = False):
+        """Price-capped flatten whose success means terminal full fill."""
+        inner = (self._price_capped_flatten_broker()
+                 if self.broker is not None else None)
+        return _TerminalFlattenBroker(
+            inner=inner, status_reader=self.broker, source=self._fill_source,
+            probe_existing=probe_existing)
 
     def _flatten_portfolio(self, now_ms: int):
         portfolio = self._portfolio_read(now_ms)
@@ -1840,18 +2024,25 @@ class Orchestrator:
             list(rows.values()), source=self._account_source,
             seen_at_ms=now_ms, stale=False)
 
-    def _account_blind_flatten_broker(self, now_ms: int):
+    def _account_blind_flatten_broker(
+            self, now_ms: int, *, probe_existing: bool = False,
+            allow_submit_after_not_found=()):
         """Require an exact fresh broker position before any real submission."""
         current = self._portfolio_read(now_ms)
         confirmed_qty = {}
-        if current is not None and not current.stale:
+        current_is_fresh = current is not None and not current.stale
+        if current_is_fresh:
             confirmed_qty = {
                 position.symbol: position.qty
                 for position in current.positions
             }
-        inner = self._flatten_broker() if self.broker is not None else None
+        inner = (self._price_capped_flatten_broker()
+                 if self.broker is not None else None)
         return _AccountBlindFlattenBroker(
-            inner=inner, confirmed_qty=confirmed_qty)
+            inner=inner, status_reader=self.broker, source=self._fill_source,
+            probe_existing=probe_existing, confirmed_qty=confirmed_qty,
+            current_is_fresh=current_is_fresh,
+            allow_submit_after_not_found=allow_submit_after_not_found)
 
     def _kill_sequence(self, cause: str, evaluation, now_ms: int) -> None:
         """§M.6 (FD-M5-25, rev 2): cancel-opens -> void tokens -> trigger with
@@ -1948,16 +2139,19 @@ class Orchestrator:
                 continue
             # The broker is position-of-record.  Attach its fill to the local
             # long only when both the submitted flatten intent and observed fill
-            # prove the same symbol, sign and held quantity.  Otherwise leave the
-            # local book untouched for M6 reconcile.
+            # prove the same symbol, sign, held quantity, and TERMINAL full fill.
+            # Partial cumulative snapshots have no durable cursor in this
+            # symbol-level legacy path, so booking one here could replay the same
+            # delta after restart.  Leave every non-full case to M6 reconcile.
             if (position.side != "long"
                     or position.qty <= 0
                     or parsed.client_order_id != f"flatten-{symbol}"
                     or parsed.symbol != symbol
                     or parsed.side != "sell"
+                    or parsed.state != "filled"
                     or parsed.qty != position.qty
-                    or parsed.filled_qty > parsed.qty
-                    or delta.delta_qty > position.qty):
+                    or parsed.filled_qty != parsed.qty
+                    or delta.delta_qty != position.qty):
                 continue
             decision_id = "d-" + row_hash({
                 "run_id": self.run_id, "strategy_id": "kill_flatten",

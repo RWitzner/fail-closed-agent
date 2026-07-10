@@ -590,8 +590,9 @@ class TestKillSequenceOrchestrator(unittest.TestCase):
                        cap_bps=FLATTEN_CAP_BPS))
         self.assertFalse(flatten_intent.intent_id.startswith("synthetic-"))
 
-        # ZERO failed[] through the reverse wall (FD-M5-8 rev 2); stale_inputs
-        # reflects the REAL AccountStore.get freshness (fresh here — M5C-B5).
+        # A submit ack is not a completed flatten: the synthetic broker's
+        # partial_then_full policy initially returns `new`, so residual remains
+        # until deterministic status polls prove the terminal full fill.
         self.assertEqual(pipeline.orch.risk_kill.state, "halted")
         self.assertEqual(pipeline.orch.risk_kill.generation, 1)
         rows = self._kill_transitions(pipeline)
@@ -600,11 +601,23 @@ class TestKillSequenceOrchestrator(unittest.TestCase):
                           ("flattening", "halted")])
         self.assertEqual(rows[0]["cause"], "drill")
         self.assertEqual(rows[0]["residual"], ["AAPL"])
-        self.assertEqual(rows[1]["flattened"], ["AAPL"])
-        self.assertEqual(rows[1]["failed"], [])
-        self.assertEqual(rows[1]["residual"], [])
+        self.assertEqual(rows[1]["flattened"], [])
+        self.assertEqual(rows[1]["failed"],
+                         [["AAPL", "flatten_pending"]])
+        self.assertEqual(rows[1]["residual"], ["AAPL"])
         for row in rows:
             self.assertIs(row["stale_inputs"], False)
+
+        # Qty 3 takes FakeBroker's documented tiny-order branch, whose first
+        # deterministic poll applies the single full remainder.
+        terminal = pipeline.orch.retry_residual()
+        self.assertEqual(terminal.flattened, ("AAPL",))
+        self.assertEqual(terminal.residual, ())
+        # Retry polls `flatten-AAPL`; it cannot duplicate its submit.
+        self.assertEqual(
+            [(kind, getattr(value, "intent_id", value))
+             for kind, value in events if kind == "submit"],
+            [("submit", open_order_id), ("submit", "flatten-AAPL")])
 
         # close_position(reason="kill_flatten") booked the flatten fill.
         closes = pipeline.rows_of("positions", "position_close")

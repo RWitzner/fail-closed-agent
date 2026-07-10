@@ -25,7 +25,11 @@ from agent.risk.account_state import AccountRead, PortfolioRead
 from agent.risk.loss_limits import LossRead
 from agent.risk.reasons import RiskError, require_kill_cause, require_kill_state
 from agent.risk.risk_config import RiskConfig
-from agent.risk.risk_ledger import EVT_KILL_TRANSITION, rehydrate_risk_state
+from agent.risk.risk_ledger import (
+    EVT_KILL_RETRY,
+    EVT_KILL_TRANSITION,
+    rehydrate_risk_state,
+)
 
 _DECIMAL_CTX = Context(prec=28, rounding=ROUND_HALF_EVEN)
 
@@ -63,6 +67,7 @@ class RiskKillSwitch:
         self._state = "monitoring"
         self._generation = 0
         self._residual: Tuple[str, ...] = ()
+        self._residual_failures = {}
         self._cause: Optional[str] = None
         self._last_report: Optional[FlattenReport] = None
 
@@ -160,6 +165,10 @@ class RiskKillSwitch:
                                       for symbol, reason in inner.failed))
                 residual = tuple(sorted(set(at_trigger) - set(flattened)))
                 self._residual = residual
+                self._residual_failures = {
+                    symbol: reason for symbol, reason in failed
+                    if symbol in residual
+                }
                 annotations = tuple(
                     sorted((symbol, verdict.tradability.value)
                            for symbol, verdict in tradability.items()))
@@ -194,15 +203,35 @@ class RiskKillSwitch:
             residual_before = self._residual
             keep = set(residual_before)
             subset = tuple(p for p in portfolio.positions if p.symbol in keep)
+            present = {p.symbol for p in subset}
+            confirmed_flat = []
+            confirm_flat = getattr(broker, "confirm_residual_flat", None)
+            if callable(confirm_flat):
+                for symbol in sorted(keep - present):
+                    try:
+                        if confirm_flat(symbol):
+                            confirmed_flat.append(symbol)
+                    except Exception:  # noqa: BLE001 — unresolved stays residual
+                        pass
             inner = KillSwitch()   # FRESH M0 actuator (FD-M4-4)
             try:
                 inner.trigger(broker, subset)
             finally:
-                flattened = tuple(sorted(inner.flattened))
+                flattened = tuple(sorted(
+                    set(inner.flattened) | set(confirmed_flat)))
                 failed = tuple(sorted((symbol, reason)
                                       for symbol, reason in inner.failed))
                 residual_after = tuple(sorted(keep - set(flattened)))
                 self._residual = residual_after
+                failures = dict(self._residual_failures)
+                for symbol in flattened:
+                    failures.pop(symbol, None)
+                for symbol, reason in failed:
+                    failures[symbol] = reason
+                self._residual_failures = {
+                    symbol: failures[symbol]
+                    for symbol in residual_after if symbol in failures
+                }
                 self._state = "halted"   # stays halted; never re-arms (FD-M4-19)
                 if self._ledger is not None:
                     self._ledger.record_kill_retry_residual(
@@ -220,6 +249,10 @@ class RiskKillSwitch:
     def residual_symbols(self) -> Tuple[str, ...]:
         return self._residual
 
+    def residual_failures(self) -> Mapping[str, str]:
+        """Latest journalable failure per still-residual symbol."""
+        return dict(self._residual_failures)
+
     # --- rehydrate ---------------------------------------------------------------
 
     def rehydrate(self, rows) -> None:
@@ -232,6 +265,33 @@ class RiskKillSwitch:
             self._state = require_kill_state(slice_["state"])
             self._generation = int(slice_["generation"])
             self._residual = tuple(sorted(slice_["residual"]))
+            failures = {}
+            for row in sorted(rows, key=lambda r: r["seq"]):
+                event_type = row.get("event_type")
+                if event_type == EVT_KILL_TRANSITION:
+                    if row.get("to_state") == "flattening":
+                        failures = {}
+                    else:
+                        failures = {
+                            symbol: reason
+                            for symbol, reason in row.get("failed", ())
+                        }
+                    residual = set(row.get("residual", ()))
+                    failures = {
+                        symbol: reason for symbol, reason in failures.items()
+                        if symbol in residual
+                    }
+                elif event_type == EVT_KILL_RETRY:
+                    for symbol in row.get("flattened", ()):
+                        failures.pop(symbol, None)
+                    for symbol, reason in row.get("failed", ()):
+                        failures[symbol] = reason
+                    residual = set(row.get("residual_after", ()))
+                    failures = {
+                        symbol: reason for symbol, reason in failures.items()
+                        if symbol in residual
+                    }
+            self._residual_failures = failures
             self._last_report = None
             last_transition = None
             for row in sorted(rows, key=lambda r: r["seq"]):
