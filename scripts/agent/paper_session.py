@@ -311,6 +311,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--strategy-id", default=None,
                         help=f"one of {sorted(STRATEGY_REGISTRY)} (S9 still "
                              "gates opens on the reviewed artifact)")
+    parser.add_argument("--live-source", choices=("databento", "alpaca-iex"),
+                        default="databento",
+                        help="live quote vendor: 'databento' (EQUS.MINI "
+                             "bbo-1s — paid subscription, pinned research "
+                             "symmetry) or 'alpaca-iex' (the $0 IEX feed on "
+                             "the paper account; dataset/schema auto-pinned "
+                             "to ALPACA.IEX/mbp-1)")
     parser.add_argument("--dataset", default="EQUS.MINI")
     parser.add_argument("--schema", default="bbo-1s")
     parser.add_argument("--stop-buffer-minutes", type=int, default=15)
@@ -379,11 +386,23 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             writer = EventWriter(args.record_events,
                                  f"live-{session_date}")
 
-        def _fresh_source(*, reconnect_epoch: int):
-            return databento_live_source(
-                dataset=args.dataset, schema=args.schema, symbols=symbols,
-                reconnect_epoch=reconnect_epoch,
-                allow_unverified_live=args.allow_unverified_live)
+        if args.live_source == "alpaca-iex":
+            from agent.marketdata import alpaca_feed
+
+            # provenance is pinned by the adapter — never mix vendor labels
+            args.dataset = alpaca_feed.DATASET
+            args.schema = alpaca_feed.SCHEMA
+
+            def _fresh_source(*, reconnect_epoch: int):
+                return alpaca_feed.alpaca_quote_source(
+                    symbols=symbols, reconnect_epoch=reconnect_epoch,
+                    allow_unverified_live=args.allow_unverified_live)
+        else:
+            def _fresh_source(*, reconnect_epoch: int):
+                return databento_live_source(
+                    dataset=args.dataset, schema=args.schema, symbols=symbols,
+                    reconnect_epoch=reconnect_epoch,
+                    allow_unverified_live=args.allow_unverified_live)
 
         # Eager epoch-0 construction keeps the UNVERIFIED tier-2b refusal
         # fail-FAST (at composition, not mid-session); later epochs are built

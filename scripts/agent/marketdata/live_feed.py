@@ -60,7 +60,10 @@ __all__ = [
     "databento_live_source",
 ]
 
-LIVE_QUOTE_SCHEMAS = frozenset({"tbbo", "bbo-1s"})  # the replay QUOTE_SCHEMAS set
+# tbbo/bbo-1s = the Databento replay/live set; mbp-1 = the event-driven L1 tag
+# the Alpaca IEX adapter emits (alpaca_feed.py — quotes arrive per top-of-book
+# change, not time-conflated). All three parse to QuoteEvent.
+LIVE_QUOTE_SCHEMAS = frozenset({"tbbo", "bbo-1s", "mbp-1"})
 DEFAULT_REFRESH_CADENCE_MS = 1000
 DEFAULT_BAR_CLOSE_GRACE_MS = 1500
 BAR_INTERVAL = "1m"

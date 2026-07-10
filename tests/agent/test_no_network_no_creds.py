@@ -708,7 +708,12 @@ class TestM5ExecOfflinePurityAndImportGuard(unittest.TestCase):
         self.assertTrue(sites, "expected the lazy SDK import to exist")
         self.assertEqual(
             sorted(set(sites)),
+            # Conscious wall widenings only: the broker adapter, the
+            # credentialed paper-account verifier, and (2026-07-10, the $0
+            # step-B route) the IEX live-quote adapter — each keeps the import
+            # inside _build_real_client, lazy and offline-unreachable.
             [("broker/alpaca.py", "_build_real_client"),
+             ("marketdata/alpaca_feed.py", "_build_real_client"),
              ("verify_alpaca_paper.py", "_build_real_client")],
             f"alpaca SDK import outside the allow-listed sites: {sites}")
 
