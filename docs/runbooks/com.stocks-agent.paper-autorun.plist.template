@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd template for the daily paper autorun (Track C).
+
+     Install (AFTER runbook steps A-E hold; the wrapper flips nothing, so an
+     UNARMED install just produces observe-grade evidence):
+
+       1. Replace __REPO__ with the absolute repo path
+          (e.g. <repo>) and review the argv below.
+       2. cp docs/runbooks/com.stocks-agent.paper-autorun.plist.template \
+            ~/Library/LaunchAgents/com.stocks-agent.paper-autorun.plist
+       3. launchctl load ~/Library/LaunchAgents/com.stocks-agent.paper-autorun.plist
+
+     Fires 09:05 ET-equivalent LOCAL time — adjust Hour/Minute to your local
+     offset from ET yourself; launchd has no timezone support, and a DST shift
+     you have not reviewed should fail toward "session starts late" (the
+     runner skips non-trading days and the calendar fixture gates coverage).
+     Evidence: reports/paper_sessions/autorun_log.jsonl + ATTENTION-<date>.txt
+     on any unclean day; stdout/err land in the log paths below. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stocks-agent.paper-autorun</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>PYTHONPATH=__REPO__/scripts</string>
+    <string>__REPO__/.venv/bin/python3</string>
+    <string>-m</string>
+    <string>agent.paper_autorun</string>
+    <string>--journal-dir</string>
+    <string>__REPO__/journal</string>
+    <string>--symbols</string>
+    <string>AAPL</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>15</integer>
+    <key>Minute</key>
+    <integer>5</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__REPO__/reports/paper_sessions/autorun.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/reports/paper_sessions/autorun.stderr.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
