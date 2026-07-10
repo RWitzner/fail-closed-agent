@@ -953,8 +953,12 @@ class Orchestrator:
         # Incremental (replay-equivalent) view of the decisions stream for the
         # per-bar-batch resolver call: a full journal_replay per batch re-reads
         # + re-hashes the whole file — O(day²) over a session. Startup and
-        # rehydrate paths keep full-verification journal_replay.
+        # rehydrate paths keep full-verification journal_replay. The tick loop
+        # consumes read_new() deltas into an orchestrator-owned accumulation
+        # (read()'s full-snapshot deepcopy per batch is itself O(day²) copy
+        # work); the resolver only reads rows, never mutates them.
         self._decisions_tail = IncrementalJournalReader(self._decisions_path)
+        self._decisions_rows: list = []
 
         # mutable tick state
         self._task: Optional[_OrderTask] = None
@@ -1900,7 +1904,12 @@ class Orchestrator:
                 event_start_bar_end_utc=bar.bucket_end_utc,
                 decision_ts_utc=_canonical_utc_str(_parse_utc(decision_ts)))
         if bars and self._instant_utc is not None:
-            self._resolver.resolve_due(self._decisions_tail.read(),
+            replaced, fresh = self._decisions_tail.read_new()
+            if replaced:
+                self._decisions_rows = fresh
+            else:
+                self._decisions_rows.extend(fresh)
+            self._resolver.resolve_due(self._decisions_rows,
                                        now_utc=self._instant_utc)
         return bars
 

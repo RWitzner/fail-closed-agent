@@ -119,6 +119,11 @@ class IncrementalJournalReader:
         self._observed_size = None
         self._writer_lineage = None
         self._writer_generation = None
+        # read_new() delta cursor: rows served so far, and a STICKY flag set by
+        # any full re-parse/reset (the served prefix may have changed, so the
+        # next delta must be a full replacement, not rows[served:]).
+        self._served_count = 0
+        self._rebuilt_since_serve = True
         self._state = _state_for(self._path)
 
     def _reset(self) -> None:
@@ -129,6 +134,8 @@ class IncrementalJournalReader:
         self._observed_size = None
         self._writer_lineage = None
         self._writer_generation = None
+        self._served_count = 0
+        self._rebuilt_since_serve = True
 
     def _snapshot(self) -> list:
         return copy.deepcopy(self._rows)
@@ -176,14 +183,15 @@ class IncrementalJournalReader:
             self._writer_lineage = None
             self._writer_generation = None
 
-    def _read_locked(self) -> list:
+    def _refresh_locked(self) -> None:
+        """Bring self._rows up to date with the file (integrity-verified)."""
         for attempt in range(2):
             try:
                 fh = open(self._path, "rb")
             except FileNotFoundError:
                 if _path_file_state(self._path) is None:
                     self._reset()
-                    return []
+                    return
                 if attempt == 0:
                     continue
                 raise JournalCorruption("stream changed during incremental read")
@@ -191,6 +199,7 @@ class IncrementalJournalReader:
             parse_error = None
             candidate = None
             read_complete = True
+            full_reparse = False
             with fh:
                 before = _file_state(os.fstat(fh.fileno()))
                 unchanged = (
@@ -206,6 +215,7 @@ class IncrementalJournalReader:
                         rows = self._rows
                         index = self._line_index
                     else:
+                        full_reparse = True
                         start = 0
                         rows = []
                         index = 0
@@ -240,13 +250,44 @@ class IncrementalJournalReader:
             self._version = before
             self._observed_size = before[2]
             self._commit_authorization(before)
-            return self._snapshot()
+            if full_reparse:
+                # The served prefix may have changed content, not just grown:
+                # the next read_new() must serve a full replacement.
+                self._rebuilt_since_serve = True
+            return
 
         raise JournalCorruption("stream changed during incremental read")
 
     def read(self) -> list:
         with self._state.lock:
-            return self._read_locked()
+            self._refresh_locked()
+            return self._snapshot()
+
+    def read_new(self) -> tuple:
+        """Delta read for the hot path: ``(snapshot_replaced, new_rows)``.
+
+        Same locking and fail-closed integrity semantics as ``read()``, but
+        copies ONLY the rows appended since the last ``read_new()`` call —
+        ``read()``'s full-snapshot deepcopy makes every bar-batch read
+        O(total rows), reintroducing the O(day²) copy term the incremental
+        reader exists to avoid. ``snapshot_replaced=True`` means the cache
+        was rebuilt (first call, external replacement/shrink/recreate, or a
+        reset): discard any accumulation and start over from ``new_rows``;
+        otherwise extend the accumulation. Accumulating
+        ``rows if replaced else acc + rows`` always equals ``replay(path)``.
+        Returned rows are deep copies — caller mutation cannot poison the
+        reader cache."""
+        with self._state.lock:
+            self._refresh_locked()
+            if self._rebuilt_since_serve:
+                replaced = True
+                delta = copy.deepcopy(self._rows)
+            else:
+                replaced = False
+                delta = copy.deepcopy(self._rows[self._served_count:])
+            self._served_count = len(self._rows)
+            self._rebuilt_since_serve = False
+            return replaced, delta
 
 
 class _StreamState:

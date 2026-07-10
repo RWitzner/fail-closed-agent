@@ -614,5 +614,107 @@ class TestIncrementalJournalReader(_Tmp):
         self.assertEqual([r["n"] for r in reader.read()], [1])
 
 
+class TestIncrementalReadNew(_Tmp):
+    """read_new() is the tick loop's DELTA API: O(new rows) copying per call
+    instead of read()'s full-list deepcopy (which reintroduced an O(day²)
+    copy term). Contract: (snapshot_replaced, new_rows) — accumulate
+    ``rows if replaced else acc + rows`` and the accumulation always equals
+    replay(path). Integrity semantics identical to read()."""
+
+    def _writer(self):
+        return JournalWriter(self.path, run_id="run-1",
+                             clock=lambda: "2026-07-06T00:00:00Z")
+
+    def test_first_call_serves_everything_as_replaced(self):
+        w = self._writer()
+        w.append("evt", {"n": 1})
+        w.append("evt", {"n": 2})
+        reader = IncrementalJournalReader(self.path)
+
+        replaced, rows = reader.read_new()
+
+        self.assertTrue(replaced)
+        self.assertEqual(rows, replay(self.path))
+
+    def test_append_only_serves_delta_not_full_list(self):
+        w = self._writer()
+        for n in range(3):
+            w.append("evt", {"n": n})
+        reader = IncrementalJournalReader(self.path)
+        reader.read_new()
+
+        w.append("evt", {"n": 3})
+        replaced, rows = reader.read_new()
+
+        self.assertFalse(replaced)
+        self.assertEqual([r["n"] for r in rows], [3])
+
+    def test_unchanged_serves_empty_delta(self):
+        w = self._writer()
+        w.append("evt", {"n": 1})
+        reader = IncrementalJournalReader(self.path)
+        reader.read_new()
+
+        replaced, rows = reader.read_new()
+
+        self.assertFalse(replaced)
+        self.assertEqual(rows, [])
+
+    def test_external_shrink_serves_full_replacement(self):
+        w = self._writer()
+        w.append("evt", {"n": 1})
+        first_row_bytes = self.path.read_bytes()
+        w.append("evt", {"n": 2})
+        reader = IncrementalJournalReader(self.path)
+        acc = []
+        replaced, rows = reader.read_new()
+        acc = rows if replaced else acc + rows
+
+        self.path.write_bytes(first_row_bytes)        # external shrink
+        replaced, rows = reader.read_new()
+        acc = rows if replaced else acc + rows
+
+        self.assertTrue(replaced)
+        self.assertEqual(acc, replay(self.path))
+        self.assertEqual([r["n"] for r in acc], [1])
+
+    def test_full_reparse_via_read_marks_next_read_new_replaced(self):
+        w = self._writer()
+        w.append("evt", {"n": 1})
+        first_row_bytes = self.path.read_bytes()
+        w.append("evt", {"n": 2})
+        reader = IncrementalJournalReader(self.path)
+        reader.read_new()                             # cursor at 2 rows
+
+        self.path.write_bytes(first_row_bytes)        # external shrink
+        self.assertEqual(len(reader.read()), 1)       # read() full-reparses
+
+        replaced, rows = reader.read_new()
+        self.assertTrue(replaced)
+        self.assertEqual([r["n"] for r in rows], [1])
+
+    def test_returned_delta_rows_are_copies(self):
+        w = self._writer()
+        w.append("evt", {"nested": {"value": 1}})
+        reader = IncrementalJournalReader(self.path)
+
+        _, rows = reader.read_new()
+        rows[0]["nested"]["value"] = 999
+
+        self.assertEqual(reader.read(), replay(self.path))
+
+    def test_corruption_still_raises_from_read_new(self):
+        w = self._writer()
+        w.append("evt", {"value": "AAAA"})
+        reader = IncrementalJournalReader(self.path)
+        reader.read_new()
+
+        original = self.path.read_bytes()
+        self.path.write_bytes(original.replace(b"AAAA", b"BBBB"))
+
+        with self.assertRaises(JournalCorruption):
+            reader.read_new()
+
+
 if __name__ == "__main__":
     unittest.main()
