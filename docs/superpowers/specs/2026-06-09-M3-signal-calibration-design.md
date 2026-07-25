@@ -5,7 +5,7 @@
 > (module-by-module APIs, code skeletons, fixtures, test→invariant map) is produced from this design via the
 > architect-panel → critic → revision workflow, mirroring `2026-06-09-M2-market-state-contract.md`.
 >
-> **Branch:** `m3-signal` (off `main` @ `a82be6d`, M2 merged). Authoritative parent design:
+> **Branch:** `m3-signal` (off `main` @ `e19118f`, M2 merged). Authoritative parent design:
 > `docs/superpowers/specs/2026-06-08-stocks-agent-design.md` (§5 Tier 3/4, §7 data model, §8 safety table).
 >
 > **Review hardening applied:** the design now explicitly resolves the bbo/mid-bar gap, as-of anti-lookahead

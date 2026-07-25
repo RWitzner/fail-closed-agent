@@ -16,7 +16,7 @@ and in `docs/superpowers/reviews/2026-06-10-M6-contract-critic-findings.json`.
 Disagreements between the lenses are resolved explicitly in §1; every load-bearing repo fact in §0.1
 was re-verified against the source at the baseline commit by the synthesis pass itself.
 
-Baseline: branch `m6-reconcile` @ `a426ff9`, 1520 tests green, gates OFF, committed caps 0.
+Baseline: branch `m6-reconcile` @ `10532df`, 1520 tests green, gates OFF, committed caps 0.
 House style mirrors the M5 frozen contract (`docs/superpowers/specs/2026-06-10-M5-paper-exec-contract.md`).
 
 ---
@@ -71,7 +71,7 @@ SOD/EOD/immediate broker-reconcile pass that:
 
 ### 0.1 Verified repo facts this contract builds on
 
-All at `a426ff9`; **every row below was re-read from the source by the synthesis pass** (architect
+All at `10532df`; **every row below was re-read from the source by the synthesis pass** (architect
 claims that did not verify were dropped or corrected — see §1 rows 4, 12, 16 and the note below this
 table).
 

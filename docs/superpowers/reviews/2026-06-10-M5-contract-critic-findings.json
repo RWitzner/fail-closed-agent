@@ -12,7 +12,7 @@
    {"id":"RC-4","severity":"minor","section":"SS-R 12(b)","claim":"'MINT-REACHING variant' label was false - the composition terminates at can_open rung 1 and never reaches the mint.","resolution":"Relabeled GATES-CONSULTING with the explicit note that mint-level run_gates coverage is SS-R 3's direct sweep."},
    {"id":"RC-5","severity":"minor","section":"SS-N ReplayClock run() x SS-M.7","claim":"Catch-up semantics unpinned: one recorded event jumping multiple cadence boundaries could fire several on_tick at identical now_ms, making two exit attempts share decision_seen_at_ms (duplicate close decision_id).","resolution":"Pinned: at most ONE on_tick per delivered-event batch; now_ms strictly increases between consecutive on_tick invocations; sparse-stream SS-R 16 case added."}
   ],
-  "residue":"M5C-6 had one stale line left in SS-U (f9ec7c6 attribution) - fixed in the same pass."
+  "residue":"M5C-6 had one stale line left in SS-U (21b006f attribution) - fixed in the same pass."
  },
  "lenses": {
   "repo-facts": {
@@ -61,9 +61,9 @@
      "id": "M5C-6",
      "severity": "minor",
      "section": "§0.1 verified-facts table (revision attribution)",
-     "claim": "Two §0.1 rows attribute uncommitted working-tree state to the pinned commit f9ec7c6/HEAD, and one line-range citation is off by one.",
-     "evidence": "(a) §0.1 row: '`risk_rules.json` already carries the committed M4 additions: 7 integer-0 caps + `risk.short_selling.enabled:false` + `risk.universe:{}` ... | `config/risk_rules.json:1-19`' under the header '(file:line at `f9ec7c6`)' — but `git show f9ec7c6:config/risk_rules.json` has only 3 caps and no `risk` block (10 lines); the additions exist only as an uncommitted working-tree modification (git status: 'M config/risk_rules.json'), so they are not 'committed' at the cited revision. (b) §0.1 row: 'M4 build IN FLIGHT under `scripts/agent/risk/` (`reasons.py`, `account_state.py` exist at HEAD)' — scripts/agent/risk/ is untracked ('?? scripts/agent/risk/'), i.e. not at HEAD; the full 12-file build now exists in the working tree. (c) §0.1 cites `config/agent_rules.json:2-10,24-27` for `signal.spread_bps_max=\"50\"`, which is at config/agent_rules.json:23 (all cited VALUES are correct).",
-     "proposed_fix": "Reword the §0.1 header/rows to distinguish 'at f9ec7c6' facts from 'in the M4 working-tree build (to be committed before M5 starts)' facts, make the M5 build precondition explicit (M4 build + risk_rules.json additions landed/committed), and correct the agent_rules.json range to 2-10,23-27."
+     "claim": "Two §0.1 rows attribute uncommitted working-tree state to the pinned commit 21b006f/HEAD, and one line-range citation is off by one.",
+     "evidence": "(a) §0.1 row: '`risk_rules.json` already carries the committed M4 additions: 7 integer-0 caps + `risk.short_selling.enabled:false` + `risk.universe:{}` ... | `config/risk_rules.json:1-19`' under the header '(file:line at `21b006f`)' — but `git show 21b006f:config/risk_rules.json` has only 3 caps and no `risk` block (10 lines); the additions exist only as an uncommitted working-tree modification (git status: 'M config/risk_rules.json'), so they are not 'committed' at the cited revision. (b) §0.1 row: 'M4 build IN FLIGHT under `scripts/agent/risk/` (`reasons.py`, `account_state.py` exist at HEAD)' — scripts/agent/risk/ is untracked ('?? scripts/agent/risk/'), i.e. not at HEAD; the full 12-file build now exists in the working tree. (c) §0.1 cites `config/agent_rules.json:2-10,24-27` for `signal.spread_bps_max=\"50\"`, which is at config/agent_rules.json:23 (all cited VALUES are correct).",
+     "proposed_fix": "Reword the §0.1 header/rows to distinguish 'at 21b006f' facts from 'in the M4 working-tree build (to be committed before M5 starts)' facts, make the M5 build precondition explicit (M4 build + risk_rules.json additions landed/committed), and correct the agent_rules.json range to 2-10,23-27."
     }
    ],
    "overall_verdict": "ready_after_fixes"

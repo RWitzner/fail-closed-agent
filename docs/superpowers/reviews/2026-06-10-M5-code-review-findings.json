@@ -1,6 +1,6 @@
 {
   "artifact": "M5 paper-exec — post-build adversarial CODE review (5 repro-gated read-only lenses)",
-  "target": "the M5 build at HEAD f15c3ec (1513 tests); fixes committed at ad14cf6 (1520 tests)",
+  "target": "the M5 build at HEAD 39231bf (1513 tests); fixes committed at a11a947 (1520 tests)",
   "date": "2026-06-10",
   "method": "5 independent read-only lenses (safety, execution-correctness, determinism/journal, contract-conformance, lifecycle/edge). Every finding repro-gated: a ran python snippet or an exact step sequence with file:line. Determinism + execution-math lenses returned ZERO defects. All 6 defects below fixed TEST-FIRST.",
   "outcome": "6 defects fixed (1 high, 1 major, 4 minor/low/hardening). Verdict after fixes: M5 DONE.",

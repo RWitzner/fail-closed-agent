@@ -7,7 +7,7 @@
 > (`2026-06-09-M2-market-state-contract.md`) in granularity: module-by-module APIs, code skeletons, frozen
 > vocabularies, fixtures, and a test→invariant map. The build agent follows it without relitigating.
 >
-> **Branch:** `m3-signal` (off `main` @ `a82be6d`). Baseline suite: 532 tests green.
+> **Branch:** `m3-signal` (off `main` @ `e19118f`). Baseline suite: 532 tests green.
 
 ## 0. Scope, ground rules, verified repo facts
 
@@ -42,7 +42,7 @@ gates/`can_open()`, backtest gate, directional strategies, online learning, any 
   mixed-form boundary cases (equal instants in different forms compare equal; a watermark
   `…00.500000Z` vs as_of `…00Z` is INELIGIBLE).
 
-**Verified repo facts this contract builds on (file:line at `a617295`):**
+**Verified repo facts this contract builds on (file:line at `7902677`):**
 
 | Fact | Source |
 |---|---|
@@ -962,7 +962,7 @@ Every S-invariant (S1–S4, S6) has at least one named test above; the build is 
 - Parent: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md` §5 (Tier 3/4), §7 (data model), §8
   (safety table).
 - M2 contract (structure + conventions precedent): `docs/superpowers/specs/2026-06-09-M2-market-state-contract.md`.
-- Repo facts: §0 table (file:line verified at `a617295`).
+- Repo facts: §0 table (file:line verified at `7902677`).
 
 ## P. Revision log (rev 2, 2026-06-09 — 4-lens critic pass, 52 findings applied)
 

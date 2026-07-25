@@ -1,6 +1,6 @@
 ## M1 Tier-1 (Offline Data Tier) — FROZEN CONTRACT
 
-**Status:** FROZEN (revised post-critique, 2026-06-09). HEAD 70115f8.
+**Status:** FROZEN (revised post-critique, 2026-06-09). HEAD df42d83.
 
 A build agent handed only this document + the repo can TDD any one component below without guessing an interface.
 
@@ -8,11 +8,11 @@ A build agent handed only this document + the repo can TDD any one component bel
 
 ---
 
-### 0. Scope, ground rules, repo facts (verified against HEAD `70115f8`)
+### 0. Scope, ground rules, repo facts (verified against HEAD `df42d83`)
 
 **Offline-complete only.** No network, no credential reads. Every module here keeps `tests/agent/test_no_network_no_creds.py` green: after importing any M1 module, `"databento"` and `"alpaca"` MUST NOT be in `sys.modules`, and no `socket.socket` is constructed. The credentialed (tier-2) path exists only as a stub that raises `NotImplementedError` and is never reached by an offline test.
 
-**Verified repo facts (read at HEAD `70115f8`, M0 harden round 2, 129 tests green):**
+**Verified repo facts (read at HEAD `df42d83`, M0 harden round 2, 129 tests green):**
 - `scripts/recorder/` does **not** exist yet — this is from-scratch. You MUST create `scripts/recorder/__init__.py` (empty) and `tests/recorder/__init__.py` (empty) so `recorder.*` and `tests.recorder.*` import. (`conftest.py` and `tests/lib/__init__.py` already exist.)
 - Import root: `tests/__init__.py:11-14` and repo-root `conftest.py` prepend `<repo>/scripts` to `sys.path`. So `scripts/recorder/event.py` imports as `from recorder.event import ...` and `scripts/agent/...` as `from agent... import ...`. Run tests with `python3 -m unittest discover -s tests -p 'test_*.py' -t .` (the `-t .` is mandatory).
 - The M0 transport seam (`scripts/agent/marketdata/base.py:11-15`) is `@runtime_checkable` Protocol `MarketDataTransport` (decorator at `:11`, class at `:12`) with a single member: `def stream(self, symbols) -> AsyncIterator[bytes]` (`:13`). **`FakeTransport` (`tests/lib/fakes.py:9-18`) implements `stream` as an `async def` generator** (`async def stream(self, symbols):` at `:15`, then `yield message`) and the contract test (`tests/agent/test_marketdata_transport.py:9-13`) consumes it with `async for msg in transport.stream(symbols)`. **`isinstance(x, MarketDataTransport)` is satisfied by structural presence of a `stream` attribute** (`test_marketdata_transport.py:17`) — `FakeTransport` is NOT a Protocol subclass. ⇒ `DatabentoTransport.stream` MUST be an `async def` generator (or return an async iterator); declaring it `async def ... yield` is the canonical mirror.
@@ -975,7 +975,7 @@ Per the 2026-06-09 access constraint, M1's tier-2 stop-condition is SPLIT. The e
 
 ---
 
-### References (file:line evidence, re-verified at HEAD `70115f8`)
+### References (file:line evidence, re-verified at HEAD `df42d83`)
 - `scripts/agent/serializer.py:27-29,40-43,42,47-50,53-55` — float-reject, Decimal-as-string, non-finite-reject, `dumps`, `row_hash` (the only canonicalization/hash path M1 reuses).
 - `scripts/agent/journal.py:21,24,28-59,74,99,110,113-114,116,120,126,128` — `_RESERVED`, `JournalCorruption`, replay/tail rule, per-path shared seq+lock, tail repair, `append`, collision raise, seq stamp, row hash, single `fh.write`.
 - `scripts/agent/marketdata/base.py:11-15` — `@runtime_checkable MarketDataTransport` (`:11` decorator, `:12` class), `stream -> AsyncIterator[bytes]` (`:13`).

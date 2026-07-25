@@ -595,7 +595,7 @@ is untouched). The dev-window result is descriptive context only; the screen alo
 ## Verification Before Any Next Step
 
 - Repo on `main`, clean tree; run gates `false`; `artifacts/backtests/` = `.gitkeep` only; offline suite green
-  (2000 tests at HEAD `d0cc87f` / rev-2 commit `f85d4c0`; pin the commit so the count stops being a moving
+  (2000 tests at HEAD `c6f0da8` / rev-2 commit `b6dffa7`; pin the commit so the count stops being a moving
   target).
 - This packet has passed the rev-2 multi-lens critique AND the rev-3 GPT review (verdict:
   RECONSIDER-EXPERIMENT + five blockers, all applied here). **The open item is Robin's ROUTING CHOICE:**
@@ -611,8 +611,8 @@ is untouched). The dev-window result is descriptive context only; the screen alo
 
 ## Revision History
 
-- **Rev 1 (2026-07-10, `ed557ce`):** single-pass draft on Robin's mandate.
-- **Rev 2 (2026-07-10, `f85d4c0`):** first adversarial pass — 5 read-only review lenses; 8 blockers + ~23
+- **Rev 1 (2026-07-10, `87867fb`):** single-pass draft on Robin's mandate.
+- **Rev 2 (2026-07-10, `b6dffa7`):** first adversarial pass — 5 read-only review lenses; 8 blockers + ~23
   majors + ~10 minors applied (canonical PIT rule; CIK-first identity mapping; ADV basis; frames barred; ROA
   for ROE; split-adjusted shares; monthly-consistency gate; metric-key verifiability; own-new-verifier
   posture; hypothesis hash-binding; author-hindsight concession; financials/REITs exclusion; benchmark

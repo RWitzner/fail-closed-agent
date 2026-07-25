@@ -32,7 +32,7 @@ All claims are code- or artifact-cited; re-verify against HEAD before acting.
 
 - **M7c two-failure-mode null (what this experiment responds to).** `reports/m7_historical_runs/2026-03-10-clean-rs-v1/summary.json`: `p95_realism_gap_bps = 29.817444`, `max_single_fill_divergence_bps = 97.484375`. Net −$839.68, PF 0.55, `active_pnl_usd` −$120.65 vs `exposure_matched_midbar_v1`, `avg_trade_bps < 0`, on interval `1m` / horizon `30m`, top-2 equal-notional long, 10-symbol universe, 21 sessions, 1144 trades. Breadth was broad (10 symbols traded, max 12.3% of legs / 16.8% of net-positive PnL — no concentration breach), so the null is broad, not a single-name artifact.
 - **Fix-A contract skew + the like-for-like baseline (2026-07-02).** The staged clean-rs-v1 quotes predate the
-  fix-A `ts_event` session-membership rule (`19786cf`) and no longer pass the HEAD validator (the 102
+  fix-A `ts_event` session-membership rule (`ba1b554`) and no longer pass the HEAD validator (the 102
   event-outside-session rows). The fix-A-compliant rerun — rows re-filtered by the fix-A rule, manifest rebuilt
   with the committed `build_cross_sectional_input_manifest` (manifest_hash `90866e9021c477285d6267aaa27ac696bdd8d079a0d95b204994006ebed58a5d`),
   run through the committed harness — gives **1147 trades, net −$858.01, active −$111.51 vs
@@ -130,7 +130,7 @@ Justification: (a) the experiment's explicit purpose is to ISOLATE horizon — c
 
 ## Strategy Shape
 
-**Unchanged: `relative_strength.long_only_proxy_v1`.** The pure cross-sectional ranking + proxy candidate construction + the multi-symbol same-timestamp decision harness (`run_historical_cross_sectional_backtest`) are reused exactly as built and reviewed in M7c (`b9a8756`):
+**Unchanged: `relative_strength.long_only_proxy_v1`.** The pure cross-sectional ranking + proxy candidate construction + the multi-symbol same-timestamp decision harness (`run_historical_cross_sectional_backtest`) are reused exactly as built and reviewed in M7c (`6ceb4c0`):
 
 - Rank the valid universe by the existing point-in-time relative-strength feature; **long top 2** with equal per-leg notional; close on the predeclared deterministic horizon; reuse the single-leg fill/exit machinery (`_simulate_historical_long_trade`) unchanged; no-overlap per symbol; both long legs aggregate into one `(strategy_id, rules_hash, data_pin)` v2 artifact.
 - **No short side, no multi-leg basket atomicity, no locate/SSR.** Phase 2 of M7c remains conditional and out of scope here.
@@ -224,7 +224,7 @@ The two-family search budget is already spent (momentum = family 1 nulled; relat
 
 Before this packet is acted on (and again before any future code/run loop), verify the expected clean state:
 
-- The repo is on **`main`** at the commit introducing the current packet rev (rev 1 = `013f9b6`; the M7 stack was fast-forward-merged into `main` 2026-06-26 at `19786cf`, docs-synced `0e7d136`). **State explicitly whether M7d runs on `main` or on a fresh working branch off `main`** (recommended: a fresh branch off `main`), and reconcile any "nothing merged to main" staleness in `CLAUDE.md` / memory before starting.
+- The repo is on **`main`** at the commit introducing the current packet rev (rev 1 = `676bf3e`; the M7 stack was fast-forward-merged into `main` 2026-06-26 at `ba1b554`, docs-synced `9271296`). **State explicitly whether M7d runs on `main` or on a fresh working branch off `main`** (recommended: a fresh branch off `main`), and reconcile any "nothing merged to main" staleness in `CLAUDE.md` / memory before starting.
 - `git status` is clean; no uncommitted edits to `paper_phase_criteria.py`, the pinned criteria constants, the `verify_artifact` OPTIONAL provenance allow-set, or any config gate. Confirm those are byte-for-byte unchanged on HEAD.
 - `artifacts/backtests/` contains **only** `.gitkeep` (no reviewed artifact verifies `ok`).
 - `config/agent_rules.json` and `config/risk_rules.json` run-gates remain `false` (`agent_rules.enabled`, `paper_trading.enabled`, `live_trading.enabled`); the short-side disablement remains in force.

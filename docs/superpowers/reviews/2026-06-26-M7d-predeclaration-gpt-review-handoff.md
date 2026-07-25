@@ -57,9 +57,9 @@ fresh fixed holdout are all present.
 ## Repo state (as of this handoff)
 
 - Branch: **`main`** (the M7 stack was fast-forward-merged 2026-06-26). HEAD = the commit that introduces the
-  current packet rev (rev 1 = `013f9b6`; rev 2 = the 2026-07-02 review/fix commit; `git log -1`). Prior context:
-  `0e7d136` (docs-sync: merge-to-main DONE) on top of `19786cf` (M7 tip; the 4 GPT-review fixes from the M7c
-  null review). **`main` was at M2 (`a82be6d`) before the 2026-06-26 FF merge.**
+  current packet rev (rev 1 = `676bf3e`; rev 2 = the 2026-07-02 review/fix commit; `git log -1`). Prior context:
+  `9271296` (docs-sync: merge-to-main DONE) on top of `ba1b554` (M7 tip; the 4 GPT-review fixes from the M7c
+  null review). **`main` was at M2 (`e19118f`) before the 2026-06-26 FF merge.**
 - Offline suite: **1846 tests green** — `python3 -m unittest discover -s tests -p 'test_*.py' -t .`
   (the `-t .` is required; modules import as `agent.*` / `recorder.*` from `scripts/`).
 - Run gates committed `false`; `artifacts/backtests/` holds only `.gitkeep`; no production artifact written.

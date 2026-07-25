@@ -8,7 +8,7 @@ Date: 2026-06-13
 - Input tier: `EQUS.MINI:bbo-1m`
 - Window: `2026-04-09T13:30:00` to `2026-05-08T20:00:00`
 - Rules hash: `a4298880ef6136f69a627c62ebc002d9c2c85f7d1e7ae5f3d5f3e96647c06bf6`
-- Builder commit: `a69438ca9e3ee42bdff697e80abb49c884d8abae`
+- Builder commit: `45c62fda157fadbfbb21bf7fa27eb124da9a0cd8`
 - Symbols: `AAPL, MSFT, NVDA, AMZN, META, GOOGL, TSLA, AVGO, COST, NFLX`
 - Contract path: `agent.backtest_historical.write_m7_historical_artifact`
 - Reviewable local evidence summary:

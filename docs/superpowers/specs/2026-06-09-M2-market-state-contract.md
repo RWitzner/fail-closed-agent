@@ -1,11 +1,11 @@
 # M2 (Market-state) — BUILT, HARDENED, GREEN
 
-**Status:** BUILT + HARDENED — implementation commits `4f5b74e`, `208105d`, `3667b88`, plus the M2 closeout hardening patch; 532-test suite green; committed gates OFF.
-**Verified baseline for original contract:** `3e270eb` (M1 tier-1 + tier-2(2a) green, 395 tests, gates OFF)
+**Status:** BUILT + HARDENED — implementation commits `4cfb270`, `2456068`, `1e0b255`, plus the M2 closeout hardening patch; 532-test suite green; committed gates OFF.
+**Verified baseline for original contract:** `a563b4a` (M1 tier-1 + tier-2(2a) green, 395 tests, gates OFF)
 **Style/format anchor:** `docs/superpowers/specs/2026-06-09-M1-tier1-contract.md`
 **Scope decisions confirmed by Robin (2026-06-09):** `OPEN_CLOSE_BUFFER_S=0` (OFF); live CA CONFIRMED-clear DISABLED until upstream independence is human-verified (see §M).
 
-A build agent handed only this document + the repo can TDD any one component below without guessing an interface. Every reuse claim cites a real `file:line` read at HEAD `3e270eb`.
+A build agent handed only this document + the repo can TDD any one component below without guessing an interface. Every reuse claim cites a real `file:line` read at HEAD `a563b4a`.
 
 > **Polymarket caveat (verified):** spec §15 names `scripts/auto_trader/market_status.py` / `market_status_cache.py` — these **DO NOT EXIST in this repo** (`ls scripts/` → no `auto_trader/`). They are the conceptual pattern ONLY. This contract specifies the M2 pattern FULLY from scratch; a build agent has only this contract + this repo.
 
@@ -21,7 +21,7 @@ A build agent handed only this document + the repo can TDD any one component bel
 
 **Net-new modules** (all under `scripts/agent/`, which already imports via the `tests/__init__.py` + `conftest.py` shim): `market_calendar.py`, `market_state.py`, `market_state_cache.py`, `corporate_actions.py`, `status_ledger.py`, `session_liveness.py`. **Net-new fixture dirs:** `tests/fixtures/calendar/`, `tests/fixtures/corporate_actions/`, `tests/fixtures/market_state/`. None exist today.
 
-### Verified repo facts (read at HEAD `3e270eb`)
+### Verified repo facts (read at HEAD `a563b4a`)
 
 - **ONE canonicalization path** = `agent.serializer.dumps`/`row_hash` (`serializer.py:47,53`): `dumps(row)` runs `_reject_floats(row)` then `json.dumps(row, sort_keys=True, separators=(",",":"), default=_default)`. `_reject_floats` (`serializer.py:27-36`) recursively raises `ValueError("float not allowed in serialized rows; use Decimal")` (`:29`) on ANY float in dict keys/values/list/tuple. `_default` (`serializer.py:39-44`) renders a **finite** `Decimal` via `str()`, raises on a non-finite Decimal (`:42`), and raises `TypeError(f"type not serializable: {type(obj).__name__}")` (`:44`) on anything else — **including a `frozenset`/`set`**. `row_hash` (`serializer.py:53-55`) = sha256 hex of `dumps(row)`. **M2 adds NO new hash/serialize routine.**
 - Money newtypes `BrokerUSD`/`ModeledUSD` are distinct `Decimal` subclasses (`serializer.py:15-24`); `as_broker_usd(value)` raises `TypeError("broker ledger field requires BrokerUSD")` unless `value` is `BrokerUSD` (`serializer.py:58-61`). **`BrokerUSD` is a USD MONEY type, not a share-quantity type** — `OrderIntent.qty` is a plain `Decimal` (`broker/base.py:21,29`). M2's broker-adjust detector compares a plain **Decimal share count**, never `BrokerUSD`.
@@ -899,7 +899,7 @@ The provider converts `*_et` via zoneinfo construct-in-ET-then-`astimezone(UTC)`
 
 ---
 
-## I. Conventions-to-mirror table (with `file:line` source pointers, verified at HEAD `3e270eb`)
+## I. Conventions-to-mirror table (with `file:line` source pointers, verified at HEAD `a563b4a`)
 
 | Convention (M2 must mirror) | Source pointer | M2 enforcement point |
 |---|---|---|
@@ -1119,7 +1119,7 @@ restriction while preserving the no-order/no-token boundary.
 
 ---
 
-## O. References (file:line evidence, verified at HEAD `3e270eb`)
+## O. References (file:line evidence, verified at HEAD `a563b4a`)
 
 - Serializer / hash / money: `scripts/agent/serializer.py:15-24,27-44,47-55,58-61`
 - Journal append / reserved / replay / per-stream seq: `scripts/agent/journal.py:21,28-59,70-81,99-108,110-129`

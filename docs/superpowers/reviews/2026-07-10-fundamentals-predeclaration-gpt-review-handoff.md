@@ -88,7 +88,7 @@ years-long forward clock, parking the line is the rational choice.
 
 ## Repo state (as of this handoff)
 
-- Branch **`main`**, HEAD `d0cc87f` (rev-1 packet committed `ed557ce`; the two later commits are today's
+- Branch **`main`**, HEAD `c6f0da8` (rev-1 packet committed `87867fb`; the two later commits are today's
   Alpaca-IEX feed verification fixes, unrelated to this line).
 - Offline suite: **2000 tests green** — `python3 -m unittest discover -s tests -p 'test_*.py' -t .` (`-t .`
   required).
@@ -242,7 +242,7 @@ Two traps are load-bearing and unique to this line — attack them first:
 
 - Autonomous, paper-first, fail-closed US-equities agent. Hard posture: NO real-money orders; run gates committed false; live needs two-key arming; tests make no network calls / no credential reads. Authoritative design: docs/superpowers/specs/2026-06-08-stocks-agent-design.md; state + safety rules: CLAUDE.md, PLAN.md.
 - History: two intraday families nulled clean on the L1 1-minute substrate (momentum; relative strength — M7c broad null on a clean window), the two-family stop rule fired, and the sanctioned intraday substrate experiment (M7d, longer horizon) is authorized and awaiting its fresh holdout (~2026-07-14). THIS packet is a SEPARATE line under a fresh mandate scoped to drafting + review only; it consumes no intraday budget and is authorized to build/run NOTHING yet.
-- Repo on `main`, HEAD d0cc87f, offline suite 2000 tests green via `python3 -m unittest discover -s tests -p 'test_*.py' -t .`.
+- Repo on `main`, HEAD c6f0da8, offline suite 2000 tests green via `python3 -m unittest discover -s tests -p 'test_*.py' -t .`.
 
 ## The artifact to review
 

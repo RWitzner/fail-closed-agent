@@ -12,7 +12,7 @@ comes back, follow the "Acting on GPT's findings" protocol below.
 
 ## Repo state (as of this handoff)
 
-- Branch: `codex/m7-backtest-gate`. HEAD = `214850c`. **47 commits ahead of `main`;
+- Branch: `codex/m7-backtest-gate`. HEAD = `eddbe28`. **47 commits ahead of `main`;
   nothing merged to main.** Stack: `m2-market-state → m3-signal → m6-reconcile →
   codex/m7-backtest-gate`.
 - Offline suite: **1762 tests green** — `python3 -m unittest discover -s tests -p 'test_*.py' -t .`
@@ -21,21 +21,21 @@ comes back, follow the "Acting on GPT's findings" protocol below.
   artifact written. `.secrets/databento.json` = historical-only Databento key (works;
   full-window cost of the run below was ≈ $0.03).
 
-### M7c commit list (review range `b637287..HEAD`)
+### M7c commit list (review range `8c59c8f..HEAD`)
 
 ```
-214850c docs(m7c): record Robin's explicit STOP on the autonomous edge search
-575b18a docs(m7c): record clean-window NULL / NO-GO -> substrate decision triggered
-dd2f2bc fix(m7c): drop bbo-1m records with UNDEF matching-engine timestamp in live adapter
-983f209 feat(m7c): wire credentialed bbo-1m live pull (verified against live BBOMsg) + RTH filter
-5e1b0d3 docs(m7c): sync state to historical-backfill builder built + window/tier-2b plan
-e45c2c0 feat(m7c): historical backfill + cross-sectional input-manifest builder (offline-complete)
-98e88c8 docs(m7c): sync CLAUDE.md/PLAN.md to step-5 artifact plumbing built+committed
-b9a8756 feat(m7c): step-5 multi-symbol manifest + cross-sectional artifact writer + CLI
-869e20c feat(m7c): wire phase-1 multi-symbol cross-sectional backtest harness
-fbadeac docs(m7c): sync CLAUDE.md/PLAN.md state to phase-1 proxy build
-3a1a7f2 feat(m7c): phase-1 long-only relative-strength proxy (TDD, 1702 tests green)
-b637287 docs(m7c): revise relative-strength packet to proxy-first (rev 2)
+eddbe28 docs(m7c): record Robin's explicit STOP on the autonomous edge search
+ea2b9cd docs(m7c): record clean-window NULL / NO-GO -> substrate decision triggered
+68f0538 fix(m7c): drop bbo-1m records with UNDEF matching-engine timestamp in live adapter
+dbc2c2f feat(m7c): wire credentialed bbo-1m live pull (verified against live BBOMsg) + RTH filter
+53a589d docs(m7c): sync state to historical-backfill builder built + window/tier-2b plan
+0e4848b feat(m7c): historical backfill + cross-sectional input-manifest builder (offline-complete)
+3121595 docs(m7c): sync CLAUDE.md/PLAN.md to step-5 artifact plumbing built+committed
+6ceb4c0 feat(m7c): step-5 multi-symbol manifest + cross-sectional artifact writer + CLI
+1465566 feat(m7c): wire phase-1 multi-symbol cross-sectional backtest harness
+cb71ab2 docs(m7c): sync CLAUDE.md/PLAN.md state to phase-1 proxy build
+7aa628e feat(m7c): phase-1 long-only relative-strength proxy (TDD, 1702 tests green)
+8c59c8f docs(m7c): revise relative-strength packet to proxy-first (rev 2)
 ```
 
 ### Files under review
@@ -159,7 +159,7 @@ This system will eventually gate real capital. Two things are on the line right 
 
 ## Exactly what to review
 
-The M7c body of work and the null verdict it produced. Commit range: `b637287..HEAD` (HEAD = `214850c`). Read these in full:
+The M7c body of work and the null verdict it produced. Commit range: `8c59c8f..HEAD` (HEAD = `eddbe28`). Read these in full:
 
 - `scripts/agent/strategies/relative_strength.py` — the phase-1 proxy: cross-sectional rank of the valid decision set, select top `TOP_N=2` long, equal `PAPER_NOTIONAL_USD=1000` notional, whole-share floor, one BUY `Candidate`/leg, no short side. `rs_score = rank(momentum_21) + 0.5*rank(ema_gap_9_21) + 0.5*rank(sma_gap_21_50) + 0.25*rank(rsi14_centered) - 0.25*rank(realized_vol_21)`.
 - `scripts/agent/backtest_historical.py` — the multi-symbol harness `run_historical_cross_sectional_backtest` (same-timestamp assembly across the universe, top-2, 30-bar horizon, entry = decision+1m with M7 "quote-B" latency, no-overlap per symbol, both legs aggregated under ONE artifact, the `universe_equal_weight_long_v1` exposure-matched benchmark); `validate_historical_cross_sectional_manifest`; `write_m7_historical_cross_sectional_artifact`; the shared single-symbol path (`run_historical_backtest`, `_simulate_historical_long_trade`, `validate_historical_input_manifest`) and the extracted helpers (`_parse_calendar_block/_parse_blackout_dates/_parse_execution_block/_guard_production_artifact_dir`).

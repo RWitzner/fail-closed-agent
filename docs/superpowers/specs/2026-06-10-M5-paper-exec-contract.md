@@ -13,9 +13,9 @@
 > APIs, code skeletons, frozen vocabularies, journal row shapes, deterministic ids, fixtures, and a
 > test→invariant map. A build agent TDDs from this without relitigating.
 >
-> **Branch:** `m3-signal` @ `7e0a8ad` — the M4 build is now COMMITTED (`7bf8df2`, 896 tests green)
+> **Branch:** `m3-signal` @ `52bf050` — the M4 build is now COMMITTED (`b19c2d4`, 896 tests green)
 > and `scripts/agent/risk/` is the REAL API this contract builds against (the M4 contract remains the
-> spec authority; M5C-6). Baseline suite: 896 tests green at `7e0a8ad` (M5 adds its own).
+> spec authority; M5C-6). Baseline suite: 896 tests green at `52bf050` (M5 adds its own).
 
 ## 0. Scope, ground rules, verified facts
 
@@ -61,7 +61,7 @@ shorts (post-M5 / short milestone), `AlpacaLiveBroker` + two-key consumption (M8
   broker number wins (M6 reconciles and emits adjustment rows); the modeled fill is a label and never
   back-voids or overrides a `broker_fill` row.
 
-### 0.1 Verified repo facts this contract builds on (file:line at `7e0a8ad` — M4 committed; M5C-6)
+### 0.1 Verified repo facts this contract builds on (file:line at `52bf050` — M4 committed; M5C-6)
 
 | Fact | Source |
 |---|---|
@@ -95,11 +95,11 @@ shorts (post-M5 / short milestone), `AlpacaLiveBroker` + two-key consumption (M8
 | Committed offline data fixtures: `equs_mini_tbbo_sample.jsonl` (L1 tbbo), `mbp10_depth_sample.jsonl` (L2 depth), sub-dollar sample, out-of-order/gap samples | `tests/fixtures/databento/` |
 | Committed calendar fixtures: `nyse_2026_schedule.json` (8 scattered dates) + `nyse_margin_window_v1.json` (**2026-06-01…07-31 contiguous** — covers the 2026-06-09 tbbo fixture dates; M4 §L) | `tests/fixtures/calendar/` |
 | `agent_rules.json`: gates false; `universe.symbols:[]`; **`latency_budget_ms: 250` is a top-level JSON int — `min()`-merge polarity is INVERTED for it** (lowering it loosens realism) ⇒ code floor (FD-M5-10); `signal.refresh_cadence_ms="1000"`, `signal.quote_staleness_ms_max="2000"`, `signal.spread_bps_max="50"` | `config/agent_rules.json:2-10,23-27` |
-| `risk_rules.json` carries the M4 additions **committed at `7bf8df2`**: 7 integer-0 caps + `risk.short_selling.enabled:false` + `risk.universe:{}` — M5 does NOT edit this file (fees are code constants, FD-M5-15). M5 build precondition: the M4 build + these config additions are committed (TRUE at `7e0a8ad`; M5C-6) | `config/risk_rules.json:1-19` |
+| `risk_rules.json` carries the M4 additions **committed at `b19c2d4`**: 7 integer-0 caps + `risk.short_selling.enabled:false` + `risk.universe:{}` — M5 does NOT edit this file (fees are code constants, FD-M5-15). M5 build precondition: the M4 build + these config additions are committed (TRUE at `52bf050`; M5C-6) | `config/risk_rules.json:1-19` |
 | `requirements.txt`: `databento==0.79.0` uncommented + the header note reserving the M5 `alpaca-py` pin | `requirements.txt:1-8` |
 | Test doubles: `FakeClock(now_ms/advance)`; `SpyBroker` records every attempt at entry (`self.calls`) then `require_token` | `tests/lib/fakes.py:83-114` |
 | Canary + purity test patterns to EXTEND (never duplicate): committed-config canary at the broker boundary; socket-block + `sys.modules` purity + AST module-scope import guard | `tests/agent/test_config_canary.py:23-64`, `tests/agent/test_no_network_no_creds.py:7-166` |
-| M4 build COMMITTED at `7bf8df2` under `scripts/agent/risk/` (12 modules; 896 tests green at HEAD `7e0a8ad`) — the CODE is now the real API and matches the M4 contract (rev 2 + §R harden log); where this contract cites `scripts/agent/risk/*` line numbers they were re-verified at HEAD (M5C-6) | `scripts/agent/risk/` |
+| M4 build COMMITTED at `b19c2d4` under `scripts/agent/risk/` (12 modules; 896 tests green at HEAD `52bf050`) — the CODE is now the real API and matches the M4 contract (rev 2 + §R harden log); where this contract cites `scripts/agent/risk/*` line numbers they were re-verified at HEAD (M5C-6) | `scripts/agent/risk/` |
 
 **M4 contract API consumed here (authority: `2026-06-09-M4-risk-core-contract.md`):**
 `RiskEngine.can_open(candidate, portfolio, account, *, market_state, marks, kill_state, kill_generation,
@@ -1925,7 +1925,7 @@ M5C-S8+M5C-B3 resolved jointly):
 | M5C-T4 | major | `status_provider` seam + `status_script` builder + `--status-script` (§N, §M.3 step 2, §O.1, §Q, §R 14) |
 | M5C-T5 | major | Golden discipline pinned: `GOLDEN_RUN_ID="run-m5-golden-v1"`, deterministic row clock, regeneration helpers (§Q) |
 | M5C-T7 | major | `cum_notional_after = cur.filled_qty × cur.filled_avg_price`; id home = `record_broker_fill`; operand journaled (§P.3, §P.1, §P.2, §F, §R 5/6) |
-| M5C-6 | minor | §0.1 re-pinned at `7e0a8ad` (M4 committed); citation range fixed; build precondition explicit (header, §0.1) |
+| M5C-6 | minor | §0.1 re-pinned at `52bf050` (M4 committed); citation range fixed; build precondition explicit (header, §0.1) |
 | M5C-S7 | minor | Proxy declared NOT a Broker-Protocol member; no `kind`; BROKER_KINDS unchanged (§H.2) |
 | M5C-S8 / M5C-B3 | minor | Injected `instrument_ids` map on proxy AND FakeBroker; unmapped ⇒ `no_price_for_cap` / never_fill (§H.1, §H.2, §M.6, §R 15) |
 | M5C-S9 | minor | Step-7 gates pre-check removed (refusals journaled at `can_open` rung 1); mint-reaching canary variant (§M.3, §R 12) |
@@ -1971,5 +1971,5 @@ residue, fixed). Five NEW revision-introduced defects found and applied:**
   `docs/paper-trading`, `reference/postorder`, `docs/regulatory-fees`); FINRA Schedule A §1 TAF rates
   (verified 2026-06-10 — §0.2 F1); SEC Section 31 fee rate $27.80/million (FY2025 advisory; pinned
   with re-verify duty — §0.2 F2); `alpaca-py==0.43.4` (§0.2 F3).
-- Repo facts: §0.1 table (file:line re-verified at `7e0a8ad` — M4 committed — by the rev-2 pass).
+- Repo facts: §0.1 table (file:line re-verified at `52bf050` — M4 committed — by the rev-2 pass).
 

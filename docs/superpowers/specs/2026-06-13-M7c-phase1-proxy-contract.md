@@ -84,7 +84,7 @@ investment: *does cross-sectional residual signal exist on this universe/substra
 
 **Review outcome:** the implementation was independently reviewed pre-commit (contract-conformance + adversarial
 lenses, both APPROVE, no blocking findings). The determinism (symbol tie-break) and duplicate-symbol (positional
-score keying) hardening above was applied in response to the adversarial findings. Built and committed in `3a1a7f2`
+score keying) hardening above was applied in response to the adversarial findings. Built and committed in `7aa628e`
 (1702 tests green).
 
 ## 4. RED tests (`tests/agent/test_relative_strength_proxy_m7c.py`)

@@ -2,7 +2,7 @@
 
 > **Status:** Review-hardened offline-complete contract, 2026-06-13. Historical reviewed artifact is deferred.
 > **Parent:** `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
-> **Build base:** `m6-reconcile` closeout (`d83f392`, 1639-test M6 closeout). M7 is stacked after M6.
+> **Build base:** `m6-reconcile` closeout (`3a03a41`, 1639-test M6 closeout). M7 is stacked after M6.
 >
 > M7 closes the offline gate/engine/strategy path while keeping production `artifacts/backtests/` empty. A
 > reviewed historical artifact is a separate credentialed tier before the paper edge-validation phase can open.

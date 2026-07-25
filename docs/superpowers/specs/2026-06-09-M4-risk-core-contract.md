@@ -10,7 +10,7 @@
 > skeletons, frozen vocabularies, fixtures, and a test→invariant map. The build agent follows it without
 > relitigating.
 >
-> **Branch:** `m3-signal` @ `f9ec7c6`. Baseline suite: 700 tests green.
+> **Branch:** `m3-signal` @ `21b006f`. Baseline suite: 700 tests green.
 
 ## 0. Scope, ground rules, verified repo facts
 
@@ -42,7 +42,7 @@ milestone), any network/credential call.
   (`mint_reduce_only_token` → `submit_order`) never consults `can_open`, any freshness gate, or any M4
   read. This is structural (import-guard + paired tests), not behavioral.
 
-### 0.1 Verified repo facts this contract builds on (file:line at `f9ec7c6`)
+### 0.1 Verified repo facts this contract builds on (file:line at `21b006f`)
 
 | Fact | Source |
 |---|---|
@@ -1406,7 +1406,7 @@ Alpaca wire shape so the M5 adapter is a pass-through).
   (regulatory-correctness / fail-closed-safety / integration-seams lenses, 2026-06-09).
 - Regulatory: FINRA Regulatory Notice 26-10 — https://www.finra.org/rules-guidance/notices/26-10
   (verified 2026-06-09; §0.2 V1–V10).
-- Repo facts: §0.1 table (file:line verified at `f9ec7c6`).
+- Repo facts: §0.1 table (file:line verified at `21b006f`).
 
 ## Q. Revision log (rev 2, 2026-06-09 — 4-lens critic pass, 50 findings applied)
 

@@ -606,7 +606,7 @@ artifact listing remains only `.gitkeep`.
 - [ ] **Step 3: Perform spec-compliance and code-quality reviews**
 
 Review each Task 1-6 commit against this plan, then review the aggregate diff
-from `a52f9b8` to `HEAD`. Resolve every Critical or Important finding with a new
+from `2ea51db` to `HEAD`. Resolve every Critical or Important finding with a new
 red-green cycle before proceeding.
 
 - [ ] **Step 4: Reconcile volatile status facts only**

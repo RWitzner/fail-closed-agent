@@ -58,8 +58,8 @@ separate prediction-market research workspace (not published; see `docs/method/`
   journal dropping a corrupt complete tail, per-stream seq being per-writer, float qty reaching submit) — all
   fixed test-first and re-probed closed. Token authority now lives in an immutable registry, not the token
   object. Stdlib-only; no network; committed gates OFF.
-- Git history on `main`: spec/review/reconcile docs → charter files → `4230c8f` (M0 feat) → `5e45bf4` (M0 harden)
-  → `70115f8` (M0 harden round 2, 129 tests).
+- Git history on `main`: spec/review/reconcile docs → charter files → `ac83b73` (M0 feat) → `933caf6` (M0 harden)
+  → `df42d83` (M0 harden round 2, 129 tests).
 - **M1 tier-1 contract FROZEN + verified (2026-06-09):** `docs/superpowers/specs/2026-06-09-M1-tier1-contract.md`
   (designed via 3-architect panel → synthesis → critic → revision → independent re-critique = READY-TO-BUILD).
   It pins every module API, the L2 `book_hash` encoding, fixture schemas, and the test→safety-invariant map.
@@ -67,12 +67,12 @@ separate prediction-market research workspace (not published; see `docs/method/`
   subscription (not provisioned). Since live ≡ historical schema, the whole stack builds + verifies on historical
   now; the live feed is deferred. M1 tier-2 therefore splits: **(2a) historical-verified** (runnable now) vs
   **(2b) live-verified** (deferred blocker on the subscription).
-- **M1 tier-1 (offline) BUILT + HARDENED + COMMITTED (`5f9ef97`):** full data tier under `scripts/recorder/`
+- **M1 tier-1 (offline) BUILT + HARDENED + COMMITTED (`5723e4d`):** full data tier under `scripts/recorder/`
   (event/event_row/book_state/book_hash/persistence/replay/reconcile/recorder/status/bar_cache/entitlement) +
   `marketdata/databento.py`, TDD. **366 tests green**, no-network/no-creds clean, golden `book_hash`es stable.
   Six adversarial review rounds (each repro-gated) found **23 confirmed defects — all fixed TDD** (contract items
   C1–C9, D1–D9, E1–E3, F1–F2, G1–G4 appended to the frozen contract; round 6 clean).
-- **M1 tier-2 (2a) historical-verified DONE + COMMITTED (`3f9d7b2`, **378 tests**):** credentialed verifier ran
+- **M1 tier-2 (2a) historical-verified DONE + COMMITTED (`2b72143`, **378 tests**):** credentialed verifier ran
   vs the live Databento Historical API. Verified: L1 = `EQUS.MINI` (tbbo/bbo-1s/bbo-1m/trades/ohlcv-1s/ohlcv-1m/
   definition; NO mbp-10, NO status); L2 depth = `XNAS.ITCH` (mbp-10 = REPLACE-per-record, full post-event top-10
   book; `DBEQ.BASIC` rejected — sparse 1-level; `XNAS.ITCH` single-venue Nasdaq scope noted); status →
@@ -110,9 +110,9 @@ separate prediction-market research workspace (not published; see `docs/method/`
 - **M5 paper-exec: BUILT — all 16 §R test files green (1513 tests, 2026-06-10); adversarial review
   rounds NOT yet run.** Contract path: 3-architect panel → draft → FULL 4-lens critic pass (48
   findings incl. 2 blockers) → rev 2 with all 48 applied (§V log) → independent re-critique (all 48
-  verified + 5 RC defects, applied) → READY-TO-BUILD (`73d3e29`). Findings archive:
+  verified + 5 RC defects, applied) → READY-TO-BUILD (`690434c`). Findings archive:
   `docs/superpowers/reviews/2026-06-10-M5-contract-critic-findings.json`. Build in 6 TDD waves
-  (`72fc789`→`0616c3a`): wave 1 vocab/config/pricing/order-state (1040), wave 2 preflight ladder +
+  (`b791f3d`→`a78a744`): wave 1 vocab/config/pricing/order-state (1040), wave 2 preflight ladder +
   TOCTOU consume + realism/fees + synthetic/gate (1251), wave 3 exec_ledger + alpaca/fake/flatten
   brokers (1358), wave 4 paper_book + replay_feed + run_lock/secrets (1446), wave 5 orchestrator +
   CLI + exec_fixtures (1466), wave 6 E2Es + committed goldens + kill drill + canary/purity (1513).
@@ -120,7 +120,7 @@ separate prediction-market research workspace (not published; see `docs/method/`
   kill-flatten works in every composition (the M5C-1 blocker pin). Build errata logged in wave-5/6
   commit messages (notable: M4 `leg_cap_notional` requires explicit strategy limits — M7 decision
   item; 2 §3 import-row omissions whitelisted in the AST guard).
-  **HARDENED (`ad14cf6`, 1520 tests): 5-lens repro-gated adversarial review (safety/execution/
+  **HARDENED (`a11a947`, 1520 tests): 5-lens repro-gated adversarial review (safety/execution/
   determinism/conformance/lifecycle) — determinism + execution math clean; 6 defects fixed TDD:
   LC-2 (high — kill-with-close-in-flight crash + double-sell risk → retire close task, single
   flatten of record), LC-1/SF-1 (major — over-qty exit crashed the loop → journaled refusal),
@@ -131,7 +131,7 @@ separate prediction-market research workspace (not published; see `docs/method/`
   edge-validation phase before any M8 step** (see "Edge before live" under Locked decisions). Merge-to-main
   **DONE 2026-06-26** (FF of `codex/m7-backtest-gate` into `main`; see the current-state bullet below).
 - **M6 DONE on branch `m6-reconcile` (2026-06-13, 1639 tests green; separate W6 re-review clean).**
-  - **Contract FROZEN rev 6 READY-TO-BUILD, committed `1e96d5d`:**
+  - **Contract FROZEN rev 6 READY-TO-BUILD, committed `8ef8a51`:**
     `docs/superpowers/specs/2026-06-10-M6-reconcile-contract.md` (1556 lines). Path: 3-architect panel
     (correctness/safety/integration) → synthesis (20 disagreements resolved in §1) → 5-lens critic pass
     (48 raw → 34 canonical M6C, 3 blockers) → FOUR independent re-critique rounds (RC-1…RC-14) to
@@ -146,10 +146,10 @@ separate prediction-market research workspace (not published; see `docs/method/`
     `portfolio_unreconciled` can_open reason; passes broker-read-only (no tokens/orders, safe gates OFF);
     exit codes 0/1/2/3; §T items ruled: websocket fills / activities granularity / retry-replace+concurrency /
     journal rotation OUT with owners; SOD/EOD job + PaperBook adjust fold + kill-residual REPORTING in.
-  - **W1 DONE, committed `2c2b6ed` (suite 1574 = 1520 + 54):** vocab/dataclasses/typed boundary +
+  - **W1 DONE, committed `7feb110` (suite 1574 = 1520 + 54):** vocab/dataclasses/typed boundary +
     ReconcileLedger facade (§B.1a validation, v-first/rules_hash-last) + replay + latch fold (FD-M6-6,
     M6C-22, RC-8 residue lifecycle, §B.1b zero state). Builder errata in module docstrings.
-  - **W2 DONE, committed `436f7b0` (suite 1590 = 1574 + 16):** pure diff core in
+  - **W2 DONE, committed `44686f6` (suite 1590 = 1574 + 16):** pure diff core in
     `scripts/agent/broker_reconcile.py` plus §I file-1 cases 2–20/24–26 in
     `tests/agent/test_broker_reconcile.py`. Covers `diff_positions` union/absence/short semantics,
     LIFO adjustment planning, cost tolerance + re-anchoring, deferral/immediate no-plan paths,
@@ -178,7 +178,7 @@ separate prediction-market research workspace (not published; see `docs/method/`
     golden-stability checks proving no automatic `reconcile_alerts.jsonl` stream. Verification:
     W5 targeted block green, affected regression block green, and full suite green
     (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`).
-  - **W6 INITIAL REVIEW FIXES APPLIED + COMMITTED (`483ea34`, suite 1639 = 1636 + 3):** fixed the three
+  - **W6 INITIAL REVIEW FIXES APPLIED + COMMITTED (`8e1f4db`, suite 1639 = 1636 + 3):** fixed the three
     repro-gated review blockers: in-process drift-latch clear now respects dirty journal windows; durable
     detector seeding now happens after `position_adjust` at the reconciled point; multi-lot allocation now feeds
     `diff_positions` newest-first by `position_open` stream `seq`, not `position_id`. Verification:
@@ -269,7 +269,7 @@ separate prediction-market research workspace (not published; see `docs/method/`
   revised sequencing; rev 2 was re-reviewed before commit. It fixes the ordered 10-symbol universe and clean-window
   rule, never labels phase 1 market-neutral, and does not authorize threshold relaxation, production artifact
   writes, paper edge-validation, M8, or gate flips.
-- **M7c phase-1 proxy build (2026-06-13, 1702 tests green, commit `3a1a7f2`):** built the phase-1 gating probe
+- **M7c phase-1 proxy build (2026-06-13, 1702 tests green, commit `7aa628e`):** built the phase-1 gating probe
   `relative_strength.long_only_proxy_v1` (`scripts/agent/strategies/relative_strength.py`) — a pure cross-sectional
   ranking over the valid decision set at one decision instant (rs_score with the packet weights), top-2
   equal-notional whole-share long-only BUY candidates, `do_nothing` below 8 valid symbols, deterministic
@@ -299,9 +299,9 @@ separate prediction-market research workspace (not published; see `docs/method/`
   `tests/agent/test_m7c_cross_sectional_runner.py` (13). Read-only adversarial review passed (adopted: benchmark
   fill/skip counters + qty-floor-to-0 and sparse-symbol edge tests; verified as misreads: the no-overlap inequality,
   the ET-date schedule source, and the fractional benchmark-leg qty). `_market_state`/`_schedule` refactored to
-  blackout-set / session-window helpers with the single-symbol path behavior preserved. Committed `869e20c`.
+  blackout-set / session-window helpers with the single-symbol path behavior preserved. Committed `1465566`.
 - **M7c phase-1 step-5 manifest + cross-sectional artifact writer + CLI (2026-06-26, 1740 tests green, committed
-  `b9a8756`):** built the production-artifact-writer plumbing on top of the harness (packet step 5).
+  `6ceb4c0`):** built the production-artifact-writer plumbing on top of the harness (packet step 5).
   `validate_historical_cross_sectional_manifest` binds ONE hash-bound multi-symbol manifest — predeclared universe
   block + per-symbol `{instrument_id,row_count,quote_rows_sha256}` data binding; universe symbols == symbols-block
   keys == quote-row keys exactly; per-symbol `data_pin` is DERIVED from `manifest_hash:symbol` (never stored → no
@@ -318,9 +318,9 @@ separate prediction-market research workspace (not published; see `docs/method/`
   each independently verified) returned `changes_required`; both must-fixes applied (horizon hash-binding/pass-through;
   bool-as-int / duplicate-symbol / empty-symbols-block / horizon tamper tests). Deferred nice-to-haves: enforce that the
   manifest `calendar.sessions` covers every session date in the quote rows (the harness falls back to 13:30–20:00 for
-  missing dates; tz-derivation from UTC rows is cleaner to add against the real backfill manifest). Committed `b9a8756`.
+  missing dates; tz-derivation from UTC rows is cleaner to add against the real backfill manifest). Committed `6ceb4c0`.
 - **M7c historical backfill + cross-sectional input-manifest builder (2026-06-26, 1761 tests green, committed
-  `e45c2c0`):** new module `scripts/agent/historical_backfill.py` — the data-production half of the credentialed run.
+  `0e4848b`):** new module `scripts/agent/historical_backfill.py` — the data-production half of the credentialed run.
   PURE + offline-complete: `normalize_quote_event(s)` (recorder `QuoteEvent` → canonical quote row),
   `derive_session_windows` / `instrument_ids_from_rows`, `build_cross_sectional_input_manifest` (emits a manifest the
   step-5 validator accepts; per-symbol `quote_rows_sha256` + body `manifest_hash` use the SAME primitives the validator
@@ -336,7 +336,7 @@ separate prediction-market research workspace (not published; see `docs/method/`
   **Window (Robin):** first chose a FORWARD window after 2026-06-13, then — since only ~10 sessions had completed by
   2026-06-26 (a complete 20+-session forward window is not available until ~mid-July) — pivoted to the packet's
   PREFERRED clean window `2026-03-10→2026-04-08` (past → available now, clean → no prior RS metrics).
-- **M7c phase-1 credentialed clean-window run — broad NULL / NO-GO (2026-06-26; tool fix committed `dd2f2bc`; run
+- **M7c phase-1 credentialed clean-window run — broad NULL / NO-GO (2026-06-26; tool fix committed `68f0538`; run
   staged-only):** wired + live-verified the credentialed `bbo-1m` pull (`_live_quote_event_source` → real `databento`
   `timeseries.get_range` → `_dbn_bbo1m_record_to_event_dict` verified against the live `EQUS.MINI` `BBOMsg`: flat
   `*_00` top-of-book, int 1e-9 prices, UNDEF price/timestamp drops, RTH filter; cost ≈ $0.03). Pulled the clean
@@ -380,11 +380,11 @@ separate prediction-market research workspace (not published; see `docs/method/`
   realism-cap failures), NOT L2/MBP-10 (heaviest build) and NOT wider-universe-first. **Next:** predeclare the horizon
   experiment (coarser bars + longer holding, the pinned M7 criteria unchanged) before any run; the credentialed
   pull/run is gated on Robin's separate go. **Merge-to-main DONE 2026-06-26: `codex/m7-backtest-gate`
-  fast-forward-merged into `main` (`main` = `19786cf` = M7 tip; was M2 `a82be6d`; all safety gates verified closed
+  fast-forward-merged into `main` (`main` = `ba1b554` = M7 tip; was M2 `e19118f`; all safety gates verified closed
   first; no remote, locally reversible).**
 - **M7d predeclaration committed + full-project review applied (2026-06-26 → 2026-07-02, 1777 tests at that checkpoint;
   current suite 1988 after the 2026-07-09 correctness wave + the 2026-07-10 paper-live-loop wave):**
-  the longer-horizon packet + GPT-review handoff were committed `013f9b6`
+  the longer-horizon packet + GPT-review handoff were committed `676bf3e`
   (`docs/superpowers/specs/2026-06-26-M7d-longer-horizon-research-packet.md`, C2 = `1m`/`120m` sole decider on a
   fresh fixed-20-session post-2026-06-13 holdout; C1 = `1m`/`60m` descriptive on the snooped window; pinned
   criteria unchanged; both benchmarks gated). A 2026-07-02 full-project review (4 read-only deep-review agents:
@@ -418,7 +418,7 @@ separate prediction-market research workspace (not published; see `docs/method/`
   realism-matched lever and gave the separate go); the only remaining gate is the fresh holdout completing
   ~2026-07-14 (earliest run ~2026-07-15). Paper/M8 blocked; run gates and pinned criteria unchanged.
 
-- **Paper-operational readiness build (2026-07-02, 1846 tests green; commits `9c5590d`…`9d73528`):** closed every
+- **Paper-operational readiness build (2026-07-02, 1846 tests green; commits `e037751`…`1a696a2`):** closed every
   buildable gap between "spine done" and "an autonomous paper session can run", without flipping anything
   (committed gates untouched; S1 canaries green throughout). (1) Kill-switch bounded blindness: >120s of
   continuous non-fresh account reads WITH open positions now trips the new `account_blind_cap` cause
@@ -479,8 +479,8 @@ separate prediction-market research workspace (not published; see `docs/method/`
 - **M0** Skeleton + abstractions + safety spine (stdlib-only; canary, journal, gates, preflight tokens, kill
   switch, charter, dashboard sandbox). ✓ **done** — 129 tests, adversarially hardened.
 - **M1** Data tier (Databento recorder + replay/reconcile + bar cache; dataset matrix pinned + entitlement-verified).
-  ✓ **done** — tier-1 offline (`5f9ef97`, 366 tests, 23 bugs fixed across 6 review rounds) + tier-2 (2a)
-  historical-verified (`3f9d7b2`, 378 tests; L1=`EQUS.MINI`, L2=`XNAS.ITCH` mbp-10 confirmed); tier-2 (2b)
+  ✓ **done** — tier-1 offline (`5723e4d`, 366 tests, 23 bugs fixed across 6 review rounds) + tier-2 (2a)
+  historical-verified (`2b72143`, 378 tests; L1=`EQUS.MINI`, L2=`XNAS.ITCH` mbp-10 confirmed); tier-2 (2b)
   live-verified deferred (live subscription not provisioned).
 - **M2** Market-state (session/halt/LULD/SSR + fail-closed corporate actions; market calendar + session gate).
   ✓ **done on `m2-market-state`** — 532 tests; pure tradability READ only; no order submit/preflight-token mint;
@@ -491,13 +491,13 @@ separate prediction-market research workspace (not published; see `docs/method/`
   ✓ **done on `m3-signal`** — 896 tests; long-only (locate = deny-all stub per spec §14); broker buying
   power = ground truth; committed caps 0; S1/S8/S10 + R9 byte-exact rehydrate test-mapped.
 - **M5** Paper-exec hybrid (Alpaca paper + second-quote preflight + broker/modeled fill separation).
-  ✓ **done on `m3-signal`** (`ad14cf6`, 1520 tests) — contract rev 2 (48+5 findings) → 6 TDD waves →
+  ✓ **done on `m3-signal`** (`a11a947`, 1520 tests) — contract rev 2 (48+5 findings) → 6 TDD waves →
   5-lens adversarial review (6 defects fixed). S1/S8 hold; committed gates OFF. (Built on `m3-signal`; later
   folded into `main` via the 2026-06-26 FF merge of `codex/m7-backtest-gate`.)
 - **M6** Reconcile hardening (SOD/EOD broker reconciliation). ✓ **done on `m6-reconcile`** —
-  contract frozen rev 6 (`1e96d5d`), W1 built (`2c2b6ed`, 1574 tests), W2 built (`436f7b0`,
+  contract frozen rev 6 (`8ef8a51`), W1 built (`7feb110`, 1574 tests), W2 built (`44686f6`,
   1590 tests), W3 built (1599 tests), W4 built (1611 tests), W5 built (1636 tests);
-  W6 initial review blockers fixed+committed (`483ea34`, 1639 tests); separate W6 re-review clean; gates OFF.
+  W6 initial review blockers fixed+committed (`8e1f4db`, 1639 tests); separate W6 re-review clean; gates OFF.
 - **M7** Backtest gate (anti-lookahead) → first paper-eligible directional strategy. ✓ **review-hardened offline
   closeout on `codex/m7-backtest-gate`** (1683 tests after historical-review hardening): v2 artifact gate, backtest engine,
   `directional.momentum_v1`, temp-only fixture builder CLI, criteria runbook, and S9 integration are green.
