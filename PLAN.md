@@ -1,9 +1,17 @@
 # PLAN.md — Stocks trading agent
 
+> **Frozen 2026-07-25 at public release.** This is the internal build log, published as-is because the
+> chronology *is* part of the evidence: it shows criteria being pinned before runs, families being nulled on
+> those criteria, and a written stop rule being applied rather than argued around. It is a working document,
+> not documentation — it uses milestone codes (M0–M8), safety-invariant codes (S1–S10), frozen-decision ids
+> (FD-xx) and local branch names, and its "current status" section stops on 2026-07-10. Nothing after that date
+> was run. For the finished picture read `README.md`, `docs/ARCHITECTURE.md` and `docs/RESULTS.md`.
+
 ## Active purpose
 
-Build an autonomous US-equities trading agent, paper-first but live-like, reusing the Polymarket engineering
-spine. Authoritative design: `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
+Build an autonomous US-equities trading agent, paper-first but live-like, reusing the engineering spine of a
+separate prediction-market research workspace (not published; see `docs/method/`). Authoritative design:
+`docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
 
 ## Current status (2026-07-10)
 

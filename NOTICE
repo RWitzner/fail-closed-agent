@@ -1,0 +1,43 @@
+Autonomous equities trading agent — safety architecture, method, and negative results
+Copyright 2026 Robin Witzner
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+
+This software has never placed a trade with real money. It is published as a
+reference architecture and as a record of two negative research results. It is
+not investment advice and it is not fit for trading. See DISCLAIMER.md.
+
+--------------------------------------------------------------------------------
+
+Trademarks and third-party services
+
+  "Databento" and "Alpaca" are trademarks of their respective owners. This
+  project is not affiliated with, endorsed by, or sponsored by either company.
+  They are named here only because they are the vendors this agent was built
+  against.
+
+  No market data from any vendor is redistributed in this repository. Every
+  committed test fixture is synthetic and is reproducible either from a
+  committed generator or from the specification document that authored it.
+  Recorded quotes, bars, session journals and run reports are excluded by
+  .gitignore and are not part of this distribution.
+
+  Running this software against a vendor's API is subject to that vendor's own
+  terms of service and data licence. Nothing in this repository grants any
+  right to vendor data.
+
+--------------------------------------------------------------------------------
+
+Third-party dependencies
+
+  The offline test suite is standard-library only and requires no installation.
+  The three packages pinned in requirements.txt are imported lazily and are
+  needed only for credentialed paths that are not exercised by the test suite:
+
+    databento           Apache-2.0
+    exchange_calendars  Apache-2.0
+    alpaca-py           Apache-2.0
+
+  No third-party source code is vendored into this repository.

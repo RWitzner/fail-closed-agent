@@ -1,88 +1,34 @@
-# AGENTS.md — Stocks trading agent workspace
+# AGENTS.md
 
-Root: `<repo>`. Sibling project the engineering spine ports from: `<sibling-workspace>`.
+Instructions for coding agents working in this repository.
 
-## What this is
+**The authoritative agent instructions are in [`CLAUDE.md`](CLAUDE.md).** Read it before doing anything — it
+carries the safety boundaries, which are not optional, plus the commands and conventions.
 
-An autonomous **US-equities** trading agent built with the same `observe → paper → live` discipline as the
-Polymarket agent: it starts **paper-only with "nothing opens by default"** and is otherwise live-like (live data,
-live order semantics, live-equivalent fill realism). The full design is `docs/superpowers/specs/2026-06-08-stocks-agent-design.md`.
+Short version, so nothing depends on a second file being loaded:
 
-**Current state (2026-07-10):** M0-M7 done and MERGED TO MAIN; research families momentum (M7)
-and relative-strength proxy (M7c) both NULLED under the pinned criteria; the predeclared M7d
-longer-horizon experiment is GPT-reviewed but NOT run (fresh holdout completes ~2026-07-14; run
-gated on Robin). Production `artifacts/backtests/` still contains only `.gitkeep` — **no strategy
-has a passing reviewed artifact, so S9 blocks every real-strategy open**; that is the standing
-posture, not a bug. The 2026-07-09 correctness wave (terminal-fill flatten gating, owner-safe run
-lock, replay credential-inertness, semantic artifact re-verification, drill terminal evidence,
-journal integrity) and the 2026-07-10 paper-live-loop wave are consolidated on main: Track B
-status data plane (`agent.marketdata.status_plane`, Alpaca source UNVERIFIED-fail-closed),
-live-feed bounded reconnect with epoch bump, incomplete-report + honest exit codes, restart-safe
-report naming, `agent.paper_autorun` (daily supervisor + launchd template),
-`agent.paper_phase_report` (weekly criteria aggregator, missing evidence never zero-filled), and
-the local read-only live view `python3 -m dashboard`. Remaining before an ARMED autonomous paper
-trader = Robin's external steps in `docs/runbooks/paper-go-live-checklist.md` (Alpaca paper
-account, paid Databento live subscription + tier-2b verify, an S9-passing artifact via research,
-reviewed caps commit, runtime arming) + the Track D credentialed drills. Observe-mode (live data,
-zero orders) needs only steps A/B. See `PLAN.md` for live status and test counts.
-
-## Scope
-
-Use this workspace only for: the equities trading/research agent, its data/recorder/replay stack, strategy
-plugins, risk gates, paper execution, journaling, dashboard, and the supporting docs/tests. Do **not** use it for
-Polymarket, Rune/general-agent, family apps, or unrelated work.
-
-## Hard boundaries (no real money — paper-first, live-like)
-
-These are the committed defaults. Do not cross without an explicit, separately-approved instruction from Robin.
-
-- `config/risk_rules.json → live_trading.enabled = false` **always** until an explicit go.
-- `config/agent_rules.json → enabled = false` and `paper_trading.enabled = false` are the run gates; they stay
-  `false` on the committed config.
-- Live capital additionally requires **two-key arming** (key A = committed git-visible config flag; key B = a
-  runtime secret in `.secrets/`, never committed) **+** the M8 go-live checklist (broker dry-run, kill-switch
-  drill, caps, runbook). No single commit or process may supply both keys.
-- The **broker is the position-of-record**; the local journal is reconciled against it and never silently
-  mutated; the Databento-modeled fill never overrides the broker ledger.
-- Config-canary tests must keep passing: on the committed config, **no opening/position-increasing order is ever
-  submitted** (see invariant S1).
-- Secrets live in `.secrets/` (git-ignored), never committed. Tests use spy/no-op brokers and make no network
-  calls.
-- Paper realism improves evidence quality but is **not** live-money proof.
+- This is an autonomous US-equities trading agent that has **never placed a trade**. It is paper-first and
+  fail-closed: nothing opens by default.
+- The three run gates — `config/risk_rules.json → live_trading.enabled`, `config/agent_rules.json → enabled`,
+  and `config/agent_rules.json → paper_trading.enabled` — are `false` in the committed config and **must stay
+  `false`**. Do not flip them.
+- No real-money orders. Live capital requires two-key arming plus a go-live checklist; no single commit or
+  process supplies both keys.
+- The broker is the position-of-record. Secrets live in git-ignored `.secrets/` and are never committed.
+- Never commit market data: recorded quotes, bars, journals and run reports are vendor-licensed and git-ignored.
+- Tests: `python3 -m unittest discover -s tests -p 'test_*.py' -t .` (the `-t .` is required). Stdlib-only, no
+  install, no network, no credential reads.
 
 If a task implicitly requires breaching any of these, stop and ask.
 
-## Session startup
+## Orientation
 
-Before substantive work, read:
-1. `CLAUDE.md` (boundaries + conventions)
-2. `PLAN.md` (active status + roadmap)
-3. `MEMORY.md` (stable facts + locked decisions)
-4. `docs/superpowers/specs/2026-06-08-stocks-agent-design.md` (the design; §9 safety invariants, §12 boundaries)
-5. the active milestone plan under `docs/superpowers/plans/`
-
-## Layout (target — created milestone by milestone)
-
-```
-config/        risk_rules.json · agent_rules.json · data_retention.json
-scripts/agent/ orchestrator · strategy · candidate · paper_book · portfolio · execution_preflight
-               broker/ (alpaca) · marketdata/ (databento) · market_state · corporate_actions
-               features · gates · config · risk (intraday_margin · pdt_compat · locate) · kill_switch
-scripts/recorder/  recorder · event · book_state · book_hash · persistence · replay · reconcile · status
-journal/   decisions · positions · fills · status · reconcile_alerts · data_quality_alerts (.jsonl)
-data/      bars/ · snapshots/ · live/          # git-ignored
-dashboard/ app.py                              # stdlib, 127.0.0.1
-tests/     agent/ · recorder/ · lib/
-.secrets/  (git-ignored)                       # Alpaca + Databento keys
-docs/superpowers/specs + plans · runbooks (added from M8)
-```
-
-## Safety invariants
-
-S1–S10 are defined in spec §9 and each must have an automated test. The committed-config canary (S1) and the
-fail-closed posture are the load-bearing guarantees. See the per-milestone plans for the exact test names.
-
-## Communication
-
-Robin prefers short, direct **Danish** by default; evidence over vibes; a clear split of facts / assumptions /
-opinions. Default to "no trade / watch" when edge is unclear.
+| File | What it is |
+|---|---|
+| `README.md` | What the project is, what it found, and why an agent that never traded is the point |
+| `docs/ARCHITECTURE.md` | The seven safety patterns, each with its implementing file and its test |
+| `docs/RESULTS.md` | The two nulled strategy families — predeclared criteria, measurements, stop rule |
+| `PLAN.md` | Build chronology and milestone status |
+| `docs/superpowers/specs/` | Per-milestone contracts and the frozen design spec |
+| `docs/superpowers/reviews/` | Adversarial review handoffs and failure reviews |
+| `docs/runbooks/` | Operator runbooks, including the go-live checklist |

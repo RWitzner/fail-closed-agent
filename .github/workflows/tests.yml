@@ -1,0 +1,88 @@
+name: tests
+
+# The offline acceptance suite is standard-library only: no pip install step here,
+# on purpose. If this workflow ever needs one, the "runs on a bare checkout"
+# property has been broken and that is the bug.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: offline suite (${{ matrix.os }}, python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run the offline suite
+        # -t . sets the top-level dir to the repo root so tests import as
+        # tests.agent.*; without it, tests/agent/ shadows the real scripts/agent.
+        run: python -m unittest discover -s tests -p 'test_*.py' -t .
+
+  gates:
+    name: safety gates are off in the committed config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Assert the three run gates are identity-false
+        run: |
+          python - <<'PY'
+          import json, sys
+
+          risk = json.load(open("config/risk_rules.json"))
+          agent = json.load(open("config/agent_rules.json"))
+          gates = {
+              "risk_rules.live_trading.enabled": risk["live_trading"]["enabled"],
+              "agent_rules.enabled": agent["enabled"],
+              "agent_rules.paper_trading.enabled": agent["paper_trading"]["enabled"],
+          }
+          bad = {k: v for k, v in gates.items() if v is not False}
+          for k, v in gates.items():
+              print(f"{k} = {v!r}")
+          if bad:
+              sys.exit(f"FAIL: gate(s) not identity-false: {bad}")
+          print("OK: all three run gates are identity-false")
+          PY
+
+      - name: Assert no backtest artifact has ever been promoted
+        run: |
+          found=$(git ls-files artifacts/)
+          echo "tracked under artifacts/: ${found}"
+          if [ "${found}" != "artifacts/backtests/.gitkeep" ]; then
+            echo "FAIL: artifacts/ must contain only artifacts/backtests/.gitkeep"
+            exit 1
+          fi
+          echo "OK: artifacts/backtests/ is empty — nothing was ever promoted"
+
+      - name: Assert no market data or journals are tracked
+        run: |
+          leaked=$(git ls-files | grep -E '^(data|reports|journal)/' || true)
+          if [ -n "${leaked}" ]; then
+            echo "FAIL: vendor-derived data is tracked:"
+            echo "${leaked}"
+            exit 1
+          fi
+          echo "OK: no data/, reports/ or journal/ files are tracked"
