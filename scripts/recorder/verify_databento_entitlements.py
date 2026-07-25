@@ -5,8 +5,8 @@ Offline mode reads a FAKED ``list-schemas`` JSON (no network, no creds) and turn
 ``(dataset, schema)`` WITHOUT a downgrade note is a hard failure
 (``UnverifiableSchema``).
 
-2026-06-09 access constraint: the provisioned key (``.secrets/databento.json``,
-user_id ``<databento-user-id>``) entitles HISTORICAL data only; live realtime is a separate
+2026-06-09 access constraint: the provisioned key (``.secrets/databento.json``)
+entitles HISTORICAL data only; live realtime is a separate
 paid subscription, NOT provisioned. The ``verified_matrix`` carries a per-cell
 ``access`` field and a top-level ``live_subscription: "pending"``.
 

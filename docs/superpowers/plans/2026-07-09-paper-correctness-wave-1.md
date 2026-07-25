@@ -1,5 +1,9 @@
 # Paper Correctness Wave 1 Implementation Plan
 
+> **STATUS: COMPLETED.** This wave was built, independently reviewed, and consolidated onto `main` on
+> 2026-07-10. It is published as the plan it was, with its task checkboxes left unticked as authored —
+> the record of what was completed is in `PLAN.md` and in the commit history, not in these boxes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close the review-proven correctness gaps that can invalidate artifact promotion or unattended paper recovery, without changing committed gates, pinned thresholds, strategy behavior, or live-money posture.

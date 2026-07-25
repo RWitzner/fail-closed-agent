@@ -1,18 +1,24 @@
 # Stocks Trading Agent — Design Spec
 
 - **Date:** 2026-06-08
-- **Status:** **Active — M6 reconcile hardening closed** (branch `m6-reconcile`; M0-M6 done, M6 W1-W5 built, W6 initial review blockers fixed in `483ea34`, separate W6 re-review clean, 1639 tests green; M1 tier-2 2b live deferred pending the paid live subscription; **M7 next**; each milestone has its own plan/review). Design reviewed twice externally + adversarial workflows/code reviews.
-- **Owner:** Robin
-- **Sibling project:** `<sibling-workspace>` (the engineering spine this design ports)
+- **Status:** **HISTORICAL — frozen as authored at M6.** This document is the design as it was written before
+  the strategy work happened, and it is published unedited apart from this banner so that the predeclared
+  design can be read against what actually occurred. It is **not** a description of the finished system: it
+  calls M7 "next", and both strategy families that M7 went on to test were **nulled** and the line was stopped
+  under a written stop rule. For what was built and what it measured, read `README.md` and `docs/RESULTS.md`;
+  for the milestone chronology, `PLAN.md`. Test counts quoted anywhere below are point-in-time.
+- **Sibling project:** a separate prediction-market research workspace (not published) — the engineering spine
+  this design ports from. See `docs/method/` for the two documents harvested from it.
 
-> **TL;DR (DK):** Vi bygger en autonom aktie-handelsagent med samme `observe → paper → live`-disciplin som
-> Polymarket-agenten. ~60–70 % af Polymarket-rygraden genbruges (engine, plugin-model, deterministisk journal,
-> fail-closed gates, recorder/replay, dashboard, eksekverings-realisme). Det aktie-specifikke (broker, real-time
-> data, markedskalender/halts, corporate actions, ordretyper, settlement/margin, kontinuerlig edge) bygges nyt.
-> Stack: **Alpaca** (broker, paper og live deler API) + **Databento** (data, live≡historik), **hybrid fill-model**,
-> kurateret single-name US large-cap, kalibrerings-probe først, live-penge-gate OFF bag two-key arming.
-> **Live er ikke "bare et flip":** samme interfaces/kode-sti, men live kræver separat validering, broker dry-run,
-> kill-switch-drill, caps og runbook.
+> **TL;DR:** An autonomous equities trading agent with the same `observe → paper → live` discipline as the
+> prediction-market agent it ports from. Roughly 60–70 % of that engineering spine is reused (engine, plugin
+> model, deterministic journal, fail-closed gates, recorder/replay, dashboard, execution realism). Everything
+> equities-specific is built new: broker, real-time data, market calendar/halts, corporate actions, order
+> types, settlement/margin, continuous edge. Stack: **Alpaca** (broker; paper and live share one API) +
+> **Databento** (data; live ≡ historical schema), **hybrid fill model**, a curated single-name US large-cap
+> universe, calibration probe first, and the real-money gate OFF behind two-key arming.
+> **Live is not "just a flip":** the same interfaces and code path, but live requires separate validation,
+> a broker dry-run, a kill-switch drill, caps and a runbook.
 
 ---
 
@@ -433,7 +439,7 @@ commands are specified in the per-milestone implementation plans (M0/M1 first); 
 
 ```
 Stocks/
-├── AGENTS.md · CLAUDE.md · PLAN.md · MEMORY.md
+├── AGENTS.md · CLAUDE.md · PLAN.md · MEMORY.md      # MEMORY.md: internal, not published
 ├── config/        risk_rules.json · agent_rules.json · data_retention.json
 ├── scripts/agent/ __main__ · orchestrator · strategy · candidate · scan_context
 │                  paper_book · portfolio · execution_realism · fees · settlement · rehydrate
@@ -470,12 +476,18 @@ Stocks/
 
 ## 15. References
 
-- Engine/lifecycle: `scripts/auto_trader/{orchestrator,__main__,strategy,candidate,paper_book,portfolio,book_feed,fees,rehydrate}.py`
-- Gates/config: `scripts/auto_trader/{gates,config}.py`; `config/{risk_rules,auto_trader_rules}.json`
-- Status/cache pattern: `scripts/auto_trader/{market_status,market_status_cache,resolution_cache}.py`
-- Recorder/replay: `scripts/clob_recorder/{recorder,book_state,event,persistence,replay,reconcile,reconcile_runner,token_ids,book_hash,lock,status}.py`; `config/data_retention.json`
-- Snapshot/signal: `scripts/{pm_snapshot,equity_threshold_check}.py`
-- Journal: `scripts/auto_trader/paper_positions.py`; `journal/decisions.jsonl`
-- Dashboard: `dashboard/app.py`
-- Execution-realism design: `docs/superpowers/plans/2026-06-03-execution-realistic-paper-mode.md`; `docs/REALISTIC_PAPER_TRADING_HANDOFF.md`
+> **Note (added at release).** The first block below cited modules in the private sibling workspace this design
+> ported from. That workspace is **not published**, so those paths cannot be opened from this repository — they
+> are kept verbatim to show which components the port was scoped against. The equivalents that were actually
+> built here are `scripts/agent/{orchestrator,strategy,journal,execution_preflight,market_state,risk/}.py`,
+> `scripts/recorder/`, `config/{agent_rules,risk_rules,data_retention}.json` and `dashboard/`.
+
+- *(private sibling workspace, not published)* Engine/lifecycle: `scripts/auto_trader/{orchestrator,__main__,strategy,candidate,paper_book,portfolio,book_feed,fees,rehydrate}.py`
+- *(private sibling workspace)* Gates/config: `scripts/auto_trader/{gates,config}.py`; `config/{risk_rules,auto_trader_rules}.json`
+- *(private sibling workspace)* Status/cache pattern: `scripts/auto_trader/{market_status,market_status_cache,resolution_cache}.py`
+- *(private sibling workspace)* Recorder/replay: `scripts/clob_recorder/{recorder,book_state,event,persistence,replay,reconcile,reconcile_runner,token_ids,book_hash,lock,status}.py`; `config/data_retention.json`
+- *(private sibling workspace)* Snapshot/signal: `scripts/{pm_snapshot,equity_threshold_check}.py`
+- *(private sibling workspace)* Journal: `scripts/auto_trader/paper_positions.py`; `journal/decisions.jsonl`
+- *(private sibling workspace)* Dashboard: `dashboard/app.py`
+- *(private sibling workspace)* Execution-realism design: `docs/superpowers/plans/2026-06-03-execution-realistic-paper-mode.md`; `docs/REALISTIC_PAPER_TRADING_HANDOFF.md`
 - External (verified 2026-06-08): FINRA Regulatory Notice 26-10 — https://www.finra.org/rules-guidance/notices/26-10 (intraday margin replaces PDT/$25k, eff. 2026-06-04); Databento EQUS.MINI docs — https://databento.com/docs/venues-and-datasets/equs-mini (L1 top-of-book composite); Databento schema docs — https://databento.com/docs/schemas-and-data-formats (MBO vs MBP-10 vs BBO semantics); Alpaca paper trading docs — https://docs.alpaca.markets/us/docs/paper-trading; Alpaca corporate actions docs — https://docs.alpaca.markets/us/reference/corporateactions-1.

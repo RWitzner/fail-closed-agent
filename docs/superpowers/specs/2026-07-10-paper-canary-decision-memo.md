@@ -1,7 +1,7 @@
 # Decision memo — paper trading without a validated edge (the S9 question)
 
-**Status: DECIDED 2026-07-10 (~11:00 DK) — Option 1.** Robin's explicit call
-("GO på alle dine anbefalinger", 2026-07-10):
+**Status: DECIDED 2026-07-10 — Option 1.** The operator's explicit call was to
+go with the recommendation:
 
 - **Option 1 chosen:** observe-mode now — first live observe session starts the
   same afternoon IF the 15:32 `verify_alpaca_feed` report is green (steps A ✅ +
@@ -18,9 +18,9 @@ The original proposal text below is preserved unchanged for the record.
 
 ---
 
-**Original status:** PROPOSAL ONLY. Nothing in this memo is built or armed. Robin's
-standing goal (2026-07-10: "vi skal ikke vente på M7d — vi skal i gang, det er
-okay at fejle, vi justerer løbende") collides with exactly ONE committed gate,
+**Original status:** PROPOSAL ONLY. Nothing in this memo is built or armed. The
+operator's standing instruction — do not wait for M7d, start now, it is acceptable
+to fail, adjust as we go — collides with exactly ONE committed gate,
 and weakening a committed gate requires an explicit, separately-approved
 decision — so the collision is surfaced here instead of being coded around.
 
@@ -52,8 +52,8 @@ arming) bank live-data operational evidence with zero orders.
 **Option 1 — observe-mode now, S9 unchanged (built, zero decisions needed).**
 Do steps A+B, run `agent.paper_autorun` daily in observe/live, watch the
 dashboard, let M7d (or a later family) decide whether trading ever arms.
-Honest limitation: no real orders, so "justere løbende" adjusts data/ops
-quality, not trading behavior.
+Honest limitation: with no real orders, "adjust as we go" adjusts data and ops
+quality, not trading behaviour.
 
 **Option 2 — predeclared PAPER CANARY without validated edge (the change
 this memo exists to decide).** Amend the runbook + preflight so paper opens
@@ -88,7 +88,7 @@ and Option 2 is moot.
 Do Option 1's external steps NOW regardless (they are prerequisites for every
 path). Decide Option 2 explicitly — yes or no — rather than letting it happen
 implicitly: it is a deliberate, bounded loosening of one gate for operational
-learning, which is defensible under "paper er til at fejle", but it must be
+learning, which is defensible under "paper is where you are allowed to fail", but it must be
 predeclared, capped, labeled, and reviewed so the evidence streams stay
 honest. If yes, the build follows this memo as its predeclaration.
 

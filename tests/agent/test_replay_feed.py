@@ -176,6 +176,8 @@ class TestAlpacaMbp1Rows(_Tmp):
         # The verifier's round-trip contract: the LAST event per (symbol,
         # instrument_id) must come back from quote_view().latest() with
         # bid/ask/ts_recv_utc intact.
+        # Synthetic prices/sizes — the contract under test is the round-trip,
+        # not any particular quote.
         events = self._write_alpaca_stream([
             ("AAPL", "2026-07-10T13:32:07.100000Z", 200.10, 40, 200.14, 120,
              "2026-07-10T13:32:07.400000Z"),

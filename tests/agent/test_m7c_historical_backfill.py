@@ -104,10 +104,13 @@ def _universe_rows(*, sessions, n_minutes):
 
 class TestNormalizeAndDerive(unittest.TestCase):
     def _quote_event(self):
+        # Synthetic values throughout: this pins the FIELD MAPPING, not any
+        # vendor row. Sub-second precision is kept so the ISO formatting is
+        # still exercised.
         prov = Provenance(
-            dataset="EQUS.MINI", schema="bbo-1m", instrument_id=38, symbol="AAPL",
-            vendor_seq=None, ts_event_utc="2026-05-11T13:30:59.678428Z",
-            ts_recv_utc="2026-05-11T13:31:00.000000Z", reconnect_epoch=0)
+            dataset="EQUS.MINI", schema="bbo-1m", instrument_id=1001, symbol="AAPL",
+            vendor_seq=None, ts_event_utc="2026-06-15T13:30:59.123456Z",
+            ts_recv_utc="2026-06-15T13:31:00.000000Z", reconnect_epoch=0)
         return QuoteEvent(provenance=prov, bid_px=Decimal("200.0000"),
                           bid_sz=Decimal("120"), ask_px=Decimal("200.0100"),
                           ask_sz=Decimal("100"))
@@ -117,9 +120,9 @@ class TestNormalizeAndDerive(unittest.TestCase):
                                     schema="bbo-1m")
         self.assertEqual(row, {
             "dataset": "EQUS.MINI", "schema": "bbo-1m", "symbol": "AAPL",
-            "instrument_id": 38, "vendor_seq": 0,
-            "ts_event_utc": "2026-05-11T13:30:59.678428Z",
-            "ts_recv_utc": "2026-05-11T13:31:00.000000Z",
+            "instrument_id": 1001, "vendor_seq": 0,
+            "ts_event_utc": "2026-06-15T13:30:59.123456Z",
+            "ts_recv_utc": "2026-06-15T13:31:00.000000Z",
             "bid_px": "200.0000", "bid_sz": "120", "ask_px": "200.0100",
             "ask_sz": "100", "reconnect_epoch": 0,
         })
@@ -470,7 +473,7 @@ class TestLivePullSeam(unittest.TestCase):
     def test_dbn_record_adapter_decodes_top_of_book(self):
         record = SimpleNamespace(
             bid_px_00=200000000000, ask_px_00=200010000000,
-            bid_sz_00=120, ask_sz_00=100, instrument_id=38,
+            bid_sz_00=120, ask_sz_00=100, instrument_id=1001,
             ts_event=1_000_000_000, ts_recv=1_000_500_000, sequence=7)
         out = _dbn_bbo1m_record_to_event_dict(record, symbol="AAPL")
         self.assertEqual(out["bid_px"], "200.0000")
@@ -487,14 +490,14 @@ class TestLivePullSeam(unittest.TestCase):
     def test_dbn_record_adapter_drops_undefined_side(self):
         record = SimpleNamespace(
             bid_px_00=9223372036854775807, ask_px_00=200010000000,
-            bid_sz_00=0, ask_sz_00=100, instrument_id=38,
+            bid_sz_00=0, ask_sz_00=100, instrument_id=1001,
             ts_event=1_000_000_000, ts_recv=1_000_500_000, sequence=0)
         with self.assertRaises(ValueError):
             _dbn_bbo1m_record_to_event_dict(record, symbol="AAPL")
 
     def test_dbn_record_adapter_fails_closed_on_bad_fields(self):
         base = dict(bid_px_00=200000000000, ask_px_00=200010000000,
-                    bid_sz_00=120, ask_sz_00=100, instrument_id=38,
+                    bid_sz_00=120, ask_sz_00=100, instrument_id=1001,
                     ts_event=1_000_000_000, ts_recv=1_000_500_000, sequence=0)
         # Missing bid price (getattr default None) -> ValueError, not TypeError.
         with self.assertRaises(ValueError):

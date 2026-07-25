@@ -5,7 +5,7 @@
      UNARMED install just produces observe-grade evidence):
 
        1. Replace __REPO__ with the absolute repo path
-          (e.g. <repo>) and review the argv below.
+          (the absolute path to your clone of this repo) and review the argv below.
        2. cp docs/runbooks/com.stocks-agent.paper-autorun.plist.template \
             ~/Library/LaunchAgents/com.stocks-agent.paper-autorun.plist
        3. launchctl load ~/Library/LaunchAgents/com.stocks-agent.paper-autorun.plist

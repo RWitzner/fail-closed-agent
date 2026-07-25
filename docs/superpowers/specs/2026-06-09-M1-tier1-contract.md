@@ -709,7 +709,7 @@ def resample(events: Iterable["TradeEvent"], *, interval: str) -> List[Bar]:
 
 Offline mode reads a FAKED `list-schemas` JSON (no network, no creds) and turns a `planned_matrix` into a `verified_matrix`. **No silent fallback:** an unavailable `(dataset, schema)` WITHOUT a downgrade note is a hard failure. Credentialed mode is a `NotImplementedError` stub never reached offline.
 
-**2026-06-09 access constraint (folded in):** the provisioned key (`.secrets/databento.json`, user_id `<databento-user-id>`) entitles **HISTORICAL data only**; **live realtime is a separate paid subscription, NOT provisioned.** Because live ≡ historical *schema* (locked decision), the full parse/book_hash/replay/reconcile stack builds AND verifies against historical pulls now (same schemas: tbbo, mbp-10, ohlcv-*, trades, definitions). The `verified_matrix` therefore carries a per-cell `access` field and a top-level `live_subscription: "pending"`.
+**2026-06-09 access constraint (folded in):** the provisioned key (`.secrets/databento.json`) entitles **HISTORICAL data only**; **live realtime is a separate paid subscription, NOT provisioned.** Because live ≡ historical *schema* (locked decision), the full parse/book_hash/replay/reconcile stack builds AND verifies against historical pulls now (same schemas: tbbo, mbp-10, ohlcv-*, trades, definitions). The `verified_matrix` therefore carries a per-cell `access` field and a top-level `live_subscription: "pending"`.
 
 ```python
 # scripts/recorder/verify_databento_entitlements.py
@@ -952,7 +952,7 @@ All `.jsonl` = one JSON object per line. **All prices AND sizes are strings (Dec
 
 ### P. Tier-2 acceptance — split into HISTORICAL-verified (now) vs LIVE-verified (deferred)
 
-Per the 2026-06-09 access constraint, M1's tier-2 stop-condition is SPLIT. The entitled key (`.secrets/databento.json`, user_id `<databento-user-id>`) covers **historical only**; live realtime is a separate, un-provisioned paid subscription. Because live ≡ historical *schema*, the full parse/book_hash/replay/reconcile stack verifies against historical pulls now.
+Per the 2026-06-09 access constraint, M1's tier-2 stop-condition is SPLIT. The entitled key (`.secrets/databento.json`) covers **historical only**; live realtime is a separate, un-provisioned paid subscription. Because live ≡ historical *schema*, the full parse/book_hash/replay/reconcile stack verifies against historical pulls now.
 
 **(2a) HISTORICAL-verified — runnable NOW with the current key (no live subscription needed):**
 - Exact dataset codes resolved (replace `<DEPTH_DATASET>` with the real entitled code) via the credentialed HISTORICAL `list-schemas`.

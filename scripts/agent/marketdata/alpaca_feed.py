@@ -3,7 +3,7 @@
 ``LiveQuoteFeed`` consumes any iterable of QuoteEvents/None heartbeats; this
 module supplies one from Alpaca's real-time stock websocket (the free plan's
 IEX feed), so live observe/paper sessions need NO paid data subscription.
-Predeclared data-provenance change (2026-07-10, Robins valg — billig først):
+Predeclared data-provenance change (2026-07-10, operator's call — cheapest first):
 
 - dataset = ``ALPACA.IEX`` (NOT EQUS.MINI: IEX-only top-of-book, ~2% of
   consolidated volume — an NBBO approximation, honest in the provenance);

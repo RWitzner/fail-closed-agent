@@ -21,7 +21,7 @@ PYTHONPATH=scripts python3 -m dashboard --journal-dir reports/demo/journal \
   --report-dir reports/demo/reports        # → http://127.0.0.1:8788/
 ```
 
-**Robins tre eksterne trin** (the ONLY things code cannot do — each is a single action):
+**The operator's three external steps** (the ONLY things code cannot do — each is a single action):
 
 1. **Alpaca paper-konto** → step A below (≈15 min, gratis) — unlocks the account verifier + drill.
 2. **Betalt Databento live-realtime-abonnement** → step B below — unlocks OBSERVE-mode (live data,
@@ -217,7 +217,7 @@ One command per session day — either the supervisor (recommended for unattende
 
 ```bash
 PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_autorun \
-  --journal-dir journal --symbols AAPL,MSFT,... --strategy-id <GOED_STRATEGY>
+  --journal-dir journal --symbols AAPL,MSFT,... --strategy-id <APPROVED_STRATEGY_ID>
 ```
 
 (bounded retry ONLY on a truncated feed; append-only `autorun_log.jsonl`; loud
@@ -226,7 +226,7 @@ PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_autorun \
 
 ```bash
 PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_session \
-  --journal-dir journal --live --symbols AAPL,MSFT,... --strategy-id <GOED_STRATEGY> \
+  --journal-dir journal --live --symbols AAPL,MSFT,... --strategy-id <APPROVED_STRATEGY_ID> \
   --record-events data/live/$(date +%F).events.jsonl
 ```
 
@@ -244,7 +244,7 @@ missing — never silently zero):
 ```bash
 PYTHONPATH=scripts python3 -m agent.paper_phase_report \
   --report-dir reports/paper_sessions --journal-dir journal \
-  --allocated-notional-usd <ROBINS_ALLOKERING>
+  --allocated-notional-usd <ALLOCATED_NOTIONAL_USD>
 ```
 
 What it does autonomously: skips non-trading days (calendar fixture `xnys_sessions_2026H2_v1`,
