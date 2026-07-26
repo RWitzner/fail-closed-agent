@@ -2,6 +2,8 @@
 
 **And that's the point.**
 
+[![tests](https://github.com/RWitzner/fail-closed-agent/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/RWitzner/fail-closed-agent/actions/workflows/tests.yml)
+
 This is a complete autonomous US-equities trading agent: live market data, a $100k Alpaca **paper** account
 with real credentials and the full order lifecycle wired, risk gates, a kill switch, an event-sourced journal,
 and a dashboard. It ran a live session against real market data with no human in the loop. It has submitted
@@ -169,6 +171,11 @@ ls -A artifacts/backtests/   # .gitkeep — nothing was ever promoted
 
 Those three gates are `false` in the committed config, and were `false` in **every version of every config
 file in the repository's entire history**.
+
+You do not have to take that on trust either. The `tests` badge at the top of this page covers a workflow with
+two jobs, and the second one re-proves exactly the three checks above on every push — that the run gates are
+identity-`false`, that `artifacts/backtests/` holds nothing but `.gitkeep`, and that no vendor data is tracked.
+A green badge is CI asserting the safety posture, not the author asserting it.
 
 ---
 
