@@ -262,6 +262,11 @@ scripts/agent/market_state.py
   line 58  SsrState.UNKNOWN      -> FAIL-CLOSED: treat as ACTIVE for short-side decisions
 ```
 
+One deliberate exception is worth naming, because a reader copying this pattern would otherwise
+over-generalise: the broker's pattern-day-trader flag has an `unknown` state that is **not** wired to the
+restrictive branch. A refusal there requires a latched broker rejection (`rejection_latched`,
+`scripts/agent/risk/can_open.py`), so an unknown PDT flag is journalled context rather than a block.
+
 The decider is a one-way ladder that can only *tighten*: unknown session phase tightens to not-tradable
 (line 280), `UNKNOWN` halt state is grouped with `HALTED` (line 293), `UNKNOWN` limit state is grouped with
 `PAUSED` (line 301), an unknown price band tightens (line 320). There is no path back up. A stale data feed and
@@ -308,7 +313,7 @@ Two design details that make this work:
 **Where it is.** `scripts/agent/risk/risk_kill.py` line 42 (`MAX_ACCOUNT_BLIND_MS = 120_000`) and
 `_evaluate_kill` in `scripts/agent/orchestrator.py` (around line 1931).
 
-**The test.** `tests/agent/test_orchestrator.py::test_account_blind_beyond_cap_with_position_flattens_and_halts`,
+**The test.** `tests/agent/test_orchestrator.py`: `test_account_blind_beyond_cap_with_position_flattens_and_halts`,
 plus `test_account_blind_new_ack_keeps_residual_and_retry_never_resubmits` for the ugly case: flattening while
 blind must not double-submit if the first attempt's acknowledgement is the thing that went missing.
 
@@ -416,8 +421,9 @@ line 635, called by both writers at lines 2173 and 2265). The verifier independe
 criteria rather than trusting a `pass: true` field in the artifact (`verify_artifact`,
 `scripts/agent/backtest_gate.py` line 280). And the whole promotion gate is wired into the trading path: with
 no passing artifact, the preflight adds `backtest_artifact_missing` (`execution_preflight.py` line 369) and
-every real-strategy open is refused. **That is why this agent has never traded — not restraint, but a gate that
-was never satisfied.**
+every real-strategy open is refused — a *second, independent* reason, because on the committed configuration
+the run-gate rung terminates the open long before stage 5 is reached (§2). **That is why this agent has never
+traded — not restraint, but a gate that was never satisfied, behind run gates that were never flipped.**
 
 **Where it is weaker than it sounds.** The search budget and the stop rule are enforced by *documentation and
 human review*, not by code. No module counts strategy families or refuses a third one. The code enforces the
@@ -425,9 +431,18 @@ narrower property — that a promoted result matches its declared rules. Whether
 is a matter of character, and the honest thing to say is that this is the one pattern here with no technical
 enforcement at all.
 
-**How it actually played out.** Two families were predeclared, both were nulled on their own criteria, and the
-stop rule was applied instead of being argued around. The result is `docs/RESULTS.md`, and the reason this
-repository exists.
+**The test.** The code-enforced half is pinned by
+`tests/agent/test_m7_historical_artifact.py`: `test_writer_rejects_rules_hash_not_derived_from_config`, its
+mirror in `tests/agent/test_m7c_cross_sectional_artifact.py`, and, for the verifier recomputing rather than
+trusting the artifact, `tests/agent/test_backtest_gate_m7.py`:
+`test_v2_hash_valid_claimed_pass_rejects_failed_actual_metrics`. The budget and the stop rule have no test, because they have no
+code — see the paragraph above.
+
+**How it actually played out.** Two families were tested, both were nulled on their own criteria, and the stop
+rule was applied instead of being argued around. The predeclaration was **not** uniform: family 1 had pinned
+pass criteria in a committed contract but no research packet, and its universe list first appears in the
+failure review that reports the run. Family 2 onward hash-binds the universe into the manifest for exactly that
+reason. The result is `docs/RESULTS.md`, and the reason this repository exists.
 
 ---
 

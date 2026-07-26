@@ -274,6 +274,14 @@ the strategy shape — those are confounded, deliberately, because separating th
 answer was worth. The decision to stop follows from the **budget rule**, not from a proof that the substrate
 is the binding constraint. Claiming more than that would be the same overreach this project was built to avoid.
 
+One asymmetry between the harness and the deployed path belongs here too. The backtest fills at the entry bar's
+touch (`entry_fill = entry.ask`, `scripts/agent/backtest_historical.py`) with no quote-quality gate on the fill
+bar; the live preflight is stricter, refusing an open whose second quote breaches `spread_bps_max` (50 bps,
+stage 8). So a handful of the fills behind the tail statistics were taken in book conditions the deployed agent
+would have declined outright. That makes the measured friction **conservative rather than flattering** — the
+p95 fails its cap either way — but it is a real difference between what was simulated and what would have
+happened, and it belongs on the record rather than in a footnote nobody reads.
+
 ---
 
 ## Reproducibility, honestly

@@ -23,7 +23,7 @@ local model may label but never overwrite. None of it is trading-specific. → *
 
 **2. A method: pre-registered research applied to trading.** Hypotheses and pass thresholds written down
 *before* the data is pulled; a search budget fixed in advance; a stop rule that names what a null result
-specifically does **not** authorise; adversarial multi-lens reviews of the designs, and — from the second
+specifically does **not** authorise; adversarial multi-lens reviews of the designs; and — from the second
 strategy family onward — a research packet predeclared and independently reviewed before the run. It was not
 applied uniformly: the first family had pinned criteria but no research packet, and the first cross-model
 review aimed at a strategy family came *after* that family's null, on the decision to stop. This is standard
@@ -66,15 +66,17 @@ live-like on purpose — a safety property you only test in simulation is a safe
 
 ### It ran, live, and did nothing — for auditable reasons
 
-On 2026-07-10 it ran for 3 h 39 m against live IEX data with real broker credentials loaded — 15:29 to 19:08
-UTC, stopped before the close, so no end-of-day report was written. In that time it made **438 decisions
-(219 one-minute bars x two symbols). Every single one was `do_nothing`. It submitted no orders.**
+On 2026-07-10 it ran for 3 h 39 m against live IEX data with real broker credentials loaded and both run
+gates off — 15:29 to 19:08 UTC, stopped before the close, so no end-of-day report was written. In that time it
+made **438 decisions (219 one-minute bars across two symbols). Every single one was `do_nothing`. It submitted
+no orders.** Those rows come from the observe-only calibration probe that drives the loop on this rung, whose
+only other action is `forecast_only`.
 
 Be precise about *why*, because the flattering version would be "five different gates each did their job". What
 actually happened: the free IEX feed carries no usable limit-up/limit-down band, so the status plane could not
 establish tradability and fell back to its documented `UNKNOWN` — which is wired to `halted`. **All 438
 decisions carry `session_state: halted` and `tradability: not_tradable`.** The agent was structurally blocked
-for the entire session by pattern 3 below, and it collected the other reasons on the way past:
+for the entire session by the fail-closed-on-unknown pattern below, and it collected the other reasons on the way past:
 `feature_cutoff_mismatch`, `features_unavailable`, `quote_stale`, `spread_too_wide`.
 
 That is the fail-closed design working exactly as specified — an unverified status source means nothing opens —
@@ -125,23 +127,26 @@ flowchart LR
     M -. "reduce-only, no run gates, no S9" .-> S
     V["operator drill, off by default"] -. "no token, outside the agent loop" .-> B
     N["cancel_order"] -. "no token, by design" .-> B
-
 ```
 
 On the committed configuration the first rung of `can_open` returns `run_gates_off`, so every real-strategy open
-terminates there and `mint_open_token` is never reached at all — pinned by
-`test_no_opening_submit_and_zero_total_on_committed_config`. The dotted edges are the honest part: the
+terminates there and `mint_open_token` is never reached at all — pinned by two canaries in
+`tests/agent/test_config_canary.py`: `test_committed_config_can_open_always_terminates_at_run_gates` drives the
+real committed JSON through `can_open` and asserts it stops at rung 1, and
+`test_s1_canary_b_gates_consulting_variant_stops_at_run_gates` runs a real strategy through the orchestrator
+and asserts the mint was never called at all. The dotted edges are the honest part: the
 reduce-only lane reaches the same chokepoint but is deliberately not run-gated, because machinery that blocks
 *increasing* risk must never block *decreasing* it.
 
 **Fail closed on unknown.** Every external state has an explicit `UNKNOWN` that is wired to the restrictive
-branch. A stale feed and a halted market produce the same decision. Integrations that have not been verified
+branch — with one deliberate exception, the broker's pattern-day-trader flag, where unknown is journalled
+context rather than a refusal. A stale feed and a halted market produce the same decision. Integrations that have not been verified
 against the real vendor API *raise* rather than proceed.
 → `scripts/agent/market_state.py`, `tests/agent/test_market_state.py`
 
 **Bounded blindness.** If the agent cannot see authoritative account state for longer than a fixed bound while
-holding a position, it flattens and halts. While blind, numeric limits are *skipped* rather than evaluated on
-numbers it does not trust.
+holding a position, it flattens and halts. While blind, the agent *skips* numeric limits rather than evaluating them
+on numbers it does not trust.
 → `scripts/agent/risk/risk_kill.py`, `tests/agent/test_orchestrator.py`
 
 **External truth, local model as label only.** The broker's ledger is the position of record. The agent's own
@@ -169,12 +174,16 @@ python3 -c "import json;d=json.load(open('config/agent_rules.json'));print(d['en
 ls -A artifacts/backtests/   # .gitkeep — nothing was ever promoted
 ```
 
-Those three gates are `false` in the committed config, and were `false` in **every version of every config
-file in the repository's entire history**.
+Those three gates are `false` in the committed config, and were `false` in **every committed version of
+`config/agent_rules.json` and `config/risk_rules.json`, across the repository's entire history**. Two files
+under `tests/fixtures/config/` do contain `true` — hostile overlays that exist so the tighten-only merge can be
+tested against them — so check those two config files rather than grepping for the string.
 
 You do not have to take that on trust either. The `tests` badge at the top of this page covers a workflow with
-two jobs, and the second one re-proves exactly the three checks above on every push — that the run gates are
-identity-`false`, that `artifacts/backtests/` holds nothing but `.gitkeep`, and that no vendor data is tracked.
+two jobs, and the second re-proves the checks above on every push — that the run gates are identity-`false`
+and that `artifacts/backtests/` holds nothing but `.gitkeep` — plus two the snippet does not cover: that no
+market data, run reports or journals are tracked, and that re-running the figure generator is a no-op, so a
+number cannot be edited into a figure without editing the source it is quoted from.
 A green badge is CI asserting the safety posture, not the author asserting it.
 
 ---
@@ -201,7 +210,8 @@ find that out.
 **Family 2 — intraday cross-sectional relative strength.** Same universe, long-only proxy, top-2 by rank,
 30-bar horizon, on a clean window nothing had been measured on. 21 sessions, **1,144 trades: −$839.68
 modelled, profit factor 0.55, average trade −8.78 bps.** The realism gaps blew both caps: p95 of **29.82 bps**
-against a 15 bps limit, worst single fill **97.48 bps** against 50.
+against a 15 bps limit, and `max_single_fill_divergence_bps` — the worst single *trade* on that same
+round-trip measure, despite its name — at **97.48 bps** against 50.
 
 It beat one benchmark — by $405.64 against an equal-weight basket of the same names. That is exactly the trap
 the two-benchmark rule exists to catch: it did not make money, the basket simply lost more. Against the
@@ -235,7 +245,7 @@ python3 -m unittest discover -s tests -p 'test_*.py' -t .
 
 The `-t .` is required: it sets the top-level directory to the repo root so tests import as `tests.agent.*`.
 Without it, `discover -s tests` treats `tests/agent/` as a top-level `agent` package, shadows the real
-`scripts/agent`, and the imports break. Python 3.11 or newer.
+`scripts/agent`, and breaks the imports. Python 3.11 or newer.
 
 There is no installed package, so command-line entry points need `PYTHONPATH=scripts`:
 
@@ -262,8 +272,9 @@ alone you can audit the method but not the data.
 README.md              you are here
 docs/ARCHITECTURE.md   the seven patterns — start here if you build agents, not strategies
 docs/RESULTS.md        the two nulls, the criteria, the cost decomposition, the stop rule
-docs/assets/           the figures and the social card, plus the stdlib-only generator that
-                       emits them from the numbers in RESULTS.md — CI fails if the two diverge
+docs/assets/           the figures and the social card, plus the stdlib-only generator that emits them;
+                       its numbers are quoted by hand from RESULTS.md, and CI fails if a committed SVG
+                       stops matching the generator (the PNG card is exported out of band)
 docs/method/           two documents harvested from a separate prediction-market workspace
 DISCLAIMER.md          not advice, no warranty, never traded real money
 PLAN.md                the internal build log, frozen — the chronology is part of the evidence
@@ -278,9 +289,13 @@ docs/superpowers/      per-milestone contracts, plans, and adversarial review ha
 ```
 
 `docs/superpowers/reviews/` is worth a look if the method interests you: those are the actual adversarial
-review handoffs, including a cross-model review of the decision to stop, and the failure reviews written when
-each family died. Nothing in them was softened or removed for publication; the only release-time change was
-rewriting absolute local filesystem paths to repo-relative ones. Several were revised in-project after they
+review handoffs, including the one that commissioned a cross-model review of the decision to stop — its
+returned verdict is recorded in `PLAN.md` rather than in the directory — and the failure reviews written when
+each family died. Nothing in them was softened or removed for publication. Two mechanical release-time changes
+did touch them: absolute local filesystem paths were rewritten to repo-relative ones, folded into a
+pre-publication history rewrite and so leaving no diff, and the commit hashes they cite were repointed onto
+that rewritten history afterwards — `cf0cfe2`, the release-day commit at the top of that directory's log,
+which changes hex strings only. Several were revised in-project after they
 were first written — returned verdicts, resolution logs, post-hardening corrections — and `git log` on that
 directory shows every such change.
 

@@ -4,8 +4,10 @@
 > chronology *is* part of the evidence: it shows criteria being pinned before runs, families being nulled on
 > those criteria, and a written stop rule being applied rather than argued around. It is a working document,
 > not documentation — it uses milestone codes (M0–M8), safety-invariant codes (S1–S10), frozen-decision ids
-> (FD-xx) and local branch names, and its "current status" section stops on 2026-07-10. Nothing after that date
-> was run. For the finished picture read `README.md`, `docs/ARCHITECTURE.md` and `docs/RESULTS.md`.
+> (FD-xx) and local branch names. Its "current status" section was last written on the *morning* of 2026-07-10
+> and therefore predates two events from that same afternoon which `README.md` and `docs/ARCHITECTURE.md` do
+> record: the step-A account-verification order drill, and the only live observe session. Nothing after that
+> date was run, and the log body below is left exactly as it stood, unresolved conditionals included. For the finished picture read `README.md`, `docs/ARCHITECTURE.md` and `docs/RESULTS.md`.
 
 ## Active purpose
 
