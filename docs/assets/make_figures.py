@@ -76,6 +76,14 @@ WATERFALL = [
 
 THEMES = {
     "light": {
+        # Each variant paints its own ground rather than inheriting the page's. It is tempting
+        # to leave the canvas transparent so the figure blends into GitHub, but <picture> picks
+        # a variant from the BROWSER's prefers-color-scheme while the page colour comes from
+        # GitHub's own theme setting. Those two disagree often enough — OS dark, GitHub light —
+        # and when they do, a transparent figure renders light text on a white page and the
+        # whole thing vanishes. Legibility beats blending.
+        "bg": "#ffffff",
+        "border": "#d1d9e0",
         "fg": "#1f2328",
         "muted": "#636c76",
         "faint": "#8c959f",
@@ -89,6 +97,8 @@ THEMES = {
         "neutral_soft": "#d8dee4",
     },
     "dark": {
+        "bg": "#0d1117",
+        "border": "#30363d",
         "fg": "#e6edf3",
         "muted": "#9198a1",
         "faint": "#6e7681",
@@ -168,6 +178,15 @@ def num(value: float) -> str:
 def money(value: float) -> str:
     sign = "−" if value < 0 else "+"
     return f"{sign}${abs(value):,.2f}"
+
+
+def ground(width: float, height: float, t: dict) -> str:
+    """The figure's own background and frame, drawn beneath everything else."""
+    return (
+        rect(0, 0, width, height, fill=t["bg"], rx=6)
+        + f'<rect x="0.5" y="0.5" width="{num(width - 1)}" height="{num(height - 1)}" '
+          f'rx="6" fill="none" stroke="{t["border"]}" stroke-width="1"/>'
+    )
 
 
 def svg(width: float, height: float, title: str, desc: str, body: Iterable[str]) -> str:
@@ -299,11 +318,17 @@ def figure_a(theme: str) -> str:
                  "5 of 11 predeclared gates passed. The gate is an AND: one failure is a null.",
                  fill=t["fg"], size=12, weight="600"))
     b.append(txt(FIG_A_W - NAME_X, y, SOURCE, fill=t["faint"], size=9.5, anchor="end"))
+    # Keep every caption line under roughly 115 characters: the canvas is 780 px wide and there
+    # is no way to measure a font from the standard library, so the guard is the line length.
     y += 18
     b.append(txt(NAME_X, y,
-                 "Not shown: trades 1,144 ≥ 30, sessions 21 ≥ 20, traded sessions "
-                 "21 ≥ 5 — all pass — and average trade −8.78 bps against a "
-                 "> 0 requirement, which fails.",
+                 "Not shown: trades 1,144 ≥ 30, sessions 21 ≥ 20 and traded sessions "
+                 "21 ≥ 5 — all three pass.",
+                 fill=t["muted"], size=11))
+    y += 16
+    b.append(txt(NAME_X, y,
+                 "Average trade −8.78 bps against a > 0 requirement — the sixth failure, "
+                 "and the only one not drawn above.",
                  fill=t["muted"], size=11))
     y += 16
     # PLAN.md records that the staged quotes predate fix A. The rerun's numbers differ and the
@@ -327,6 +352,7 @@ def figure_a(theme: str) -> str:
         "quotes predate fix A; the fix-A-compliant rerun gives 1,147 trades and minus $858.01 "
         "net, and fails every gate the same way."
     )
+    b.insert(0, ground(FIG_A_W, height, t))
     return svg(FIG_A_W, height, "Family 2 against criteria fixed before the run", desc, b)
 
 
@@ -412,12 +438,15 @@ def figure_b(theme: str) -> str:
                  fill=t["fg"], size=12, weight="600"))
     y += 18
     b.append(txt(NAME_X, y,
-                 "95 % of the loss is the round-trip half-spread, 5 % is fees. Modelled P&L "
-                 "over historical data; no capital was ever at risk.",
+                 "95 % of the loss is the round-trip half-spread, 5 % is fees. "
+                 "Modelled P&L; no capital was ever at risk.",
                  fill=t["muted"], size=11))
+    # This caption is long enough to reach the right margin, so the source gets its own line
+    # rather than sharing one the way figure A's shorter caption can.
+    y += 16
     b.append(txt(FIG_B_W - NAME_X, y, SOURCE, fill=t["faint"], size=9.5, anchor="end"))
 
-    height = y + 26
+    height = y + 22
     desc = (
         "Waterfall decomposition of the momentum family's loss over 9,923 trades on $8.35 "
         "million of traded notional. The signal marked mid-to-mid, frictionlessly, earned "
@@ -427,6 +456,7 @@ def figure_b(theme: str) -> str:
         "net of minus $7,305.66. The round-trip half-spread is 95 percent of the loss and "
         "fees are 5 percent."
     )
+    b.insert(0, ground(FIG_B_W, height, t))
     return svg(FIG_B_W, height, "Where the money went", desc, b)
 
 

@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 498" width="780" height="498" role="img" aria-labelledby="figtitle figdesc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 510" width="780" height="510" role="img" aria-labelledby="figtitle figdesc">
 <title id="figtitle">Where the money went</title>
 <desc id="figdesc">Waterfall decomposition of the momentum family's loss over 9,923 trades on $8.35 million of traded notional. The signal marked mid-to-mid, frictionlessly, earned plus $21.70 — 0.03 basis points, indistinguishable from zero and too small to be visible at this scale. The round-trip half-spread cost minus $6,939.02, giving a gross modelled result of minus $6,917.32. Fees cost a further minus $388.34, for a net of minus $7,305.66. The round-trip half-spread is 95 percent of the loss and fees are 5 percent.</desc>
+<rect x="0" y="0" width="780" height="510" rx="6" fill="#ffffff"/><rect x="0.5" y="0.5" width="779" height="509" rx="6" fill="none" stroke="#d1d9e0" stroke-width="1"/>
 <text x="24" y="36" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#1f2328" text-anchor="start">Where the money went — and it was not the signal</text>
 <text x="24" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#636c76" text-anchor="start">Family 1, intraday momentum · broader window, 21 sessions · 9,923 trades on $8,348,811 of traded notional</text>
 <line x1="24" y1="118" x2="756" y2="118" stroke="#57606a" stroke-width="1"/>
@@ -34,6 +35,6 @@
 <text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#636c76" text-anchor="start">The whole signal is the green hairline on the axis: +$21.70, or +0.03 bps of notional.</text>
 <line x1="24" y1="432" x2="756" y2="432" stroke="#d1d9e0" stroke-width="1"/>
 <text x="24" y="454" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1f2328" text-anchor="start">The strategy was not wrong. It had nothing — and paid the spread 9,923 times to find that out.</text>
-<text x="24" y="472" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#636c76" text-anchor="start">95 % of the loss is the round-trip half-spread, 5 % is fees. Modelled P&amp;L over historical data; no capital was ever at risk.</text>
-<text x="756" y="472" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="end">source: docs/RESULTS.md</text>
+<text x="24" y="472" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#636c76" text-anchor="start">95 % of the loss is the round-trip half-spread, 5 % is fees. Modelled P&amp;L; no capital was ever at risk.</text>
+<text x="756" y="488" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="end">source: docs/RESULTS.md</text>
 </svg>
