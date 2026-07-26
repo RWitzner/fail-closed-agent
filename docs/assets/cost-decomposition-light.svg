@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 498" width="780" height="498" role="img" aria-labelledby="figtitle figdesc">
+<title id="figtitle">Where the money went</title>
+<desc id="figdesc">Waterfall decomposition of the momentum family's loss over 9,923 trades on $8.35 million of traded notional. The signal marked mid-to-mid, frictionlessly, earned plus $21.70 — 0.03 basis points, indistinguishable from zero and too small to be visible at this scale. The round-trip half-spread cost minus $6,939.02, giving a gross modelled result of minus $6,917.32. Fees cost a further minus $388.34, for a net of minus $7,305.66. The round-trip half-spread is 95 percent of the loss and fees are 5 percent.</desc>
+<text x="24" y="36" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#1f2328" text-anchor="start">Where the money went — and it was not the signal</text>
+<text x="24" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#636c76" text-anchor="start">Family 1, intraday momentum · broader window, 21 sessions · 9,923 trades on $8,348,811 of traded notional</text>
+<line x1="24" y1="118" x2="756" y2="118" stroke="#57606a" stroke-width="1"/>
+<text x="24" y="112" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#8c959f" text-anchor="start">$0</text>
+<rect x="118" y="117.3" width="86" height="2" rx="1" fill="#c5f2ce"/>
+<rect x="118" y="117.3" width="86" height="2" rx="0" fill="#1a7f37"/>
+<text x="161" y="109.3" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1a7f37" text-anchor="middle">+$21.70</text>
+<text x="161" y="388" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#1f2328" text-anchor="middle">Signal, mid-to-mid</text>
+<rect x="246" y="117.3" width="86" height="224.16" rx="1" fill="#ffcecb"/>
+<rect x="246" y="339.46" width="86" height="2" rx="0" fill="#cf222e"/>
+<line x1="204" y1="117.3" x2="246" y2="117.3" stroke="#d1d9e0" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="289" y="357.46" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#cf222e" text-anchor="middle">−$6,939.02</text>
+<text x="289" y="388" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#1f2328" text-anchor="middle">Round-trip half-spread</text>
+<rect x="374" y="118" width="86" height="223.46" rx="1" fill="#d8dee4"/>
+<rect x="374" y="339.46" width="86" height="2" rx="0" fill="#57606a"/>
+<line x1="332" y1="341.46" x2="374" y2="341.46" stroke="#d1d9e0" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="417" y="357.46" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#57606a" text-anchor="middle">−$6,917.32</text>
+<text x="417" y="388" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#1f2328" text-anchor="middle">Gross modelled</text>
+<text x="417" y="404" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="middle">running total</text>
+<rect x="502" y="341.46" width="86" height="12.54" rx="1" fill="#ffcecb"/>
+<rect x="502" y="352" width="86" height="2" rx="0" fill="#cf222e"/>
+<line x1="460" y1="341.46" x2="502" y2="341.46" stroke="#d1d9e0" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="545" y="370" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#cf222e" text-anchor="middle">−$388.34</text>
+<text x="545" y="388" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#1f2328" text-anchor="middle">Fees</text>
+<rect x="630" y="118" width="86" height="236" rx="1" fill="#d8dee4"/>
+<rect x="630" y="352" width="86" height="2" rx="0" fill="#57606a"/>
+<line x1="588" y1="354" x2="630" y2="354" stroke="#d1d9e0" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="673" y="370" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#57606a" text-anchor="middle">−$7,305.66</text>
+<text x="673" y="388" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#1f2328" text-anchor="middle">Net</text>
+<text x="673" y="404" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="middle">running total</text>
+<text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#636c76" text-anchor="start">The whole signal is the green hairline on the axis: +$21.70, or +0.03 bps of notional.</text>
+<line x1="24" y1="432" x2="756" y2="432" stroke="#d1d9e0" stroke-width="1"/>
+<text x="24" y="454" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1f2328" text-anchor="start">The strategy was not wrong. It had nothing — and paid the spread 9,923 times to find that out.</text>
+<text x="24" y="472" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#636c76" text-anchor="start">95 % of the loss is the round-trip half-spread, 5 % is fees. Modelled P&amp;L over historical data; no capital was ever at risk.</text>
+<text x="756" y="472" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="end">source: docs/RESULTS.md</text>
+</svg>

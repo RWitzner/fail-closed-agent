@@ -108,6 +108,30 @@ capability, so *reducing* risk is never blocked by the machinery that blocks *in
 risk, and the operator account-verification drill, which submits outside the agent loop. Both are named in the
 architecture document.)*
 
+```mermaid
+flowchart LR
+    C["Strategy Candidate"] --> R{"RiskEngine.can_open<br/>5 short-circuit rungs<br/>then 8 collected stages"}
+    R -- "any stage objects" --> X(["do_nothing<br/>reasons journalled"])
+    R -- "allowed" --> P{"evaluate_preflight<br/>11 stages<br/>S9 artifact at stage 5"}
+    P -- "any stage objects" --> X
+    P -- "pass" --> T["mint_open_token<br/>issues OpenPreflightToken"]
+    T --> S[["submit_order"]]
+    S --> Q{"require_token"}
+    Q -- "absent, consumed or forged" --> F(["PreflightForgery"])
+    Q -- "binds symbol, side, qty, price" --> B[("broker")]
+    K["kill switch and strategy exits"] --> M["mint_reduce_only_token"]
+    M -. "reduce-only, no run gates, no S9" .-> S
+    V["operator drill, off by default"] -. "no token, outside the agent loop" .-> B
+    N["cancel_order"] -. "no token, by design" .-> B
+
+```
+
+On the committed configuration the first rung of `can_open` returns `run_gates_off`, so every real-strategy open
+terminates there and `mint_open_token` is never reached at all — pinned by
+`test_no_opening_submit_and_zero_total_on_committed_config`. The dotted edges are the honest part: the
+reduce-only lane reaches the same chokepoint but is deliberately not run-gated, because machinery that blocks
+*increasing* risk must never block *decreasing* it.
+
 **Fail closed on unknown.** Every external state has an explicit `UNKNOWN` that is wired to the restrictive
 branch. A stale feed and a halted market produce the same decision. Integrations that have not been verified
 against the real vendor API *raise* rather than proceed.
@@ -161,6 +185,11 @@ trades on $8.35 M of notional, the signal marked frictionlessly mid-to-mid earne
 indistinguishable from zero.** The round-trip half-spread cost **−$6,939.02** and fees **−$388.34**, for a net
 of −$7,305.66. So the strategy was not badly wrong; it had nothing at all, and paid the spread 9,923 times to
 find that out.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/cost-decomposition-dark.svg">
+  <img alt="Waterfall decomposition of family 1's loss over 9,923 trades on $8.35 million of traded notional. The signal marked mid-to-mid, frictionlessly, earned +$21.70 — 0.03 basis points, too small to be visible at this scale. The round-trip half-spread cost −$6,939.02, for a gross modelled result of −$6,917.32. Fees cost a further −$388.34, giving a net of −$7,305.66. The half-spread is 95 % of the loss and fees are 5 %." src="docs/assets/cost-decomposition-light.svg" width="780">
+</picture>
 
 **Family 2 — intraday cross-sectional relative strength.** Same universe, long-only proxy, top-2 by rank,
 30-bar horizon, on a clean window nothing had been measured on. 21 sessions, **1,144 trades: −$839.68
@@ -226,6 +255,8 @@ alone you can audit the method but not the data.
 README.md              you are here
 docs/ARCHITECTURE.md   the seven patterns — start here if you build agents, not strategies
 docs/RESULTS.md        the two nulls, the criteria, the cost decomposition, the stop rule
+docs/assets/           the figures and the social card, plus the stdlib-only generator that
+                       emits them from the numbers in RESULTS.md — CI fails if the two diverge
 docs/method/           two documents harvested from a separate prediction-market workspace
 DISCLAIMER.md          not advice, no warranty, never traded real money
 PLAN.md                the internal build log, frozen — the chronology is part of the evidence

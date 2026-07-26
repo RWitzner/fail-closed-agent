@@ -17,6 +17,53 @@ A note on what "verified" means here: every file and symbol referenced below exi
 named test runs in the offline suite (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`, 2000 tests,
 no install, no network, no credentials).
 
+### The shape of the system
+
+The design names seven tiers — data, market state, signal, strategy, risk, execution, journal. That is a
+*logical* decomposition, and it is worth being blunt about what it is not: tiers 2 through 7 are not seven
+services, they are phases sequenced inside one function. `Orchestrator.on_tick` runs ten frozen steps in an
+order that is deliberately **not** the tier numbering — the account is refreshed before features are computed,
+and the kill switch is evaluated before any scan happens, because both must be true before a decision is
+allowed to exist.
+
+```mermaid
+flowchart TB
+    FEED[("vendor feed")]
+    BRK[("broker — the position of record")]
+    subgraph TICK["Orchestrator.on_tick — ten frozen steps, one loop, one process"]
+        direction TB
+        S1["1 · ingest bookkeeping<br/>tier 1"]
+        S2["2 · market state for universe, held and in-flight<br/>tier 2"]
+        S3["3 · account refresh<br/>tier 7"]
+        S4["4 · bars to features to probe to resolver<br/>tier 3"]
+        S5["5 · kill evaluation<br/>tier 5"]
+        S6["6 · advance in-flight order and watcher<br/>tier 6"]
+        S7["7 · snapshot assembly and scan<br/>tiers 3 and 4"]
+        S8["8 · exits<br/>tiers 4 and 6"]
+        S9["9 · marks per held position<br/>tier 6"]
+        S10["10 · session edge and reconcile<br/>tier 7"]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10
+    end
+    JRN[["append-only JSONL journal<br/>per-row content hash, per-stream seq"]]
+    REC[["recorder and dual-hash replay"]]
+    DSH["read-only dashboard<br/>loopback only"]
+
+    FEED --> S1
+    FEED -. "only when the operator passes --record-events" .-> REC
+    BRK -- "authoritative account and positions" --> S3
+    BRK -- "SOD and EOD reconcile" --> S10
+    S7 -- "gated opens" --> BRK
+    S8 -- "reduce-only exits" --> BRK
+    TICK -- "every decision, verdict, order and transition" --> JRN
+    JRN --> DSH
+```
+
+Two arrows carry most of the safety argument. The broker points *into* the loop, never out of it: the local
+book is a label and the broker's ledger is the truth, which is why the two are different types
+(`BrokerUSD` and `ModeledUSD`) and why conflating them is a test failure. And the recorder edge is dotted
+because recording is opt-in and off by default — a live session records nothing unless someone asks it to,
+which is worth knowing before you believe any claim about replayability.
+
 ---
 
 ## 1. Two-key arming
@@ -41,6 +88,35 @@ in two places under two different kinds of control.
 identity-strictly: the config value must be the boolean `True`, not a truthy string, not `1`, not `"true"`.
 That detail matters more than it looks — most accidental arming in configuration systems comes from a truthy
 value sliding through a loose check.
+
+```mermaid
+flowchart TB
+    subgraph LIVE["Live capital — a hard AND"]
+        direction TB
+        KA["Key A<br/>risk_rules.live_trading.enabled<br/>committed, visible in a diff<br/>must be identity True"]
+        KB["Key B<br/>runtime secret handed to construct_live_broker<br/>never committed"]
+        AND{"two_key_armed<br/>key_a and key_b"}
+        KA --> AND
+        KB --> AND
+        AND -- "either key absent" --> AE(["ArmingError — raises, does not return False"])
+        AND -- "both keys present" --> NI(["NotImplementedError<br/>AlpacaLiveBroker lands in M8"])
+    end
+    subgraph PAPER["Paper mode — a single key"]
+        direction TB
+        SF[".secrets/run_gates.json<br/>enabled and paper_trading.enabled<br/>both identity True, coupled into one switch"]
+        AV["assemble_gates_view"]
+        OK(["opening_allowed is True"])
+        SF --> AV --> OK
+    end
+    CC["config/agent_rules.json<br/>enabled false<br/>paper_trading.enabled false"] -. "overwritten, not AND-ed" .-> AV
+```
+
+Two things in that drawing are worth more than the AND itself. The live column terminates in a
+`NotImplementedError`: **there is no live broker class anywhere in this repository**, so even a correctly armed
+call cannot construct one. The pattern is a tested, dormant seam, not a guard standing in front of running live
+code — and a diagram that showed a live broker at the end of it would be claiming something this tree does not
+contain. The paper column shows the asymmetry as an assignment arrow rather than a join, because that is what
+the code does.
 
 **The test.** `tests/agent/test_two_key_arming.py`: `test_committed_config_is_not_armed`,
 `test_key_a_only_is_not_armed`, `test_key_b_only_is_not_armed`, `test_both_keys_arms`,
@@ -79,6 +155,68 @@ is an unforgeable capability token:
 
 The generalisation: **make the dangerous operation take an argument that only the safety system can produce.**
 Then "did we check?" is answered by the type system rather than by discipline.
+
+Drawn end to end, with every branch that reaches a broker:
+
+```mermaid
+flowchart TB
+    subgraph OPENLANE["Opening or increasing — the fully gated lane"]
+        direction TB
+        AC["on_tick step 7<br/>_assemble_ctxs"]
+        DR(["snapshot fails signal-tier assembly<br/>symbol dropped, no scan, nothing journalled"])
+        SC["_scan"]
+        OB(["broker is None, or kind is spy<br/>observe compositions stop here"])
+        CA["Strategy.scan returns a Candidate"]
+        SO["_start_open<br/>journals would_open before any gate runs"]
+        CO{"RiskEngine.can_open"}
+        P1["phase 1, short-circuits in order<br/>run_gates · kill · margin_freeze · account · portfolio"]
+        P2["phase 2, no short-circuit, reasons unioned<br/>candidate · universe · market_state · short<br/>caps · margin · pdt · loss"]
+        RJ1(["verdict.allowed is not True<br/>the risk row IS the refusal record"])
+        LA["latency budget elapses"]
+        RQ["_requote_and_submit<br/>second quote, market state re-read, S9 artifact resolved"]
+        PF{"evaluate_preflight<br/>11 stages, pure, no I/O"}
+        RJ2(["reject journalled with stage and reasons"])
+        MT["mint_open_token<br/>runs evaluate_preflight itself, then issues<br/>OpenPreflightToken bound to side, qty, price, kill generation"]
+        AC --> DR
+        AC --> SC
+        SC --> OB
+        SC --> CA --> SO --> CO
+        CO --> P1 --> P2
+        CO --> RJ1
+        P2 --> LA --> RQ --> PF
+        PF --> RJ2
+        PF -- "zero reasons" --> MT
+    end
+
+    subgraph REDUCELANE["Reducing — deliberately not run-gated"]
+        direction TB
+        EX["strategy exits, kill-switch flatten, residual retry"]
+        MR["mint_reduce_only_token<br/>no run gates, no S9, no risk verdict<br/>validates held quantity, symbol and side only"]
+        EX --> MR
+    end
+
+    SUB[["submit_order — the one function"]]
+    RT{"require_token"}
+    FG(["PreflightForgery"])
+    BR[("broker _place")]
+    MT --> SUB
+    MR --> SUB
+    SUB --> RT
+    RT -- "absent, consumed, forged or mutated intent" --> FG
+    RT -- "open branch binds symbol, side, qty, limit_price<br/>reduce branch binds symbol, side, qty" --> BR
+
+    CN["cancel_order"] -. "no token, by design — cancelling reduces risk" .-> BR
+    OP["verify_alpaca_paper --allow-order-drill"] -. "no token, no OrderIntent, outside the agent loop, off by default" .-> BR
+
+```
+
+Three things that diagram is drawn to prevent you from concluding. The run-gate check appears **twice** —
+`can_open` rung 1 and `evaluate_preflight` rung 1 read the same two booleans independently, which is defence in
+depth rather than a re-derivation; on the committed configuration the first one terminates every open, so the
+mint path is never entered at all. The reduce lane reaches the same chokepoint through a real token, so it is
+policy-ungated, **not** token-ungated. And the two dotted arrows at the bottom are writes to a real broker that
+carry no token at all: they cannot open or increase a position, but "one chokepoint" is a claim about opening
+risk, not about all outside contact.
 
 **The test.** `tests/agent/test_preflight_token.py`: `test_token_cannot_be_constructed_with_wrong_mint`,
 `test_subclass_cannot_be_constructed_with_wrong_mint`, `test_open_token_built_with_real_mint_is_unauthorized`,

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 568" width="780" height="568" role="img" aria-labelledby="figtitle figdesc">
+<title id="figtitle">Family 2 against criteria fixed before the run</title>
+<desc id="figdesc">Scorecard of the relative-strength strategy family against the eleven pass criteria pinned before the run. Net P&amp;L was minus $839.68 and active P&amp;L against the exposure-matched benchmark was minus $120.65, both failing a greater-than-zero requirement; it beat the equal-weight basket by $405.64, but the criterion requires beating both benchmarks. Profit factor 0.55 reached only 0.50 times the 1.10 floor. Max drawdown 0.87 percent and worst day 0.11 percent passed their caps. The p95 realism gap of 29.82 basis points was 1.99 times its 15 basis point cap and the max single-fill divergence of 97.48 basis points was 1.95 times its 50 basis point cap. Five of eleven gates passed; the gate is an AND, so the family was nulled. The staged quotes predate fix A; the fix-A-compliant rerun gives 1,147 trades and minus $858.01 net, and fails every gate the same way.</desc>
+<text x="24" y="36" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#1f2328" text-anchor="start">Family 2 against criteria fixed before the run</text>
+<text x="24" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#636c76" text-anchor="start">Cross-sectional relative strength · 1,144 trades · 21 sessions · clean window 2026-03-10 → 2026-04-08</text>
+<text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="700" fill="#8c959f" text-anchor="start">MUST BE POSITIVE</text>
+<text x="288" y="100" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="start">one gate, two benchmarks — both must be beaten</text>
+<line x1="24" y1="110" x2="756" y2="110" stroke="#d1d9e0" stroke-width="1"/>
+<text x="24" y="138" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">Net P&amp;L, modelled</text>
+<text x="272" y="138" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">&gt; 0</text>
+<rect x="288" y="128" width="121" height="14" rx="2" fill="#ffcecb"/>
+<text x="694" y="138" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#cf222e" text-anchor="end">−$839.68</text>
+<text x="24" y="168" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">Active vs exposure-matched</text>
+<text x="272" y="168" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">&gt; 0</text>
+<rect x="391.61" y="158" width="17.39" height="14" rx="2" fill="#ffcecb"/>
+<text x="694" y="168" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#cf222e" text-anchor="end">−$120.65</text>
+<text x="24" y="198" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">Active vs equal-weight basket</text>
+<text x="272" y="198" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">&gt; 0</text>
+<rect x="409" y="188" width="58.45" height="14" rx="2" fill="#c5f2ce"/>
+<text x="694" y="198" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#1a7f37" text-anchor="end">+$405.64</text>
+<rect x="710" y="126" width="46" height="18" rx="9" fill="#ffcecb"/>
+<text x="733" y="139" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#cf222e" text-anchor="middle">✗ FAIL</text>
+<line x1="702" y1="156" x2="702" y2="202" stroke="#d1d9e0" stroke-width="1"/>
+<line x1="702" y1="156" x2="706" y2="156" stroke="#d1d9e0" stroke-width="1"/>
+<line x1="702" y1="202" x2="706" y2="202" stroke="#d1d9e0" stroke-width="1"/>
+<rect x="710" y="171" width="46" height="18" rx="9" fill="#ffcecb"/>
+<text x="733" y="184" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#cf222e" text-anchor="middle">✗ FAIL</text>
+<line x1="409" y1="124" x2="409" y2="212" stroke="#57606a" stroke-width="1"/>
+<text x="409" y="230" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="middle">0</text>
+<text x="545" y="230" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="start">beaten — but the basket simply lost more</text>
+<text x="24" y="268" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="700" fill="#8c959f" text-anchor="start">AGAINST ITS OWN PREDECLARED LIMIT</text>
+<text x="288" y="268" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="start">bar length = measured, as a share of the threshold</text>
+<line x1="24" y1="278" x2="756" y2="278" stroke="#d1d9e0" stroke-width="1"/>
+<text x="24" y="306" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">Profit factor</text>
+<text x="272" y="306" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">≥ 1.10</text>
+<rect x="288" y="296" width="60.5" height="14" rx="2" fill="#ffcecb"/>
+<rect x="348.5" y="296" width="60.5" height="14" rx="0" fill="#cf222e" opacity="0.12"/>
+<text x="545" y="306" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#8c959f" text-anchor="start">0.50× floor</text>
+<text x="694" y="306" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#cf222e" text-anchor="end">0.55</text>
+<rect x="710" y="294" width="46" height="18" rx="9" fill="#ffcecb"/>
+<text x="733" y="307" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#cf222e" text-anchor="middle">✗ FAIL</text>
+<text x="24" y="336" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">Max drawdown</text>
+<text x="272" y="336" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">≤ 1.50 %</text>
+<rect x="288" y="326" width="70.18" height="14" rx="2" fill="#c5f2ce"/>
+<text x="545" y="336" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#8c959f" text-anchor="start">0.58× cap</text>
+<text x="694" y="336" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#1a7f37" text-anchor="end">0.87 %</text>
+<rect x="710" y="324" width="46" height="18" rx="9" fill="#c5f2ce"/>
+<text x="733" y="337" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#1a7f37" text-anchor="middle">✓ PASS</text>
+<text x="24" y="366" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">Worst day</text>
+<text x="272" y="366" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">≤ 0.75 %</text>
+<rect x="288" y="356" width="17.75" height="14" rx="2" fill="#c5f2ce"/>
+<text x="545" y="366" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#8c959f" text-anchor="start">0.15× cap</text>
+<text x="694" y="366" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#1a7f37" text-anchor="end">0.11 %</text>
+<rect x="710" y="354" width="46" height="18" rx="9" fill="#c5f2ce"/>
+<text x="733" y="367" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#1a7f37" text-anchor="middle">✓ PASS</text>
+<text x="24" y="396" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">p95 realism gap</text>
+<text x="272" y="396" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">≤ 15 bps</text>
+<rect x="288" y="386" width="240.55" height="14" rx="2" fill="#ffcecb"/>
+<text x="545" y="396" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#8c959f" text-anchor="start">1.99× cap</text>
+<text x="694" y="396" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#cf222e" text-anchor="end">29.82 bps</text>
+<rect x="710" y="384" width="46" height="18" rx="9" fill="#ffcecb"/>
+<text x="733" y="397" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#cf222e" text-anchor="middle">✗ FAIL</text>
+<text x="24" y="426" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#1f2328" text-anchor="start">Max single-fill divergence</text>
+<text x="272" y="426" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#8c959f" text-anchor="end">≤ 50 bps</text>
+<rect x="288" y="416" width="235.9" height="14" rx="2" fill="#ffcecb"/>
+<text x="545" y="426" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" font-weight="400" fill="#8c959f" text-anchor="start">1.95× cap</text>
+<text x="694" y="426" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="700" fill="#cf222e" text-anchor="end">97.48 bps</text>
+<rect x="710" y="414" width="46" height="18" rx="9" fill="#ffcecb"/>
+<text x="733" y="427" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#cf222e" text-anchor="middle">✗ FAIL</text>
+<line x1="409" y1="290" x2="409" y2="440" stroke="#57606a" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="409" y="458" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="middle">the threshold</text>
+<line x1="24" y1="486" x2="756" y2="486" stroke="#d1d9e0" stroke-width="1"/>
+<text x="24" y="508" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1f2328" text-anchor="start">5 of 11 predeclared gates passed. The gate is an AND: one failure is a null.</text>
+<text x="756" y="508" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#8c959f" text-anchor="end">source: docs/RESULTS.md</text>
+<text x="24" y="526" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#636c76" text-anchor="start">Not shown: trades 1,144 ≥ 30, sessions 21 ≥ 20, traded sessions 21 ≥ 5 — all pass — and average trade −8.78 bps against a &gt; 0 requirement, which fails.</text>
+<text x="24" y="542" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#8c959f" text-anchor="start">Staged pre-fix-A run; the fix-A-compliant rerun — 1,147 trades, −$858.01 net, p95 29.95 bps — fails every gate the same way.</text>
+</svg>

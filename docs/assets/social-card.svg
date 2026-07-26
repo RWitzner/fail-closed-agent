@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="figtitle figdesc">
+<title id="figtitle">An autonomous trading agent that has never placed a single trade</title>
+<desc id="figdesc">Social preview card. Headline: an autonomous trading agent that has never placed a single trade — and that's the point. Zero orders submitted by the agent, zero real money at risk ever, 2,000 offline tests with no install. Apache-2.0; two strategy families were predeclared, measured and nulled on their own criteria.</desc>
+<rect x="0" y="0" width="1280" height="640" rx="0" fill="#0b0e13"/>
+<text x="84" y="96" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="15" font-weight="600" fill="#7d9dc4" text-anchor="start">US EQUITIES · PAPER-FIRST · ARCHIVED ARTIFACT</text>
+<text x="84" y="196" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="54" font-weight="650" fill="#e8eef4" text-anchor="start">An autonomous trading agent</text>
+<text x="84" y="258" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="54" font-weight="650" fill="#e8eef4" text-anchor="start">that has never placed a single trade</text>
+<text x="84" y="318" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="25" font-weight="400" fill="#9aa4b2" text-anchor="start">And that's the point.</text>
+<line x1="84" y1="380" x2="1196" y2="380" stroke="#232a34" stroke-width="1"/>
+<rect x="84" y="424" width="28" height="2" rx="0" fill="#7d9dc4"/>
+<text x="84" y="486" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="44" font-weight="700" fill="#e8eef4" text-anchor="start">0</text>
+<text x="84" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#9aa4b2" text-anchor="start">orders submitted by the agent</text>
+<rect x="484" y="424" width="28" height="2" rx="0" fill="#7d9dc4"/>
+<text x="484" y="486" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="44" font-weight="700" fill="#e8eef4" text-anchor="start">$0</text>
+<text x="484" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#9aa4b2" text-anchor="start">real money at risk, ever</text>
+<rect x="884" y="424" width="28" height="2" rx="0" fill="#7d9dc4"/>
+<text x="884" y="486" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="44" font-weight="700" fill="#e8eef4" text-anchor="start">2,000</text>
+<text x="884" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#9aa4b2" text-anchor="start">offline tests, no install</text>
+<text x="84" y="572" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#656e7c" text-anchor="start">Apache-2.0 · two strategy families predeclared, measured and nulled on their own criteria</text>
+</svg>

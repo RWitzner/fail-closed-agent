@@ -77,6 +77,18 @@ jobs:
           fi
           echo "OK: artifacts/backtests/ is empty — nothing was ever promoted"
 
+      - name: Assert the committed figures still match their generator
+        # The figures state measured numbers. Re-running the generator must be a no-op, so a
+        # number cannot be edited into an SVG without also editing the source it is quoted from.
+        run: |
+          python3 docs/assets/make_figures.py
+          if ! git diff --quiet -- docs/assets; then
+            echo "FAIL: committed figures differ from docs/assets/make_figures.py output"
+            git diff --stat -- docs/assets
+            exit 1
+          fi
+          echo "OK: figures are reproducible from the committed generator"
+
       - name: Assert no market data or journals are tracked
         run: |
           leaked=$(git ls-files | grep -E '^(data|reports|journal)/' || true)

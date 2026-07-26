@@ -69,9 +69,11 @@ NVDA, TSLA. Long-only.
 | Non-overlapping holdout, 22 sessions | 11,368 | **−$6,918.83** | −$5,183.91 | **0 of 10** |
 | `momentum_v2` diagnostic, 10 symbols | 1,428 | −$409.06 | −$142.17 | — |
 
-Profit factor ranged from **0.001 to 0.71** across symbols — every one below the 1.10 floor, most far below.
-Realism gaps ranged from a p95 of 3.3 bps up to **93.6 bps** depending on the name, against a 15 bps cap, and
-single-fill divergence reached **460.8 bps** against a 50 bps cap.
+Profit factor ranged from **0.001 to 0.71** across symbols in the holdout and **0.05 to 0.54** in the broader
+window — every one below the 1.10 floor, most far below. In the holdout, realism gaps ranged from a p95 of
+3.3 bps up to **84.3 bps** depending on the name, against a 15 bps cap, and single-fill divergence reached
+**460.8 bps** against a 50 bps cap. The broader-window review publishes neither of those two columns, so they
+are holdout figures rather than a range across both gated runs.
 
 **What killed it.** Every symbol, in both gated windows, failed on net P&L, active P&L, profit factor and
 average trade — ten of ten, twice, with no exceptions. The realism caps bit hard but not universally: the
@@ -92,6 +94,11 @@ net                        −$7,305.66
 benchmark (matched)        −$2,733.94   ← mid-marked from the decision, frictionless; the basket fell
 active vs benchmark        −$4,571.72
 ```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/cost-decomposition-dark.svg">
+  <img alt="Waterfall decomposition of family 1's loss over 9,923 trades on $8.35 million of traded notional. The signal marked mid-to-mid, frictionlessly, earned +$21.70 — 0.03 basis points, too small to be visible at this scale. The round-trip half-spread cost −$6,939.02, for a gross modelled result of −$6,917.32. Fees cost a further −$388.34, giving a net of −$7,305.66. The half-spread is 95 % of the loss and fees are 5 %." src="assets/cost-decomposition-light.svg" width="780">
+</picture>
 
 Fees are only 5.3 % of the loss — but fees are not the friction that mattered. The strategy buys at the ask and
 sells at the bid; the benchmark is marked mid-to-mid and pays nothing. Marked that same frictionless way, the
@@ -148,6 +155,11 @@ been looked at.
 | Profit factor | **0.55** | ≥ 1.10 | **FAIL** |
 | p95 realism gap | **29.82 bps** | ≤ 15 | **FAIL** |
 | Max single-fill divergence | **97.48 bps** | ≤ 50 | **FAIL** |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/criteria-vs-measured-dark.svg">
+  <img alt="Scorecard of family 2 against its eleven predeclared gates. Net P&amp;L −$839.68 and active P&amp;L versus the exposure-matched benchmark −$120.65 both fail a greater-than-zero requirement; the +$405.64 against the equal-weight basket does not rescue the gate, because the criterion requires beating both benchmarks. Profit factor 0.55 reaches half of its 1.10 floor. Max drawdown 0.87 % and worst day 0.11 % pass their caps. The p95 realism gap of 29.82 bps is 1.99× its 15 bps cap, and max single-fill divergence of 97.48 bps is 1.95× its 50 bps cap. Five of eleven gates passed. The staged quotes predate fix A; the fix-A-compliant rerun gives 1,147 trades and −$858.01 net, and fails every gate the same way." src="assets/criteria-vs-measured-light.svg" width="780">
+</picture>
 
 The `+$405.64` against the equal-weight basket is the trap the two-benchmark rule was written to catch: it
 does not mean the strategy made money. It means **the basket lost more**. Against the benchmark that actually
