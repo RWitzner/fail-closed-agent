@@ -221,7 +221,7 @@ reads no credentials and contacts no external host; three tests bind a loopback 
 dashboard, and that is the only networking it does:
 
 ```bash
-git clone <this repo> && cd stocks
+git clone https://github.com/RWitzner/fail-closed-agent.git && cd fail-closed-agent
 python3 -m unittest discover -s tests -p 'test_*.py' -t .
 # Ran 2000 tests in ~8s — OK
 ```
