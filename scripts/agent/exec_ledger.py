@@ -485,7 +485,7 @@ class ExecLedger:
                                  strategy_limit, score, paper_eligible,
                                  position_id, event_basis, decision_ts_utc,
                                  decision_seen_at_ms, quote_a,
-                                 decision_id) -> dict:
+                                 decision_id, exit_due_utc=None) -> dict:
         action = require_member(STRATEGY_DECISION_ACTIONS, action,
                                 what="strategy decision action")
         if action == "would_close":
@@ -517,6 +517,10 @@ class ExecLedger:
                                                 field="decision_seen_at_ms"),
             "quote_a": _provenance(quote_a, field="quote_a"),
         }
+        if exit_due_utc is not None:
+            if action != "would_open":
+                raise ExecError("exit_due_utc belongs only to opening decisions")
+            body["exit_due_utc"] = _require_str(exit_due_utc, field="exit_due_utc")
         return self._record(
             self._orders, EVT_STRATEGY_DECISION, body,
             decision_id=_require_id(decision_id, field="decision_id",

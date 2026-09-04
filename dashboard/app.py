@@ -131,7 +131,7 @@ async function tick() {
   money($('c-broker'), s.pnl.realized_broker_pnl_usd);
   money($('c-modeled'), s.pnl.realized_modeled_pnl_usd);
   $('c-fees').querySelector('.v').textContent = s.pnl.fees_usd;
-  $('c-pos').querySelector('.v').textContent = s.positions.open_count;
+  $('c-pos').querySelector('.v').textContent = s.positions.open_count ?? 'unavailable';
   $('c-trades').querySelector('.v').textContent =
     `${s.positions.opens} / ${s.positions.closes}`;
   $('c-fills').querySelector('.v').textContent =

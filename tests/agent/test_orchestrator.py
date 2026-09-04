@@ -602,6 +602,138 @@ class OrchestratorCase(unittest.TestCase):
 
     # -------------------------------------------------------------------- RC-1
 
+    def _momentum_position(self, subdir, strategy):
+        from unittest.mock import patch
+        from agent.runtime_artifact import write_runtime_artifact
+        from tests.agent.test_backtest_gate_m7 import _artifact_payload, _reviewed_runtime_metrics
+        api = ScriptedOrderApi({"submit": [_ack_filled("200.00")]})
+        pipeline = self.make_pipeline(
+            subdir=subdir, strategy=strategy,
+            broker=AlpacaPaperBroker(order_api=api),
+            account_provider=FakeAccountProvider(account_payloads=[account_payload()]),
+            run_gates="valid")
+        metrics = _reviewed_runtime_metrics(pipeline.config, strategy.strategy_id)
+        research = _artifact_payload(strategy_id=strategy.strategy_id,
+            rules_hash=pipeline.orch._signal_config.rules_hash,
+            data_pin="EQUS.MINI:tbbo:1m:historical:mh-abc123", metrics=metrics)
+        write_runtime_artifact(artifacts_dir=pipeline.artifacts_dir,
+            research_artifact=research, config=pipeline.config,
+            live_data_pin="EQUS.MINI:tbbo:1m:live",
+            created_utc="2026-06-15T00:00:00Z", allow_reviewed_runtime=True)
+        original_latest = pipeline.orch._feature_view.latest
+
+        def positive_features(symbol, instrument_id):
+            from dataclasses import replace
+            feature = original_latest(symbol, instrument_id)
+            if feature is None:
+                return None
+            return replace(feature, data_pin="EQUS.MINI:tbbo:1m:live", features={**feature.features,
+                "momentum_9": "0.02", "momentum_21": "0.02",
+                "ema_gap_9_21": "0.01", "sma_gap_21_50": "0.01",
+                "z_ret_21": "0.5", "realized_vol_21": "0.01"})
+
+        with patch.object(pipeline.orch._feature_view, "latest", positive_features):
+            pipeline.tick_on_bar(50)
+            pipeline.tick_quote_only(50)
+        self.assertEqual([p["side"] for p in api.submit_calls], ["buy"])
+        self.assertEqual(len(pipeline.rows_of("positions", "position_open")), 1)
+        return pipeline, api
+
+    def test_real_momentum_strategies_exit_at_decision_horizon_without_new_bar(self):
+        from agent.paper_session import build_strategy
+        for strategy_id in ("directional.momentum_v1", "directional.momentum_v2"):
+            with self.subTest(strategy_id=strategy_id):
+                pipeline, api = self._momentum_position(strategy_id, build_strategy(strategy_id))
+                api.script["submit"] = [lambda p: order_payload(
+                    client_order_id=p["client_order_id"], symbol=p["symbol"],
+                    qty=p["qty"], side=p["side"], status="filled",
+                    filled_qty=p["qty"], filled_avg_price="200.00")]
+                pipeline.tick_quote_only(54)
+                self.assertEqual(len(api.submit_calls), 1)
+                pipeline.tick_quote_only(55)
+                pipeline.tick_quote_only(56)
+                self.assertEqual([p["side"] for p in api.submit_calls], ["buy", "sell"])
+                self.assertEqual(len(pipeline.rows_of("positions", "position_close")), 1)
+                self.assertTrue(all(p.status == "closed" for p in pipeline.orch.book._positions.values()))
+                from agent.paper_report import build_daily_report
+                report = build_daily_report(pipeline.journal_dir)
+                self.assertEqual(report["trading"]["position_opens"], 1)
+                self.assertEqual(report["trading"]["position_closes"], 1)
+                self.assertEqual(report["trading"]["closes_by_reason"], {"strategy_exit": 1})
+                self.assertEqual(Decimal(report["trading"]["realized_broker_pnl_usd"]), 0)
+                pipeline.close()
+
+    def test_momentum_due_exit_waits_for_pending_close_without_duplicate_submit(self):
+        from agent.paper_session import build_strategy
+        pipeline, api = self._momentum_position(
+            "momentum-pending", build_strategy("directional.momentum_v1"))
+        qty = str(next(iter(pipeline.orch.book._positions.values())).qty)
+        api.script["submit"] = [_flatten_submit("new", "0", avg=None)]
+        api.script["get_by_client_order_id"] = [
+            _flatten_status("new", "0", qty=qty, avg=None),
+            _flatten_status("new", "0", qty=qty, avg=None),
+            _flatten_status("filled", qty, qty=qty),
+        ]
+        pipeline.tick_quote_only(55)
+        self.assertTrue(pipeline.orch.in_flight)
+        for _ in range(2):
+            pipeline.tick_quote_only(55, advance_ms=1000)
+            self.assertTrue(pipeline.orch.in_flight)
+            self.assertEqual(len(api.submit_calls), 2)
+        pipeline.tick_quote_only(55, advance_ms=1000)
+        self.assertFalse(pipeline.orch.in_flight)
+        self.assertEqual([p["side"] for p in api.submit_calls], ["buy", "sell"])
+        self.assertEqual(len(pipeline.rows_of("positions", "position_close")), 1)
+
+    def test_delayed_quote_cannot_extend_momentum_holding_time(self):
+        from agent.paper_session import build_strategy
+        pipeline, api = self._momentum_position(
+            "momentum-delayed", build_strategy("directional.momentum_v1"))
+        qty = str(next(iter(pipeline.orch.book._positions.values())).qty)
+        api.script["submit"] = [_flatten_submit("filled", qty)]
+        # Five real minutes pass, but the next received event advances only
+        # one market minute. It must not earn the position four more minutes.
+        pipeline.tick_quote_only(51, advance_ms=300_000)
+        self.assertEqual([p["side"] for p in api.submit_calls], ["buy", "sell"])
+        self.assertEqual(len(pipeline.rows_of("positions", "position_close")), 1)
+
+    def test_momentum_restart_preserves_deadline_and_retries_only_partial_residual(self):
+        from agent.paper_session import build_strategy
+        pipeline, _ = self._momentum_position(
+            "momentum-restart", build_strategy("directional.momentum_v1"))
+        from copy import deepcopy
+        resumed_config = deepcopy(pipeline.config)
+        resumed_config["agent_rules"]["signal"]["horizons"].reverse()
+        pipeline.close()
+
+        def partial(p):
+            return order_payload(client_order_id=p["client_order_id"],
+                symbol=p["symbol"], qty=p["qty"], side=p["side"],
+                status="canceled", filled_qty="2", filled_avg_price="200.00")
+
+        def full(p):
+            return order_payload(client_order_id=p["client_order_id"],
+                symbol=p["symbol"], qty=p["qty"], side=p["side"],
+                status="filled", filled_qty=p["qty"], filled_avg_price="200.00")
+
+        api = ScriptedOrderApi({"submit": [partial, full]})
+        resumed = self.make_pipeline(
+            subdir="momentum-restart", run_id="run-restarted",
+            strategy=None, broker=AlpacaPaperBroker(order_api=api),
+            config=resumed_config,
+            account_provider=FakeAccountProvider(account_payloads=[account_payload()]),
+            run_gates=None)
+        resumed.tick_quote_only(54)
+        self.assertEqual(api.submit_calls, [])
+        resumed.tick_quote_only(55)
+        # No new quote/bar: elapsed monotonic time still services the residual.
+        resumed.clock.advance(1000)
+        resumed.orch.on_tick(now_ms=resumed.clock.now_ms())
+        self.assertEqual([p["side"] for p in api.submit_calls], ["sell", "sell"])
+        first_qty = Decimal(api.submit_calls[0]["qty"])
+        self.assertEqual(Decimal(api.submit_calls[1]["qty"]), first_qty - 2)
+        self.assertTrue(all(p.status == "closed" for p in resumed.orch.book._positions.values()))
+
     def test_rc1_global_in_flight_guard_single_close(self):
         mints = []
         real_mint = orch_mod.mint_reduce_only_token
@@ -956,6 +1088,43 @@ class OrchestratorCase(unittest.TestCase):
                          "flatten-AAPL")
         closes = pipeline.rows_of("positions", "position_close")
         self.assertEqual([row["reason"] for row in closes], ["kill_flatten"])
+
+    def test_broker_account_timeouts_keep_kill_loop_and_positions_read_alive(self):
+        pipeline, api = self._blind_pipeline("blind-transport")
+        pipeline.tick_on_bar(1)
+        pipeline.orch._account_provider = None
+        api.script["get_account"] = [BrokerTimeout("offline timeout")] * 30
+        api.script["list_positions"] = [self._blind_positions()] * 30
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        self.assertEqual([call["side"] for call in api.submit_calls], ["sell"])
+        self.assertEqual(
+            [r["reason"] for r in pipeline.rows_of("positions", "position_close")],
+            ["kill_flatten"])
+
+    def test_total_broker_outage_halts_without_inventing_flat_positions(self):
+        pipeline, api = self._blind_pipeline("blind-total-outage")
+        pipeline.tick_on_bar(1)
+        pipeline.orch._account_provider = None
+        api.script["get_account"] = [BrokerTimeout("offline timeout")] * 30
+        api.script["list_positions"] = [BrokerTimeout("offline timeout")] * 30
+        for bar in range(2, 9):
+            pipeline.tick_on_bar(bar, advance_ms=30_000)
+        self.assertEqual(pipeline.orch.risk_kill.state, "halted")
+        self.assertTrue(pipeline.orch._has_open_positions())
+        self.assertEqual(api.submit_calls, [])
+        report = pipeline.orch.run_reconcile(
+            phase="eod", ts_utc="2026-06-15T20:00:00.000000Z",
+            now_ms=pipeline.clock.now_ms())
+        self.assertFalse(report.clean)
+
+    def test_account_provider_interrupt_is_not_swallowed(self):
+        pipeline, api = self._blind_pipeline("blind-interrupt")
+        pipeline.orch._account_provider = None
+        api.script["get_account"] = [KeyboardInterrupt()]
+        with self.assertRaises(KeyboardInterrupt):
+            pipeline.tick_on_bar(1)
 
     def test_account_blind_new_ack_keeps_residual_and_retry_never_resubmits(self):
         pipeline, api = self._blind_pipeline(

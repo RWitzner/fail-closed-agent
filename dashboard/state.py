@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from agent.journal import IncrementalJournalReader, JournalCorruption
+from agent.paper_book import PaperBook
 
 _STREAMS = ("decisions", "orders", "fills", "positions", "risk",
             "reconcile_alerts", "status", "status_plane")
@@ -77,17 +78,27 @@ class JournalStateSource:
                  if r.get("event_type") == "position_open"]
         closes = [r for r in positions_rows
                   if r.get("event_type") == "position_close"]
-        open_ids = {r.get("position_id") for r in opens}
-        closed_ids = {r.get("position_id") for r in closes}
-        live_ids = {pid for pid in open_ids - closed_ids if pid is not None}
-        live_positions = [
-            {"symbol": r.get("symbol"), "qty": str(r.get("qty")),
-             "opened_ts_utc": r.get("opened_ts_utc"),
-             "broker_cost_usd": r.get("broker_cost_usd"),
-             "modeled_cost_usd": r.get("modeled_cost_usd"),
-             "position_id": r.get("position_id")}
-            for r in opens if r.get("position_id") in live_ids
-        ]
+        live_positions = []
+        positions_available = not any(
+            name in self._corruption for name in ("positions", "fills"))
+        try:
+            positions = PaperBook.rehydrate(positions_rows, rows["fills"])
+        except (ValueError, KeyError, TypeError) as exc:
+            # Cross-stream reads can briefly straddle a write. Retry next poll;
+            # unavailable position evidence must never be displayed as flat.
+            self._corruption["position_state"] = str(exc)
+            positions_available = False
+        else:
+            self._corruption.pop("position_state", None)
+            if positions_available:
+                live_positions = [
+                    {"symbol": pos.symbol, "qty": str(pos.qty),
+                     "opened_ts_utc": pos.opened_ts_utc,
+                     "broker_cost_usd": str(pos.broker_cost_usd),
+                     "modeled_cost_usd": (str(pos.modeled_cost_usd)
+                                          if pos.modeled_cost_usd is not None else None),
+                     "position_id": pos.position_id}
+                    for pos in positions.values() if pos.status == "open"]
 
         broker_pnl = Decimal("0")
         modeled_pnl = Decimal("0")
@@ -202,7 +213,8 @@ class JournalStateSource:
                 "fees_usd": str(fees),
             },
             "positions": {
-                "open_count": len(live_positions),
+                "open_count": len(live_positions) if positions_available else None,
+                "available": positions_available,
                 "live": _tail(live_positions, limit),
                 "opens": len(opens),
                 "closes": len(closes),

@@ -11,13 +11,16 @@ class TestArtifactCheckCacheKey(unittest.TestCase):
         orch = object.__new__(orch_mod.Orchestrator)
         orch._artifact_checks = {}
         orch.rules_hash = "rh-1"
+        orch._assembled = {"test_config": True}
         orch._artifacts_dir = "/tmp/not-used"
         return orch
 
     def test_cache_key_includes_strategy_rules_hash_and_data_pin(self):
         calls = []
 
-        def fake_verify(strategy_id, *, rules_hash, data_pin, artifacts_dir):
+        def fake_verify(strategy_id, *, rules_hash, data_pin, artifacts_dir,
+                        runtime_config):
+            self.assertEqual(runtime_config, {"test_config": True})
             calls.append((strategy_id, rules_hash, data_pin, artifacts_dir))
             return ArtifactCheck(
                 status="ok",

@@ -29,6 +29,8 @@
     <string>__REPO__/.venv/bin/python3</string>
     <string>-m</string>
     <string>agent.paper_autorun</string>
+    <string>--live-source</string>
+    <string>alpaca-iex</string>
     <string>--journal-dir</string>
     <string>__REPO__/journal</string>
     <string>--symbols</string>

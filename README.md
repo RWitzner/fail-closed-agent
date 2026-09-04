@@ -47,7 +47,7 @@ the entire execution-realism budget the criteria allow, before you even ask whet
 | **Data** | Databento historical and Alpaca IEX live, behind one pluggable transport seam (the Databento live seam is built but was never subscribed — it fails closed) |
 | **Broker** | Alpaca *paper* — the committed adapter is paper-only by construction; paper and live share one API, so the path to live is the same code path |
 | **Language** | Python 3, standard library only for everything that matters |
-| **Tests** | **2000**, offline, hermetic — no install, no credentials, no external network |
+| **Tests** | **2023**, offline, hermetic — no install, no credentials, no external network |
 | **Real money at risk, ever** | **$0** |
 | **Orders submitted by the agent, ever** | **0** |
 
@@ -240,7 +240,7 @@ dashboard, and that is the only networking it does:
 ```bash
 git clone https://github.com/RWitzner/fail-closed-agent.git && cd fail-closed-agent
 python3 -m unittest discover -s tests -p 'test_*.py' -t .
-# Ran 2000 tests in ~8s — OK
+# Ran 2023 tests in ~18s — OK
 ```
 
 The `-t .` is required: it sets the top-level directory to the repo root so tests import as `tests.agent.*`.
@@ -284,7 +284,7 @@ config/                the three run gates and the risk rules — all false, all
 scripts/agent/         orchestrator · strategy · risk · market state · execution preflight · journal
 scripts/recorder/      vendor recorder, replay, dual-hash reconcile
 dashboard/             stdlib-only read-only local view
-tests/                 the 2000-test offline suite
+tests/                 the 2023-test offline suite
 docs/superpowers/      per-milestone contracts, plans, and adversarial review handoffs
 ```
 

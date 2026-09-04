@@ -997,7 +997,9 @@ class TestM6ReconcileOfflinePurityAndImportGuard(unittest.TestCase):
                     if alias.name in {"time", "datetime"}:
                         violations.append(f"import {alias.name}")
             elif isinstance(node, ast.ImportFrom):
-                if node.module in {"time", "datetime"}:
+                if (node.module in {"time", "datetime"}
+                        and not (node.module == "datetime"
+                                 and all(alias.name == "timedelta" for alias in node.names))):
                     violations.append(f"from {node.module} import ...")
             elif isinstance(node, ast.Attribute):
                 if node.attr in {"sleep", "time", "monotonic", "now", "utcnow"}:

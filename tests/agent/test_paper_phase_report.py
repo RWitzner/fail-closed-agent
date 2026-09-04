@@ -1,7 +1,7 @@
 """agent.paper_phase_report — the weekly criteria aggregator.
 
 Pins: per-trade modeled PnL → PF/avg-bps/drawdown/worst-day; divergence
-p95/max; sessions bookkeeping (highest restart suffix wins; incomplete days
+p95/max; sessions bookkeeping (all restart attempts survive; incomplete days
 never count as clean sessions); missing evidence stays MISSING (explicit
 missing: failures — the benchmark leg is not zero-filled); modeled-null
 closes are excluded from PF and counted loudly."""
@@ -102,8 +102,7 @@ class TestBuildPhaseMetrics(unittest.TestCase):
             report_dir = Path(tmp) / "reports"
             journal_dir = Path(tmp) / "journal"
             journal_dir.mkdir()
-            # first attempt truncated, restart clean → the date counts ONCE,
-            # as complete (highest suffix wins)
+            # A later clean attempt does not prove full-day coverage.
             _report(report_dir, "2026-07-01", run_id="run-a", truncated=True)
             _report(report_dir, "2026-07-01", run_id="run-b", suffix=1)
             _report(report_dir, "2026-07-02", run_id="run-c",
@@ -113,13 +112,44 @@ class TestBuildPhaseMetrics(unittest.TestCase):
                 report_dir=report_dir, journal_dir=journal_dir,
                 allocated_notional_usd="10000")
 
-            self.assertEqual(report["sessions"]["complete"], ["2026-07-01"])
+            self.assertEqual(report["sessions"]["complete"], [])
+            self.assertEqual(report["sessions"]["truncated"], ["2026-07-01"])
             self.assertEqual(report["sessions"]["incomplete"],
                              ["2026-07-02"])
             self.assertEqual(
-                report["metrics"]["sample"]["session_count"], 1)
+                report["metrics"]["sample"]["session_count"], 0)
             self.assertEqual(
                 report["metrics"]["quality"]["unhandled_exception_count"], 1)
+
+    def test_restart_preserves_losses_and_failure_evidence(self):
+        with TemporaryDirectory() as tmp:
+            report_dir = Path(tmp) / "reports"
+            journal_dir = Path(tmp) / "journal"
+            journal_dir.mkdir()
+            _report(report_dir, "2026-07-01", run_id="run-loss",
+                    incomplete=True, drift_rows=2)
+            _report(report_dir, "2026-07-01", run_id="run-restarted", suffix=1)
+            self._journal(journal_dir, "run-loss", ["-100.00"])
+            self._journal(journal_dir, "run-restarted", ["10.00"])
+            report = build_phase_metrics(report_dir=report_dir, journal_dir=journal_dir,
+                                         allocated_notional_usd="10000")
+            self.assertEqual(report["metrics"]["pnl"]["net_execution_realistic_pnl_usd"],
+                             "-90.000000")
+            self.assertEqual(report["sessions"]["complete"], [])
+            self.assertEqual(report["sessions"]["incomplete"], ["2026-07-01"])
+            self.assertEqual(report["metrics"]["quality"]["unresolved_reconcile_drift_count"], 2)
+            self.assertEqual(report["metrics"]["quality"]["unhandled_exception_count"], 1)
+
+    def test_empty_selected_window_does_not_fall_back_to_all_journal_trades(self):
+        with TemporaryDirectory() as tmp:
+            report_dir = Path(tmp) / "reports"
+            journal_dir = Path(tmp) / "journal"
+            journal_dir.mkdir()
+            _report(report_dir, "2026-07-01", run_id="outside")
+            self._journal(journal_dir, "outside", ["100.00"])
+            report = build_phase_metrics(report_dir=report_dir, journal_dir=journal_dir,
+                allocated_notional_usd="10000", start_date="2026-08-01")
+            self.assertEqual(report["metrics"]["sample"]["trade_count"], 0)
 
     def test_rejects_nonpositive_allocation(self):
         with TemporaryDirectory() as tmp:

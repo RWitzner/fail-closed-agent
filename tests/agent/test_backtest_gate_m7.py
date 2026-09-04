@@ -111,6 +111,145 @@ def _write_artifact(artifacts_dir, payload):
     return path
 
 
+def _reviewed_runtime_metrics(config, strategy_id=_STRATEGY_ID):
+    """Synthesized passing numbers, used only in temporary test artifacts."""
+    from agent.execution_config import ExecutionConfig
+    from agent.fees import FEE_MODEL_VERSION
+    execution = ExecutionConfig.from_config(config)
+    metrics = _v2_metrics(strategy_version=strategy_id)
+    metrics["provenance"].update({
+        "tier": "historical_reviewed",
+        "latency_budget_ms": str(execution.effective_latency_budget_ms),
+        "slippage_cap_bps": str(execution.slippage_cap_bps),
+        "fee_model_version": FEE_MODEL_VERSION,
+    })
+    return metrics
+
+
+class TestRuntimeBinding(unittest.TestCase):
+    def setUp(self):
+        from tests.lib.exec_fixtures import permissive_paper_fixture_config
+        from agent.execution_config import ExecutionConfig
+        from agent.signal_config import SignalConfig
+        self.config = permissive_paper_fixture_config()
+        self.runtime_hash = ExecutionConfig.from_config(self.config).rules_hash
+        self.research_hash = SignalConfig.from_config(self.config["agent_rules"]).rules_hash
+        self.live_pin = "EQUS.MINI:tbbo:1m:live"
+        metrics = _reviewed_runtime_metrics(self.config)
+        self.research = _artifact_payload(rules_hash=self.research_hash,
+            data_pin="EQUS.MINI:tbbo:1m:historical:mh-abc123", metrics=metrics)
+
+    def build(self, **overrides):
+        from agent.runtime_artifact import build_runtime_artifact
+        args = dict(research_artifact=self.research, config=self.config,
+            live_data_pin=self.live_pin, created_utc="2026-09-05T00:00:00.000000Z")
+        args.update(overrides)
+        return build_runtime_artifact(**args)
+
+    def verify(self, payload, **overrides):
+        from agent.backtest_gate import verify_artifact_payload
+        args = dict(strategy_id=_STRATEGY_ID, rules_hash=self.runtime_hash,
+            data_pin=self.live_pin, runtime_config=self.config)
+        args.update(overrides)
+        return verify_artifact_payload(payload, **args).status
+
+    @staticmethod
+    def rehash(payload):
+        payload["artifact_hash"] = row_hash({k: v for k, v in payload.items()
+                                              if k != "artifact_hash"})
+
+    def test_binding_preserves_historical_evidence_and_checks_both_config_hashes(self):
+        original = json.dumps(self.research, sort_keys=True)
+        payload = self.build()
+        self.assertNotEqual(self.runtime_hash, self.research_hash)
+        self.assertEqual(self.verify(payload), "ok")
+        self.assertEqual(payload["research_artifact"], self.research)
+        self.assertEqual(json.dumps(self.research, sort_keys=True), original)
+        self.assertEqual(self.verify(payload, rules_hash="changed-risk-config"), "key_mismatch")
+        self.assertEqual(self.verify(payload, runtime_config=None), "key_mismatch")
+        payload["research_artifact"]["rules_hash"] = "changed-signal-config"
+        self.rehash(payload["research_artifact"])
+        self.rehash(payload)
+        self.assertEqual(self.verify(payload), "key_mismatch")
+
+    def test_binding_refuses_manifest_execution_drift_and_unresearched_symbols(self):
+        for key, value in (("latency_budget_ms", "999"), ("slippage_cap_bps", "999"),
+                           ("fee_model_version", "other-model"), ("latency_budget_ms", None)):
+            with self.subTest(key=key, value=value):
+                payload = self.build()
+                provenance = payload["research_artifact"]["metrics"]["provenance"]
+                if value is None:
+                    provenance.pop(key)
+                else:
+                    provenance[key] = value
+                self.rehash(payload["research_artifact"])
+                self.rehash(payload)
+                self.assertEqual(self.verify(payload), "key_mismatch")
+                with self.assertRaises(ValueError):
+                    self.build(research_artifact=payload["research_artifact"])
+        payload = self.build()
+        payload["research_artifact"]["metrics"]["sample"]["symbols"] = ["MSFT"]
+        self.rehash(payload["research_artifact"])
+        self.rehash(payload)
+        self.assertEqual(self.verify(payload), "key_mismatch")
+
+    def test_binding_refuses_vendor_schema_interval_and_manifest_drift(self):
+        for pin in ("ALPACA.IEX:tbbo:1m:live", "EQUS.MINI:bbo-1s:1m:live",
+                    "EQUS.MINI:tbbo:5m:live", "EQUS.MINI:tbbo:1m:replay"):
+            with self.subTest(pin=pin), self.assertRaises(ValueError):
+                self.build(live_data_pin=pin)
+        self.research["data_pin"] = "EQUS.MINI:tbbo:1m:historical:wrong-manifest"
+        self.rehash(self.research)
+        with self.assertRaises(ValueError):
+            self.build()
+
+    def test_rehashed_failed_research_still_cannot_pass(self):
+        payload = self.build()
+        payload["research_artifact"]["metrics"]["pnl"]["net_execution_realistic_pnl_usd"] = "-100"
+        self.rehash(payload["research_artifact"])
+        self.rehash(payload)
+        self.assertEqual(self.verify(payload), "hash_invalid")
+        with self.assertRaises(ValueError):
+            self.build(research_artifact=payload["research_artifact"])
+
+    def test_fixture_evidence_and_malformed_nested_payload_fail_closed(self):
+        self.research["metrics"]["provenance"]["tier"] = "fixture"
+        self.rehash(self.research)
+        with self.assertRaises(ValueError):
+            self.build()
+        self.setUp()
+        for value in ([], ["bad"], None, "bad"):
+            payload = self.build()
+            payload["research_artifact"]["metrics"] = value
+            self.rehash(payload["research_artifact"])
+            self.rehash(payload)
+            self.assertEqual(self.verify(payload), "hash_invalid")
+        for key in ("strategy_id", "rules_hash", "data_pin", "created_utc"):
+            payload = self.build()
+            payload["research_artifact"][key] = ["malformed"]
+            self.rehash(payload["research_artifact"])
+            self.rehash(payload)
+            self.assertNotEqual(self.verify(payload), "ok")
+
+    def test_writer_requires_explicit_review_and_never_overwrites(self):
+        from pathlib import Path
+        from agent.runtime_artifact import write_runtime_artifact
+        with TemporaryDirectory() as tmp:
+            args = dict(artifacts_dir=tmp, research_artifact=self.research,
+                config=self.config, live_data_pin=self.live_pin, created_utc="2026-09-05T00:00:00Z")
+            with self.assertRaises(ValueError):
+                write_runtime_artifact(**args)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+            path = write_runtime_artifact(**args, allow_reviewed_runtime=True)
+            self.assertEqual(verify_artifact(_STRATEGY_ID, rules_hash=self.runtime_hash,
+                data_pin=self.live_pin, artifacts_dir=tmp,
+                runtime_config=self.config).status, "ok")
+            before = path.read_bytes()
+            with self.assertRaises(FileExistsError):
+                write_runtime_artifact(**args, allow_reviewed_runtime=True)
+            self.assertEqual(path.read_bytes(), before)
+
+
 class TestBacktestGateV2(unittest.TestCase):
     def _verify(self, artifacts_dir, *, strategy_id=_STRATEGY_ID,
                 rules_hash=_RULES_HASH, data_pin=_DATA_PIN):

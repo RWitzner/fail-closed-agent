@@ -7,8 +7,10 @@ metrics{..., basis: "execution_realistic_pnl"}, created_utc, artifact_hash}` wit
 verifier + an EMPTY dir (`.gitkeep`) ⇒ every real strategy rejects fail-closed
 (`backtest_artifact_missing`, FD-M5-8); M7 owns artifact production.
 
-`data_pin` uses the M3 frozen format `"{dataset}:{schema}:{interval}:{source_id}"`
-(M3 contract §I) and is compared byte-exact — any drift re-closes the gate.
+`data_pin` is compared byte-exact. A v3 runtime envelope contains the unchanged
+v2 historical evidence and explicitly binds it to the assembled runtime config
+and live pin. The research rules hash and quote substrate must still match;
+see runtime_artifact.py. No implicit alias can make a historical v2 pass live.
 
 Fail-closed posture: `verify_artifact` NEVER raises on data — an absent file is
 `missing`; unreadable / malformed JSON / wrong shape / tampered hash / wrong
@@ -33,6 +35,9 @@ _STATUSES = frozenset({"ok", "missing", "key_mismatch", "hash_invalid"})
 _PAYLOAD_KEYS = frozenset({
     "v", "strategy_id", "rules_hash", "data_pin", "metrics", "created_utc",
     "artifact_hash"})
+_RUNTIME_PAYLOAD_KEYS = frozenset({
+    "v", "strategy_id", "rules_hash", "data_pin", "research_artifact",
+    "created_utc", "artifact_hash"})
 
 _REQUIRED_BASIS = "execution_realistic_pnl"    # the S9 metric pin
 _V2_METRIC_KEYS = frozenset({
@@ -278,7 +283,8 @@ def _hash_invalid(path: str, claimed_hash: Optional[str]) -> ArtifactCheck:
 
 
 def verify_artifact(strategy_id: str, *, rules_hash: str, data_pin: str,
-                    artifacts_dir: str = ARTIFACTS_DIR) -> ArtifactCheck:
+                    artifacts_dir: str = ARTIFACTS_DIR,
+                    runtime_config: Optional[dict] = None) -> ArtifactCheck:
     """FD-M5-27 verdict for `(strategy_id, rules_hash, data_pin)` against
     `<artifacts_dir>/<strategy_id>.json`. Production keeps the `ARTIFACTS_DIR`
     default; test BUILDERS take a mandatory artifacts_dir (M5C-S12)."""
@@ -299,12 +305,29 @@ def verify_artifact(strategy_id: str, *, rules_hash: str, data_pin: str,
         # ValueError subclasses) -> hash_invalid, never a raise (fail-closed)
         return _hash_invalid(path, None)
 
+    return verify_artifact_payload(payload, strategy_id=strategy_id,
+        rules_hash=rules_hash, data_pin=data_pin, path=path,
+        runtime_config=runtime_config)
+
+
+def verify_artifact_payload(payload, *, strategy_id: str, rules_hash: str,
+                            data_pin: str, path: str = "<memory>",
+                            runtime_config: Optional[dict] = None) -> ArtifactCheck:
+    """Validate one immutable evidence envelope without filesystem access.
+
+    v2 remains byte-exact historical evidence. v3 binds that unchanged v2
+    evidence to an assembled runtime config and an identical quote substrate.
+    There is no implicit historical/live alias and no cross-vendor approval.
+    """
+
     if not isinstance(payload, dict):
         return _hash_invalid(path, None)
     claimed_hash = payload.get("artifact_hash")
     if not isinstance(claimed_hash, str) or not claimed_hash:
         claimed_hash = None
-    if set(payload) != _PAYLOAD_KEYS:
+    version = payload.get("v")
+    expected_keys = _RUNTIME_PAYLOAD_KEYS if version == 3 else _PAYLOAD_KEYS
+    if set(payload) != expected_keys:
         return _hash_invalid(path, claimed_hash)
     if claimed_hash is None:
         return _hash_invalid(path, None)
@@ -317,8 +340,58 @@ def verify_artifact(strategy_id: str, *, rules_hash: str, data_pin: str,
         return _hash_invalid(path, claimed_hash)
     if computed_hash != claimed_hash:
         return _hash_invalid(path, claimed_hash)
+    if any(not _string(payload[key]) for key in (
+            "strategy_id", "rules_hash", "data_pin", "created_utc")):
+        return _hash_invalid(path, claimed_hash)
 
-    version = payload["v"]
+    if type(version) is int and version == 3:
+        if (payload["strategy_id"], payload["rules_hash"], payload["data_pin"]) != (
+                strategy_id, rules_hash, data_pin):
+            return ArtifactCheck("key_mismatch", path, claimed_hash)
+        research = payload["research_artifact"]
+        if not isinstance(research, dict) or type(research.get("v")) is not int or research["v"] != 2:
+            return _hash_invalid(path, claimed_hash)
+        metrics = research.get("metrics")
+        if not isinstance(metrics, dict):
+            return _hash_invalid(path, claimed_hash)
+        provenance = metrics.get("provenance")
+        research_pin = research.get("data_pin")
+        if not isinstance(provenance, dict) or not isinstance(research_pin, str):
+            return _hash_invalid(path, claimed_hash)
+        parts = research_pin.split(":")
+        if (len(parts) != 5 or not all(parts) or parts[3] != "historical"
+                or parts[4] != provenance.get("input_manifest_hash")
+                or provenance.get("tier") != "historical_reviewed"
+                or data_pin != ":".join(parts[:3] + ["live"])):
+            return ArtifactCheck("key_mismatch", path, claimed_hash)
+        evidence = verify_artifact_payload(research, strategy_id=strategy_id,
+            rules_hash=research.get("rules_hash"), data_pin=research_pin, path=path)
+        if evidence.status != "ok":
+            return _hash_invalid(path, claimed_hash)
+        # Historical manifests can override execution assumptions independently
+        # of the agent-rules hash. Check the actual runtime inputs as well.
+        from agent.execution_config import ExecutionConfig
+        from agent.fees import FEE_MODEL_VERSION
+        from agent.signal_config import SignalConfig
+        if not isinstance(runtime_config, dict):
+            return ArtifactCheck("key_mismatch", path, claimed_hash)
+        try:
+            execution = ExecutionConfig.from_config(runtime_config)
+            signal = SignalConfig.from_config(runtime_config["agent_rules"])
+            symbols = set(runtime_config["agent_rules"].get("universe", {}).get("symbols", []))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return ArtifactCheck("key_mismatch", path, claimed_hash)
+        if (execution.rules_hash != rules_hash
+                or signal.rules_hash != research.get("rules_hash")
+                or _decimal_value(provenance.get("latency_budget_ms"))
+                    != execution.effective_latency_budget_ms
+                or _decimal_value(provenance.get("slippage_cap_bps"))
+                    != execution.slippage_cap_bps
+                or provenance.get("fee_model_version") != FEE_MODEL_VERSION
+                or not symbols <= set(metrics["sample"]["symbols"])):
+            return ArtifactCheck("key_mismatch", path, claimed_hash)
+        return ArtifactCheck("ok", path, claimed_hash)
+
     if isinstance(version, bool) or version != 2:
         # v1 acceptance removed: no writer emits v1 gate artifacts, and v1 was
         # the last path that skipped BOTH the metric validation and the

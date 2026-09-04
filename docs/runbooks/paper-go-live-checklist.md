@@ -134,16 +134,37 @@ evidence, which is the whole point of the paper phase).
 
 ## Step C — a strategy with a passing reviewed artifact (S9 — the edge gate)
 
-No paper-eligible strategy can open without a reviewed v2 artifact verifying `ok` for the exact
-`(strategy_id, rules_hash, data_pin)` in `artifacts/backtests/` — enforced per-open at preflight
-stage 5, not just by convention. Today `artifacts/backtests/` holds only `.gitkeep`.
+No paper-eligible strategy can open without a reviewed artifact verifying `ok` for the exact
+`(strategy_id, rules_hash, data_pin)` in `artifacts/backtests/`, enforced per-open at preflight
+stage 5. The directory still holds only `.gitkeep`; no strategy has been promoted.
 
-- The active path is the **M7d C2 run** (`1m`/`120m` on the fresh 20-session holdout, complete
-  ~2026-07-14): packet review (GPT) → Robin's separate go → the committed driver
-  (`agent.m7_run_driver`) stages the run → on a (provisional) GO: the predeclared confirmation
-  holdout → only then the production artifact write + paper entry. All four M7d operational
-  prerequisites are DONE (calendar provider, cross-checked session fixture, committed driver, fix-A
-  baseline).
+The historical v2 artifact binds the **agent rules** and the immutable historical manifest.
+The runtime binds the **assembled agent + risk rules** and the live feed. For a future passing
+strategy, `agent.runtime_artifact` creates a reviewed v3 envelope containing the unchanged v2
+artifact plus those exact runtime keys. It rechecks the pinned criteria and requires matching
+agent rules, latency/slippage assumptions, fee-model version, a covered symbol universe,
+historical manifest identity, and the same dataset, schema and interval. It does **not**
+treat `bbo-1m` and `bbo-1s`, or Databento and Alpaca IEX,
+as interchangeable. Those changes require new matching research evidence.
+
+The binding can be prepared offline in a separate output directory:
+
+```bash
+PYTHONPATH=scripts python3 -m agent.runtime_artifact \
+  --research-artifact <PASSING_REVIEWED_V2_JSON> \
+  --agent-rules config/agent_rules.json --risk-rules config/risk_rules.json \
+  --live-data-pin '<MATCHING_DATASET>:<MATCHING_SCHEMA>:1m:live' \
+  --created-utc '<UTC_TIMESTAMP>' --artifacts-dir <REVIEW_OUTPUT_DIRECTORY> \
+  --allow-reviewed-runtime
+```
+
+The writer refuses to overwrite existing artifacts. Creating a binding does not enable gates,
+provision data/status access, establish broker readiness, or authorize a production artifact
+commit. No binding was created for the rejected strategies during the September 2026 repairs.
+
+- The intraday research line is closed under its stop rule. M7d packets and staged results
+  remain historical evidence, not an active instruction to launch another experiment. A new
+  hypothesis requires a separate research mandate; these integration repairs do not supply it.
 - **Known adapter gap (only if the GO'ed strategy is the RS proxy):**
   `relative_strength.long_only_proxy_v1` is cross-sectional (`decide(snapshots, ...)`) and does not
   implement the per-symbol `scan(ctx)` Protocol the live loop drives. Before IT can paper-trade, a
@@ -217,7 +238,8 @@ One command per session day — either the supervisor (recommended for unattende
 
 ```bash
 PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_autorun \
-  --journal-dir journal --symbols AAPL,MSFT,... --strategy-id <APPROVED_STRATEGY_ID>
+  --journal-dir journal --live-source alpaca-iex \
+  --symbols AAPL,MSFT,... --strategy-id <APPROVED_STRATEGY_ID>
 ```
 
 (bounded retry ONLY on a truncated feed; append-only `autorun_log.jsonl`; loud
@@ -226,9 +248,21 @@ PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_autorun \
 
 ```bash
 PYTHONPATH=scripts .venv/bin/python3 -m agent.paper_session \
-  --journal-dir journal --live --symbols AAPL,MSFT,... --strategy-id <APPROVED_STRATEGY_ID> \
+  --journal-dir journal --live --live-source alpaca-iex \
+  --symbols AAPL,MSFT,... --strategy-id <APPROVED_STRATEGY_ID> \
   --record-events data/live/$(date +%F).events.jsonl
 ```
+
+The data-source choice must match the reviewed runtime binding. A daily retry uses only the
+report produced by that attempt; an old truncated report cannot authorize a new retry. Every
+attempt's PnL, drift and failure remains in the weekly report. A restarted day does not count
+as a complete uninterrupted session. Existing recordings are never reused by a new attempt.
+
+Momentum reductions use the deadline persisted with the opening decision (decision bar plus
+the configured horizon), including after a restart or a later config change. They run on
+ticks independently of scan/feature readiness and open gates. Partial terminal closes leave
+the residual due; a pending order must resolve before another reduction is submitted. These
+repairs do not make the rejected momentum family eligible to trade.
 
 **Follow it live** (read-only, loopback-only; works during the session AND afterwards):
 

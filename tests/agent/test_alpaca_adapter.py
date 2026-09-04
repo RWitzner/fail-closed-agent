@@ -392,6 +392,15 @@ class TestCtorModes(unittest.TestCase):
         class _FakeTradingClient:
             def __init__(self, **kwargs):
                 recorded.update(kwargs)
+                recorded["client"] = self
+                self._session = types.SimpleNamespace(request=self._request)
+
+            def _request(self, method, url, **kwargs):
+                recorded["request_options"] = kwargs
+                return {}
+
+            def get_account(self):
+                return self._session.request("GET", "https://paper-api.alpaca.markets/v2/account")
 
         def _mod(name, **attrs):
             m = types.ModuleType(name)
@@ -412,7 +421,10 @@ class TestCtorModes(unittest.TestCase):
 
         loader = lambda: {"key_id": "k", "secret_key": "s-secret",  # noqa: E731
                           "base_url": _PAPER_HOST}
-        AlpacaPaperBroker(credentials_loader=loader)   # must not KeyError
+        broker = AlpacaPaperBroker(credentials_loader=loader)   # must not KeyError
+        broker.account()
+        self.assertEqual(recorded["request_options"]["timeout"], (3.05, 5.0))
+        self.assertEqual(recorded["client"]._retry, 0)
         self.assertEqual(recorded["secret_key"], "s-secret")
         self.assertEqual(recorded["api_key"], "k")
         self.assertTrue(recorded["paper"])

@@ -56,7 +56,8 @@ costs.
 
 **The substrate.** Databento `EQUS.MINI` `bbo-1m` — Level 1 top-of-book, one-minute bars. Decisions on the
 minute bar; entry one minute after the decision with a 250 ms quote-latency budget; **exit 5 minutes after
-entry** (`horizon = config.horizons[0]` = `5m`, `scripts/agent/backtest_historical.py`; the horizon list is in
+the decision**, giving a four-minute modeled holding period (`horizon = config.horizons[0]` = `5m`,
+`scripts/agent/backtest_historical.py`; the horizon list is in
 `config/agent_rules.json`). Universe: 10 US large-caps — AAPL, AMZN, AVGO, COST, GOOGL, META, MSFT, NFLX,
 NVDA, TSLA. Long-only.
 

@@ -69,6 +69,7 @@ Documented build resolutions (faithful to the contract; report-listed):
     broker is the position-of-record and M6 reconcile owns drift).
 """
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
@@ -195,7 +196,8 @@ from agent.status_ledger import (
     replay_status,
 )
 from agent.strategies.calibration_probe import CalibrationProbe, DecisionLedger
-from agent.strategies.synthetic import ExitProvider, ScriptedSyntheticStrategy, SyntheticStrategy
+from agent.strategies.synthetic import ExitInstruction, ExitProvider, ScriptedSyntheticStrategy, SyntheticStrategy
+from agent.strategies.directional_momentum import STRATEGY_ID_V1, STRATEGY_ID_V2
 from agent.strategy import ScanContext
 from recorder.persistence import EventWriter, replay_stream
 
@@ -820,6 +822,17 @@ class Orchestrator:
         order_rows = replay_orders(self._journal_dir / "orders.jsonl")
         fill_rows = journal_replay(self._journal_dir / "fills.jsonl")
         position_rows = journal_replay(self._journal_dir / "positions.jsonl")
+        # Persisted deadlines survive restarts AND later config changes.
+        # Momentum's horizon starts at the decision bar, as in the backtest.
+        self._exit_due_by_decision = {
+            row["decision_id"]: row.get("exit_due_utc")
+            for row in order_rows
+            if row.get("event_type") == "strategy_decision"
+            and row.get("action") == "would_open"
+            and row.get("strategy_id") in (STRATEGY_ID_V1, STRATEGY_ID_V2)}
+        self._opening_decision_by_position = {
+            row["position_id"]: row.get("decision_id") for row in position_rows
+            if row.get("event_type") == "position_open"}
         exec_state = rehydrate_exec_state(
             order_rows, fill_rows, position_rows, run_id=run_id,
             book_rehydrate=PaperBook.rehydrate)
@@ -965,6 +978,8 @@ class Orchestrator:
         self._pending_bars: List[object] = []
         self._last_scanned_bar: Dict[str, str] = {}
         self._instant_utc: Optional[str] = None
+        self._exit_anchor_utc = None
+        self._exit_anchor_ms: Optional[int] = None
         self._portfolio = None
         self._last_valid_portfolio = None
         self._last_account_ms: Optional[int] = None
@@ -1749,6 +1764,7 @@ class Orchestrator:
         ctxs = self._assemble_ctxs(bars, now_ms)
         self._scan(ctxs, now_ms)
         # step 8 — exits (RC-1: GLOBAL in-flight guard).
+        self._scheduled_exits(now_ms)
         self._exits(ctxs, now_ms)
         # step 9 — marks per held position per completed bar.
         self._marks(bars, now_ms)
@@ -1775,7 +1791,15 @@ class Orchestrator:
             return
         if self._instant_utc is None or \
                 _parse_utc(ts_utc) > _parse_utc(self._instant_utc):
+            now_ms = self._clock.now_ms()
+            projected = self._exit_instant(now_ms)
+            observed = _parse_utc(ts_utc)
             self._instant_utc = _canonical_utc_str(_parse_utc(ts_utc))
+            # Delayed but increasing event timestamps must not reset elapsed
+            # holding time. Keep the exit clock monotonic independently of the
+            # actual event timestamp used by the rest of the market pipeline.
+            self._exit_anchor_utc = max(observed, projected or observed)
+            self._exit_anchor_ms = now_ms
 
     def _ingest_bookkeeping(self) -> None:
         for symbol in self._known_symbols():
@@ -1825,11 +1849,23 @@ class Orchestrator:
 
     def _provider_payloads(self):
         if self._account_provider is not None:
-            return (self._account_provider.account_payload(),
-                    self._account_provider.positions_payload())
-        if self.broker is None:
+            readers = (self._account_provider.account_payload,
+                       self._account_provider.positions_payload)
+        elif self.broker is not None:
+            readers = (self.broker.account, self.broker.positions)
+        else:
             return None, None
-        return self.broker.account(), self.broker.positions()
+        payloads = []
+        for read in readers:
+            try:
+                payloads.append(read())
+            except Exception:
+                # Transport failures are unavailable observations, just like
+                # HTTP errors returned as data. Read the other endpoint too:
+                # fresh positions may still permit account-blind reduction.
+                # Interrupts still propagate; exception text may contain secrets.
+                payloads.append(None)
+        return tuple(payloads)
 
     def _refresh_account(self, now_ms: int) -> None:
         if self.mode == "observe" and self._account_provider is None:
@@ -1839,7 +1875,8 @@ class Orchestrator:
                 and now_ms - self._last_account_ms < interval):
             return
         account_payload, positions_payload = self._provider_payloads()
-        if account_payload is None and positions_payload is None:
+        if (self.broker is None and self._account_provider is None
+                and account_payload is None and positions_payload is None):
             self._portfolio = None
             return
         self._last_account_ms = now_ms
@@ -2217,7 +2254,8 @@ class Orchestrator:
         if key not in self._artifact_checks:
             self._artifact_checks[key] = verify_artifact(
                 strategy_id, rules_hash=self.rules_hash, data_pin=data_pin,
-                artifacts_dir=self._artifacts_dir)
+                artifacts_dir=self._artifacts_dir,
+                runtime_config=self._assembled)
         return self._artifact_checks[key]
 
     def _record_preflight_reject(self, task: _OrderTask, reject,
@@ -2591,6 +2629,7 @@ class Orchestrator:
                     symbol=task.symbol, instrument_id=task.instrument_id,
                     strategy_id=task.strategy_id, fills=[delta],
                     modeled=task.modeled, opened_ts_utc=opened_ts)
+                self._opening_decision_by_position[task.position_id] = task.decision_id
             else:
                 self._book.apply_fill(task.position_id, delta)
         task.deltas.append(delta)
@@ -2725,6 +2764,8 @@ class Orchestrator:
             return
         if getattr(self.broker, "kind", "spy") == "spy":
             return  # scans need a non-spy broker (§M.3 step 7)
+        if self._due_strategy_positions(now_ms):
+            return  # an overdue reduction takes priority over another open
         for symbol in sorted(ctxs):
             if self._task is not None:
                 return  # FD-M5-21: one in flight
@@ -2753,6 +2794,10 @@ class Orchestrator:
             decision_id=decision_id,
             decision_ts_utc=snapshot.decision_ts_utc,
             decision_seen_at_ms=now_ms, quote_a=snapshot.quote)
+        exit_due = None
+        if candidate.strategy_id in (STRATEGY_ID_V1, STRATEGY_ID_V2):
+            exit_due = _canonical_utc_str(_parse_utc(snapshot.event_start_bar_end_utc)
+                + timedelta(minutes=int(self._signal_config.horizons[0][:-1])))
         self._exec_ledger.record_strategy_decision(
             symbol=leg.symbol, instrument_id=leg.instrument_id,
             strategy_id=candidate.strategy_id,
@@ -2765,7 +2810,10 @@ class Orchestrator:
             event_basis=event_basis, decision_ts_utc=snapshot.decision_ts_utc,
             decision_seen_at_ms=now_ms,
             quote_a=self._provenance(snapshot.quote),
-            decision_id=decision_id)
+            decision_id=decision_id, exit_due_utc=exit_due)
+
+        if exit_due is not None:
+            self._exit_due_by_decision[decision_id] = exit_due
 
         marks = {}
         if snapshot.quote_verdict.mid is not None:
@@ -2796,6 +2844,45 @@ class Orchestrator:
 
     # -- step 8: exits (§M.7; RC-1) ------------------------------------------------------
 
+    def _exit_instant(self, now_ms: int):
+        if self._exit_anchor_utc is None or self._exit_anchor_ms is None:
+            return None
+        return self._exit_anchor_utc + timedelta(
+            milliseconds=max(0, now_ms - self._exit_anchor_ms))
+
+    def _due_strategy_positions(self, now_ms: int):
+        instant = self._exit_instant(now_ms)
+        if instant is None:
+            return []
+        due = []
+        for pos in self._book._positions.values():
+            if pos.status != "open" or pos.strategy_id not in (STRATEGY_ID_V1, STRATEGY_ID_V2):
+                continue
+            decision_id = self._opening_decision_by_position.get(pos.position_id)
+            recorded_deadline = self._exit_due_by_decision.get(decision_id)
+            # Missing opening evidence cannot earn a new holding period.
+            deadline = _parse_utc(recorded_deadline or pos.opened_ts_utc)
+            if instant >= deadline:
+                due.append(pos)
+        return sorted(due, key=lambda pos: (pos.opened_ts_utc, pos.position_id))
+
+    def _scheduled_exits(self, now_ms: int) -> None:
+        # Independent of scan snapshots, feature warmup and open gates. A
+        # restart cannot reset the deadline or forget a partial residual.
+        if self.broker is None or self._risk_kill.state != "monitoring":
+            return
+        due = self._due_strategy_positions(now_ms)
+        if not due:
+            return
+        if self._task is not None:
+            if self._task.kind == "open" and self._task.state == "watch":
+                self._attempt_cancel(self._task, "strategy_horizon")
+            return  # wait for terminal evidence before reducing
+        pos = due[0]
+        self._start_close(
+            ExitInstruction(pos.symbol, pos.instrument_id, pos.qty, "strategy_exit"),
+            None, now_ms, position_id=pos.position_id)
+
     def _exits(self, ctxs: Dict[str, ScanContext], now_ms: int) -> None:
         if self._exit_provider is None or self.broker is None:
             return
@@ -2809,18 +2896,21 @@ class Orchestrator:
                     continue
                 self._start_close(instruction, ctx, now_ms)
 
-    def _start_close(self, instruction, ctx: ScanContext, now_ms: int) -> None:
+    def _start_close(self, instruction, ctx: Optional[ScanContext], now_ms: int,
+                     *, position_id: Optional[str] = None) -> None:
         """§M.7 — the strategy close path (reduce; no open preflight, no risk
         verdict, no run-gate consultation)."""
         position = None
         for pos in self._book._positions.values():
-            if pos.symbol == instruction.symbol and pos.status == "open":
+            if (pos.symbol == instruction.symbol and pos.status == "open"
+                    and (position_id is None or position_id == pos.position_id)):
                 position = pos
                 break
         if position is None:
             return  # resolution 10: nothing to close
-        strategy_id = (self._strategy.strategy_id
-                       if self._strategy is not None else "exit_provider")
+        strategy_id = position.strategy_id
+        decision_ts = (ctx.snapshot.decision_ts_utc if ctx is not None
+                       else _canonical_utc_str(self._exit_instant(now_ms)))
         event_basis = f"exit:{position.position_id}:{now_ms}"  # §P.3 rev 2
         decision_id = "d-" + row_hash({
             "run_id": self.run_id, "strategy_id": strategy_id,
@@ -2840,7 +2930,7 @@ class Orchestrator:
                 action="would_close", side="sell", qty=instruction.qty,
                 strategy_limit=None, score=None, paper_eligible=True,
                 position_id=position.position_id, event_basis=event_basis,
-                decision_ts_utc=ctx.snapshot.decision_ts_utc,
+                decision_ts_utc=decision_ts,
                 decision_seen_at_ms=now_ms,
                 quote_a=self._provenance(quote_b), decision_id=decision_id)
         cap = None
@@ -2906,14 +2996,14 @@ class Orchestrator:
         modeled = self._close_modeled_fill(quote_b, cap, instruction.qty,
                                            order_id, decision_id, now_ms)
         stamp = DecisionStamp(decision_id=decision_id,
-                              decision_ts_utc=ctx.snapshot.decision_ts_utc,
+                              decision_ts_utc=decision_ts,
                               decision_seen_at_ms=now_ms, quote_a=quote_b)
         task = _OrderTask(
             kind="close", state="watch", decision_id=decision_id,
             symbol=instruction.symbol,
             instrument_id=instruction.instrument_id,
             strategy_id=strategy_id, side="sell", qty=instruction.qty,
-            stamp=stamp, session_date_et=ctx.snapshot.session_date_et,
+            stamp=stamp, session_date_et=self._calendar.session_date_for(decision_ts),
             order_id=order_id, position_id=position.position_id,
             close_reason=instruction.reason, capped_limit=cap, modeled=modeled,
             quote_b=quote_b, bound_epoch=quote_b.reconnect_epoch,

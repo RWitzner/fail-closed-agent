@@ -4,7 +4,7 @@ Track C's supervisor seam: wraps ``agent.paper_session._main`` IN-PROCESS (no
 subprocess, no shell), captures the exit code, appends one status row per
 attempt to ``reports/paper_sessions/autorun_log.jsonl`` (hash-verified
 append-only rows), retries the SAME day at most ``--max-retries`` times and
-ONLY for the feed-truncation exit-1 case (the newest daily report must say
+ONLY for the feed-truncation exit-1 case (this attempt's new report must say
 ``session.feed_truncated`` — a reconcile-drift or incomplete-crash exit 1 is
 operator territory, never auto-retried), and escalates LOUDLY on any unclean
 final outcome: an ``ATTENTION-<date>.txt`` file plus the nonzero exit code.
@@ -22,9 +22,11 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
+from zoneinfo import ZoneInfo
 
 from agent import paper_session
 from agent.journal import JournalWriter
+from agent.paper_report import next_report_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,16 +38,15 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def _newest_report(report_dir: Path, session_date: str) -> Optional[dict]:
-    """The authoritative (highest-suffix) daily report for the date."""
-    candidates = sorted(report_dir.glob(f"{session_date}*.json"),
-                        key=lambda p: p.name)
-    for path in reversed(candidates):
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-    return None
+def _attempt_report(path: Path, session_date: str) -> Optional[dict]:
+    """Read only the new report path reserved before this attempt began."""
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(report, dict) or report.get("session_date_et") != session_date:
+        return None
+    return report
 
 
 def _feed_truncated(report: Optional[dict]) -> bool:
@@ -60,7 +61,11 @@ def _feed_truncated(report: Optional[dict]) -> bool:
 def _record_path(record_dir: Path, session_date: str, attempt: int) -> Path:
     name = (f"{session_date}.events.jsonl" if attempt == 0
             else f"{session_date}.events.{attempt}.jsonl")
-    return record_dir / name
+    path = record_dir / name
+    while path.exists():
+        attempt += 1
+        path = record_dir / f"{session_date}.events.{attempt}.jsonl"
+    return path
 
 
 def run_autorun(*, session_argv: Sequence[str], session_date: str,
@@ -89,10 +94,18 @@ def run_autorun(*, session_argv: Sequence[str], session_date: str,
             record_dir.mkdir(parents=True, exist_ok=True)
             argv += ["--record-events",
                      str(_record_path(record_dir, session_date, attempt))]
-        exit_code = int(runner(argv))
+        expected_report = next_report_path(report_dir, session_date)
+        crashed = False
+        try:
+            exit_code = int(runner(argv))
+        except Exception:
+            # Startup can fail before the session runner's report handler.
+            # Escalate and never reinterpret that crash as a truncated feed.
+            exit_code = 1
+            crashed = True
         truncated = (exit_code == 1
-                     and _feed_truncated(_newest_report(report_dir,
-                                                        session_date)))
+                     and not crashed
+                     and _feed_truncated(_attempt_report(expected_report, session_date)))
         will_retry = (truncated and attempt < max_retries
                       and exit_code not in _NO_RETRY)
         log.append("autorun_attempt", {
@@ -101,6 +114,8 @@ def run_autorun(*, session_argv: Sequence[str], session_date: str,
             "exit_code": exit_code,
             "feed_truncated": truncated,
             "will_retry": will_retry,
+            "report_path": str(expected_report),
+            "runner_crashed": crashed,
         })
         if not will_retry:
             break
@@ -136,6 +151,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                              "runner's calendar)")
     parser.add_argument("--symbols", default="")
     parser.add_argument("--strategy-id", default=None)
+    parser.add_argument("--live-source", choices=("databento", "alpaca-iex"),
+                        default="databento")
     parser.add_argument("--max-retries", type=int, default=1)
     parser.add_argument("--replay", default=None,
                         help="rehearsal mode: replay this events.jsonl "
@@ -143,11 +160,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     session_date = args.session_date or datetime.now(
-        timezone.utc).strftime("%Y-%m-%d")
+        ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     session_argv = ["--journal-dir", args.journal_dir,
                     "--report-dir", args.report_dir]
-    if args.session_date:
-        session_argv += ["--session-date", args.session_date]
+    session_argv += ["--session-date", session_date]
     if args.symbols:
         session_argv += ["--symbols", args.symbols]
     if args.strategy_id:
@@ -156,7 +172,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         session_argv += ["--replay", args.replay]
         record_dir = None
     else:
-        session_argv += ["--live"]
+        session_argv += ["--live", "--live-source", args.live_source]
         record_dir = args.record_dir
 
     return run_autorun(

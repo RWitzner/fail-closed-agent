@@ -15,12 +15,13 @@ quality counters exist only once armed sessions journal them). The verdict is
 therefore fail-closed-incomplete until the full paper pipeline produces the
 full evidence set — by design, not by accident.
 
-Sessions: the authoritative report per date is the HIGHEST restart suffix;
-``session_incomplete`` days are counted separately and never as clean
-sessions. Multi-day journals are filtered per session date via the daily
-reports' run_ids when present.
+Sessions retain EVERY attempt. A restart cannot erase earlier PnL, drift or
+failure evidence, and multiple attempts do not prove uninterrupted coverage.
+Journal rows are restricted to the selected reports' run_ids, even when that
+set is empty.
 """
 import json
+import re
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -66,25 +67,22 @@ def _p95(sorted_values: List[Decimal]) -> Decimal:
     return sorted_values[rank - 1]
 
 
-def latest_reports_by_date(report_dir: Path) -> Dict[str, dict]:
-    """Highest-restart-suffix report per session date."""
-    by_date: Dict[str, tuple] = {}
+def reports_by_date(report_dir: Path) -> Dict[str, list]:
+    """All attempts, including unreadable reports as incomplete evidence."""
+    by_date: Dict[str, list] = {}
     for path in sorted(report_dir.glob("*.json")):
-        stem = path.name[:-len(".json")]
-        parts = stem.split(".")
-        date = parts[0]
-        try:
-            suffix = int(parts[1]) if len(parts) > 1 else 0
-        except ValueError:
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.json", path.name)
+        if match is None:
             continue
+        date = match.group(1)
         try:
             report = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(report, dict) or report.get("session_date_et") != date:
+                raise ValueError("report date mismatch")
         except (OSError, ValueError):
-            continue
-        current = by_date.get(date)
-        if current is None or suffix > current[0]:
-            by_date[date] = (suffix, report)
-    return {date: report for date, (suffix, report) in sorted(by_date.items())}
+            report = {"session_incomplete": True, "report_read_error": True}
+        by_date.setdefault(date, []).append(report)
+    return dict(sorted(by_date.items()))
 
 
 def build_phase_metrics(*, report_dir, journal_dir,
@@ -98,7 +96,7 @@ def build_phase_metrics(*, report_dir, journal_dir,
     report_dir = Path(report_dir)
     journal_dir = Path(journal_dir)
 
-    reports = latest_reports_by_date(report_dir)
+    reports = reports_by_date(report_dir)
     if start_date:
         reports = {d: r for d, r in reports.items() if d >= start_date}
     if end_date:
@@ -109,27 +107,28 @@ def build_phase_metrics(*, report_dir, journal_dir,
     incomplete_dates: List[str] = []
     truncated_dates: List[str] = []
     drift_rows = 0
-    for date, report in reports.items():
-        if report.get("run_id"):
-            run_ids.add(report["run_id"])
-        session = report.get("session") or {}
-        if report.get("session_incomplete"):
+    incomplete_attempts = 0
+    for date, attempts in reports.items():
+        for report in attempts:
+            if report.get("run_id"):
+                run_ids.add(report["run_id"])
+            incomplete_attempts += int(bool(report.get("session_incomplete")))
+            reconcile = report.get("reconcile") or {}
+            drift_rows += int(reconcile.get("drift_rows") or 0)
+        if any(r.get("session_incomplete") or not r.get("run_id") for r in attempts):
             incomplete_dates.append(date)
-        elif session.get("feed_truncated"):
+        elif len(attempts) > 1 or any(
+                (r.get("session") or {}).get("feed_truncated") for r in attempts):
             truncated_dates.append(date)
         else:
             complete_dates.append(date)
-        reconcile = report.get("reconcile") or {}
-        drift_rows += int(reconcile.get("drift_rows") or 0)
 
     def _rows(stream: str) -> list:
         path = journal_dir / f"{stream}.jsonl"
         if not path.exists():
             return []
         rows = journal_replay(path)
-        if run_ids:
-            rows = [r for r in rows if r.get("run_id") in run_ids]
-        return rows
+        return [r for r in rows if r.get("run_id") in run_ids]
 
     closes = [r for r in _rows("positions")
               if r.get("event_type") == "position_close"]
@@ -213,7 +212,7 @@ def build_phase_metrics(*, report_dir, journal_dir,
         "quality": {
             # only evidence-backed counters; the rest surface as missing:
             "unresolved_reconcile_drift_count": drift_rows,
-            "unhandled_exception_count": len(incomplete_dates),
+            "unhandled_exception_count": incomplete_attempts,
         },
         "thresholds": {
             "min_sessions": PINNED_MIN_SESSIONS,

@@ -128,6 +128,67 @@ class TestRunAutorun(unittest.TestCase):
                 self.assertTrue(
                     (report_dir / f"ATTENTION-{self._DATE}.txt").exists())
 
+    def test_truncation_then_crash_does_not_retry_using_first_report(self):
+        with TemporaryDirectory() as tmp:
+            def reports(d, attempt):
+                _write_report(d, self._DATE, truncated=True,
+                              incomplete=attempt > 0,
+                              suffix=None if attempt == 0 else attempt)
+            rc, calls, report_dir = self._run(tmp, [1, 1, 0],
+                reports_between=reports, max_retries=2)
+            self.assertEqual(rc, 1)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual([r["will_retry"] for r in self._log_rows(report_dir)],
+                             [True, False])
+
+    def test_existing_truncated_report_cannot_authorize_retry_without_new_report(self):
+        with TemporaryDirectory() as tmp:
+            _write_report(Path(tmp) / "reports", self._DATE, truncated=True)
+            rc, calls, _ = self._run(tmp, [1, 0])
+            self.assertEqual(rc, 1)
+            self.assertEqual(len(calls), 1)
+
+    def test_attempt_after_suffix_nine_uses_ten_and_malformed_report_does_not_fall_back(self):
+        with TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "reports"
+            for suffix in range(10):
+                _write_report(directory, self._DATE, truncated=True,
+                              suffix=suffix if suffix else None)
+            def reports(d, attempt):
+                (d / f"{self._DATE}.10.json").write_text("invalid")
+            rc, calls, _ = self._run(tmp, [1, 0], reports_between=reports)
+            self.assertEqual(rc, 1)
+            self.assertEqual(len(calls), 1)
+
+    def test_runner_startup_exception_escalates_without_retry(self):
+        with TemporaryDirectory() as tmp:
+            def crash(argv):
+                raise RuntimeError("offline startup failure")
+            rc = run_autorun(session_argv=[], session_date=self._DATE,
+                report_dir=tmp, run_session=crash)
+            self.assertEqual(rc, 1)
+            self.assertTrue((Path(tmp) / f"ATTENTION-{self._DATE}.txt").exists())
+            self.assertTrue(self._log_rows(Path(tmp))[0]["runner_crashed"])
+
+    def test_cli_forwards_selected_iex_source(self):
+        from unittest.mock import patch
+        from agent.paper_autorun import _main
+        with patch("agent.paper_autorun.run_autorun", return_value=0) as runner:
+            self.assertEqual(_main(["--journal-dir", "unused",
+                "--session-date", self._DATE, "--live-source", "alpaca-iex"]), 0)
+        argv = runner.call_args.kwargs["session_argv"]
+        self.assertEqual(argv[argv.index("--live-source") + 1], "alpaca-iex")
+
+    def test_recording_after_new_invocation_never_appends_to_old_attempt(self):
+        with TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "recorded"
+            directory.mkdir()
+            original = directory / f"{self._DATE}.events.jsonl"
+            original.write_text("previous attempt\n")
+            rc, calls, _ = self._run(tmp, [0])
+            self.assertTrue(calls[0][-1].endswith(f"{self._DATE}.events.1.jsonl"))
+            self.assertEqual(original.read_text(), "previous attempt\n")
+
     def test_no_record_dir_means_no_record_flag(self):
         with TemporaryDirectory() as tmp:
             rc, calls, _ = self._run(

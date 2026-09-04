@@ -14,7 +14,7 @@ and the test that pins it. **Where a pattern is weaker than it sounds, that is s
 document that only lists strengths is marketing.
 
 A note on what "verified" means here: every file and symbol referenced below exists in this repository and every
-named test runs in the offline suite (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`, 2000 tests,
+named test runs in the offline suite (`python3 -m unittest discover -s tests -p 'test_*.py' -t .`, 2023 tests,
 no install, no network, no credentials).
 
 ### The shape of the system

@@ -195,6 +195,15 @@ class AlpacaPaperBroker(BrokerBase):
 
         client = TradingClient(api_key=creds["key_id"], secret_key=creds["secret_key"],
                                paper=True, raw_data=True)
+        # alpaca-py 0.43.5 calls Session.request without a timeout. Bound both
+        # socket phases so an unresponsive endpoint returns control to the
+        # safety loop. Order recovery/retry remains owned by the orchestrator.
+        request = client._session.request
+        def bounded_request(method, url, **kwargs):
+            kwargs["timeout"] = (3.05, 5.0)
+            return request(method, url, **kwargs)
+        client._session.request = bounded_request
+        client._retry = 0
 
         def _wire(call):
             try:

@@ -2,7 +2,7 @@
 
 The state builder rolls the journal streams into the JSON the browser polls.
 Pins: golden-journal aggregation (broker vs modeled NEVER conflated), live
-positions derived open-minus-close, incremental refresh picks up appended
+positions folded through the real PaperBook, incremental refresh picks up appended
 rows, corruption is reported not fatal, and the HTTP layer serves the page +
 state on loopback."""
 import json
@@ -22,6 +22,41 @@ _GOLDEN = _REPO_ROOT / "tests" / "fixtures" / "execution" / "golden"
 
 
 class TestJournalStateSource(unittest.TestCase):
+    def test_partial_close_and_reconcile_adjust_remain_visible(self):
+        from decimal import Decimal
+        from types import SimpleNamespace
+        from agent.serializer import BrokerUSD
+        from tests.agent.test_paper_book import _book
+
+        with TemporaryDirectory() as tmp:
+            book, ledger, paths = _book(tmp)
+            pos = book.open_position(
+                decision_id="d-open", order_id="o-open", symbol="AAPL",
+                instrument_id=1001, strategy_id="stub.real_v1",
+                fills=[SimpleNamespace(delta_qty=Decimal("10"),
+                    delta_cost_usd=BrokerUSD("1000"))], modeled=None,
+                opened_ts_utc="2026-07-06T14:00:00.000000Z")
+            source = JournalStateSource(tmp)
+            self.assertEqual(source.snapshot()["positions"]["live"][0]["qty"], "10")
+            book.close_position(position_id=pos.position_id, order_id="o-close",
+                fills=[SimpleNamespace(delta_qty=Decimal("4"),
+                    delta_cost_usd=BrokerUSD("404"))], modeled=None,
+                reason="strategy_exit", decision_id="d-close")
+            state = source.snapshot()
+            self.assertEqual(state["positions"]["open_count"], 1)
+            self.assertEqual(state["positions"]["live"][0]["qty"], "6")
+            book.apply_position_adjust(position_id=pos.position_id,
+                adjusted_qty=Decimal("3"), adjusted_broker_cost_usd=BrokerUSD("300"),
+                adjust_id="adj-test", reconcile_id="rc-test")
+            self.assertEqual(source.snapshot()["positions"]["live"][0]["qty"], "3")
+
+    def test_unreadable_positions_are_unavailable_not_flat(self):
+        with TemporaryDirectory() as tmp:
+            (Path(tmp) / "positions.jsonl").write_text("invalid\n")
+            state = JournalStateSource(tmp).snapshot()
+            self.assertIsNone(state["positions"]["open_count"])
+            self.assertFalse(state["positions"]["available"])
+
     def test_golden_journal_snapshot(self):
         with TemporaryDirectory() as tmp:
             for name in ("orders", "fills", "positions"):
